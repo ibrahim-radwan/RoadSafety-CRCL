@@ -1,0 +1,23 @@
+# systemd unit: capture web control on port 8080, started at boot.
+# Install: see README.md in this folder.
+[Unit]
+Description=Radar/camera/LiDAR capture web control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jetson
+Group=jetson
+WorkingDirectory=/home/jetson/dev/CascadedRadarRoadSafetyOnTwoWheelers/sync_capture_pipeline
+ExecStart=/home/jetson/miniconda3/envs/rel_1_py_3_8/bin/python web_control/server.py --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=3
+# CRITICAL: stop/restart only the web server, never the recording it started.
+# The default (control-group) would kill capture_session.py and the sensor
+# recorders too, losing an in-progress session. The server re-adopts a running
+# recording when it comes back up.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

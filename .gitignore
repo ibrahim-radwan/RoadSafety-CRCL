@@ -1,0 +1,46 @@
+# ── Recordings and data (never in git; ~112 GB per hour of recording) ─────────
+sync_capture_pipeline/sessions/
+**/dataset/
+*.svo2
+*.svo
+*.pcap
+frame_*.bin
+cascaded_radar_capture_pipeline/capture/data/
+cascaded_radar_capture_pipeline/capture/frames/
+# per-session generated caches (live inside sessions, listed for safety)
+report_data.pkl
+timing_lidar_track.npz
+radar_cloud_filtered.npz
+session_report.html
+
+# ── Python / tools ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# ── Build outputs (rebuilt per board, see docs/NEW_BOARD_SETUP.md) ────────────
+lidar_standalone_capture/rs_driver/python_wrapper_2/build/
+lidar_standalone_capture/rs_driver/python_wrapper/build/
+lidar_standalone_capture/rs_driver/build/
+*.so
+*.so.bak
+*.o
+
+# ── Vendor files obtained separately ─────────────────────────────────────────
+*.whl
+*.pdf
+
+# ── Local backups ────────────────────────────────────────────────────────────
+*.bak
+*.bak_*
+cascaded_radar_capture_pipeline/firmware_backup_*/
+
+# ── Not used on the Jetson; excluded from the public repo (2026-10-13) ───────
+# TI image-signing tools incl. TI development RSA keys, and Windows-only tools
+flashing/boot/signing/
+flashing/boot/multicoreImageGen/MulticoreImageGen.exe
+flashing/boot/out2rprc/out2rprc.exe
+flashing/boot/xipGen/xipGen.exe

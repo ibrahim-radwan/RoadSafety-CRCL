@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Capture Control</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #16181d; --muted: #5f6672; --line: #dde0e5;
+    --ok: #18794e; --ok-bg: #e3f5ec; --bad: #c4291c; --bad-bg: #fde8e6; --warn: #9a6700; --warn-bg: #fff4d6;
+    --accent: #1f5fd1; --rec: #d92d20;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101215; --card: #1a1d22; --text: #e9ebef; --muted: #9aa1ad; --line: #2c3038;
+      --ok: #4cc38a; --ok-bg: #12291f; --bad: #ff6b5e; --bad-bg: #3a1714; --warn: #f0b429; --warn-bg: #352a0c;
+      --accent: #6c9cff; --rec: #ff5a4f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 17px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 4px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 200px; }
+  label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], input[type=number] { width: 100%; font-size: 18px; padding: 12px; border-radius: 10px;
+         border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .checks { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 4px; }
+  .checks label { display: flex; align-items: center; gap: 8px; font-size: 18px; color: var(--text); margin: 0; }
+  .checks input { width: 24px; height: 24px; }
+  button { font-size: 20px; font-weight: 600; padding: 18px; border-radius: 12px; border: 0; width: 100%;
+           cursor: pointer; color: #fff; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  .start { background: var(--ok); }
+  .stop { background: var(--rec); }
+  .phase { display: inline-block; padding: 6px 12px; border-radius: 999px; font-size: 15px; font-weight: 600;
+           background: var(--line); color: var(--text); }
+  .phase.recording { background: var(--rec); color: #fff; }
+  .phase.done, .phase.finished { background: var(--ok-bg); color: var(--ok); }
+  .phase.failed { background: var(--bad-bg); color: var(--bad); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--rec); display: none; }
+  .dot.on { display: inline-block; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  .sensors { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .sensor { border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .sensor .name { font-weight: 700; display: flex; justify-content: space-between; }
+  .sensor .big { font-size: 26px; font-weight: 700; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+  .sensor .sub { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.bad { background: var(--bad-bg); color: var(--bad); }
+  .tag.idle { background: var(--line); color: var(--muted); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .meta { color: var(--muted); font-size: 15px; margin-top: 10px; display: flex; gap: 18px; flex-wrap: wrap; }
+  .verdict { padding: 12px; border-radius: 10px; margin-top: 12px; display: none; }
+  .verdict.PASS { display: block; background: var(--ok-bg); color: var(--ok); }
+  .verdict.FAIL { display: block; background: var(--bad-bg); color: var(--bad); }
+  .verdict.running, .verdict.skipped { display: block; background: var(--warn-bg); color: var(--warn); }
+  .verdict ul { margin: 6px 0 0; padding-left: 20px; }
+  .msg { color: var(--bad); margin-top: 8px; min-height: 1.2em; }
+  .banner { display: none; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; text-align: center; }
+  .banner .big2 { font-size: 46px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .banner .what { font-size: 19px; font-weight: 600; margin-top: 4px; }
+  .banner.wait { display: block; background: var(--warn-bg); color: var(--warn); }
+  .banner.rec { display: block; background: var(--bad-bg); color: var(--rec); }
+  .banner.end { display: block; background: var(--ok-bg); color: var(--ok); }
+  .steps { display: none; gap: 8px; margin-bottom: 12px; }
+  .steps.on { display: flex; }
+  .step { flex: 1; border: 2px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 15px; }
+  .step b { display: block; font-size: 17px; }
+  .step.now { border-color: var(--rec); background: var(--bad-bg); }
+  .step.done { opacity: .45; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+        font-size: 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; margin: 0; }
+  details summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1><span class="dot" id="dot"></span>Capture Control <span class="phase" id="phase">…</span></h1>
+
+  <section class="card">
+    <h2>New session</h2>
+    <div class="row">
+      <div><label for="name">Session name</label><input id="name" type="text" autocomplete="off" autocapitalize="off"></div>
+      <div><label for="note">Note (what is being recorded)</label><input id="note" type="text"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div><label for="secs">Duration (s, 0 = until Stop)</label><input id="secs" type="number" min="0" value="0" inputmode="numeric"></div>
+      <div><label for="delay">Countdown before start (s)</label><input id="delay" type="number" min="0" value="0" inputmode="numeric"></div>
+      <div><label>Sensors</label>
+        <div class="checks">
+          <label><input type="checkbox" id="s_radar" checked>Radar</label>
+          <label><input type="checkbox" id="s_camera" checked>Camera</label>
+          <label><input type="checkbox" id="s_lidar" checked>LiDAR</label>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div class="checks"><label><input type="checkbox" id="g_stage3">Stage 3 calibration guide (walk / side-steps / flips, double beep at each phase) - leave OFF for data collection</label></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="start" id="btnStart">Start recording</button>
+      <button class="stop" id="btnStop" disabled>Stop recording</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </section>
+
+  <section class="card">
+    <h2>Live status <span id="sessname" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="banner" id="banner"></div>
+    <div class="steps" id="steps"></div>
+    <div class="sensors">
+      <div class="sensor" id="c_radar"><div class="name">Radar <span class="tag idle">idle</span></div>
+        <div class="big">–</div><div class="sub">packets / s</div></div>
+      <div class="sensor" id="c_camera"><div class="name">Camera <span class="tag idle">idle</span></div>
+        <div class="big">–</div><div class="sub">FPS</div></div>
+      <div class="sensor" id="c_lidar"><div class="name">LiDAR <span class="tag idle">idle</span></div>
+        <div class="big">–</div><div class="sub">packets / s</div></div>
+      <div class="sensor" id="c_board"><div class="name">Board (Jetson) <span class="tag idle">–</span></div>
+        <div class="big">–</div><div class="sub">junction temperature</div></div>
+    </div>
+    <div class="meta"><span id="elapsed">Elapsed –</span><span id="disk">Disk –</span><span id="reason"></span></div>
+    <div class="verdict" id="verdict"></div>
+    <details style="margin-top:12px"><summary>Session log</summary><pre id="log"></pre></details>
+  </section>
+
+  <section class="card">
+    <h2>Recorded sessions</h2>
+    <table><thead><tr><th>Session</th><th>Check</th><th>Size</th><th>Sensors</th><th>Note</th></tr></thead>
+      <tbody id="sessions"></tbody></table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let logSeq = 0, logEpoch = null, lastRunning = null, lastCheck = "";
+
+// Stage 3 plate routine. Phase starts are FRACTIONS of the session duration
+// (seconds from the radar's recording start), rounded to 5 s:
+// 60 s -> 0 / 30 / 50, 140 s -> 0 / 70 / 115.
+const STAGE3 = [
+  { f: 0, name: "1  Walk", what: "Plate square to the radar. Walk briskly 4 m <-> 14 m straight ahead, turn sharply at each end" },
+  { f: 0.5, name: "2  Side-steps", what: "At ~8 m: step 2-3 m left, then 2-3 m right, past the centre each time. Keep moving" },
+  { f: 5 / 6, name: "3  Flips", what: "At ~8 m: flip the plate square <-> edge-on about every second" },
+];
+function stage3Times(dur) {
+  const d = dur > 0 ? dur : 60;
+  return STAGE3.map(x => Math.round(x.f * d / 5) * 5);
+}
+let audio = null, lastStep = -2, lastRec = false;
+function unlockAudio() {           // iPad Safari plays sound only after a tap
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
+}
+function beep(times = 1, freq = 880, ms = 220) {
+  if (!audio) return;
+  for (let i = 0; i < times; i++) {
+    const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime + i * (ms + 120) / 1000;
+    o.frequency.value = freq; o.connect(g); g.connect(audio.destination);
+    g.gain.setValueAtTime(0.4, t); g.gain.setValueAtTime(0, t + ms / 1000);
+    o.start(t); o.stop(t + ms / 1000 + 0.02);
+  }
+}
+function showTiming(s) {
+  const b = $("banner"), st = $("steps");
+  const stage3 = s.guide === "stage3";          // opt-in per session (checkbox), never by name
+  let html = "", cls = "";
+  if (s.phase === "countdown" && s.countdown_s != null) {
+    cls = "wait"; html = `<div class="big2">${s.countdown_s} s</div><div class="what">Countdown - go to the start position</div>`;
+  } else if (s.running && !s.recording_s && ["starting", "starting radar", "countdown"].includes(s.phase)) {
+    cls = "wait"; html = `<div class="big2">Starting sensors…</div><div class="what">Stand ready - recording starts with a beep</div>`;
+  } else if (s.recording_active) {
+    cls = "rec";
+    const dur = s.duration_s > 0 ? ` / ${fmtTime(Math.round(s.duration_s))}` : "";
+    html = `<div class="big2">● ${fmtTime(Math.floor(s.recording_s))}${dur}</div><div class="what">RECORDING</div>`;
+  } else if (s.recording_s) {
+    cls = "end"; html = `<div class="big2">Recording finished</div><div class="what">${fmtTime(Math.floor(s.recording_s))} recorded - wait for the check result</div>`;
+  }
+  b.className = "banner " + cls; b.innerHTML = html;
+  // beep when recording starts and when it ends
+  if (s.recording_active && !lastRec) beep(1, 1046, 500);
+  if (!s.recording_active && lastRec) beep(3, 660, 180);
+  lastRec = s.recording_active;
+  // Stage 3 guide: current step highlighted, double beep at each change
+  if (stage3 && s.recording_s != null) {
+    const t = s.recording_s, ts = stage3Times(s.duration_s);
+    let k = -1; ts.forEach((x, i) => { if (t >= x) k = i; });
+    if (!s.recording_active) k = STAGE3.length;
+    if (k !== lastStep && k > 0 && k < STAGE3.length && s.recording_active) beep(2);
+    lastStep = k;
+    st.className = "steps on";
+    st.innerHTML = STAGE3.map((x, i) => {
+      const end = i + 1 < STAGE3.length ? ts[i + 1] : (s.duration_s || 60);
+      const left = i === k ? ` - ${Math.max(0, Math.ceil(end - t))} s left` : "";
+      return `<div class="step ${i === k ? "now" : i < k ? "done" : ""}"><b>${x.name}${left}</b>${x.what}</div>`;
+    }).join("");
+  } else { st.className = "steps"; lastStep = -2; }
+}
+function suggestName() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `run_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+}
+function fmtTime(s) {
+  if (s == null) return "–";
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0");
+}
+function setSensor(id, running, data, big, sub, bad) {
+  const el = $(id), tag = el.querySelector(".tag");
+  if (!data) {
+    tag.className = "tag idle"; tag.textContent = running ? "waiting" : "idle";
+    el.querySelector(".big").textContent = "–"; return;
+  }
+  const problem = data.stale || bad;
+  tag.className = "tag " + (problem ? "bad" : "ok");
+  tag.textContent = data.stale ? `no update ${data.age_s}s` : (bad ? "check" : "ok");
+  el.querySelector(".big").textContent = big;
+  el.querySelector(".sub").textContent = sub;
+}
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                               body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/status")).json(); }
+  catch (e) { $("phase").textContent = "connection lost"; $("phase").className = "phase failed"; return; }
+  const live = s.running && s.phase !== "finished";
+  $("phase").textContent = s.phase; $("phase").className = "phase " + s.phase.split(" ")[0];
+  $("dot").className = "dot" + (s.running ? " on" : "");
+  $("btnStart").disabled = s.running; $("btnStop").disabled = !s.running;
+  $("sessname").textContent = s.name ? "– " + s.name : "";
+  $("elapsed").textContent = "Elapsed " + (s.running ? fmtTime(s.elapsed_s) : "–");
+  $("disk").textContent = "Disk free " + s.disk_free_gb + " GB";
+  $("reason").textContent = s.result && s.result.stop_reason ? "Stop: " + s.result.stop_reason : "";
+  const r = s.sensors.radar, c = s.sensors.camera, l = s.sensors.lidar;
+  // Normal: ~8,650 packets/s at 4 fps (~17,300 at 8 fps). Far below that means the
+  // radar is running a different configuration or is underpowered: stop and check it.
+  const radarLow = r && r.secs > 2 && r.pkt_s < 5000;
+  setSensor("c_radar", live, live ? r : null, r ? r.pkt_s.toLocaleString() : "–",
+            r ? (radarLow ? "packets / s - TOO LOW (normal ~8,650): check radar power / config"
+                          : `packets / s · ${r.secs}s recorded`) : "packets / s", r && (r.pkt_s === 0 || radarLow));
+  setSensor("c_camera", live, live ? c : null, c ? c.fps.toFixed(1) : "–",
+            c ? `FPS · ${c.frames} frames · ${c.gaps} dropped` : "FPS", c && c.fps < 25);
+  setSensor("c_lidar", live, live ? l : null, l ? l.msop_s.toLocaleString() : "–",
+            l ? `packets / s · ${l.lost} lost · ${l.mb.toFixed(0)} MB` : "packets / s", l && (l.lost > 0 || l.msop_s < 3000));
+  // Board: live temperatures (also while idle) - summer rides in an enclosure.
+  const b = s.board || {}, bc = $("c_board"), bt = bc.querySelector(".tag");
+  const f1 = (x) => (x == null ? "–" : x.toFixed(1));
+  bc.querySelector(".big").textContent = b.tj_c == null ? "–" : f1(b.tj_c) + " °C";
+  bc.querySelector(".sub").textContent = `junction · CPU ${f1(b.cpu_c)} · GPU ${f1(b.gpu_c)} °C · fan ${b.fan_pct == null ? "–" : b.fan_pct + "%"}`;
+  bt.className = "tag " + ({ ok: "ok", warm: "warn", hot: "bad" }[b.level] || "idle");
+  bt.textContent = { ok: "ok", warm: `warm ≥${s.board_warn_c}°`, hot: `HOT ≥${s.board_hot_c}°` }[b.level] || "–";
+  showTiming(s);
+  const v = $("verdict"), ck = s.check;
+  if (ck) {
+    v.className = "verdict " + ck.status;
+    const title = { PASS: "check_session: PASS", FAIL: "check_session: FAIL – do not use this session yet",
+                    running: "Running check_session …", skipped: "check_session skipped: " + (ck.reason || "") }[ck.status];
+    v.innerHTML = "<strong>" + title + "</strong>" + (ck.summary ? "<ul>" + ck.summary.map(x => "<li>" +
+      x.replace(/[<>&]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m])) + "</li>").join("") + "</ul>" : "");
+  } else { v.className = "verdict"; }
+  const pre = $("log");
+  if (s.log_epoch !== logEpoch) { pre.textContent = ""; logSeq = 0; logEpoch = s.log_epoch; }   // new session
+  if (s.log_seq !== logSeq) {
+    const lines = await (await fetch("/api/log?since=" + logSeq)).json();
+    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+    for (const [n, line] of lines) { pre.textContent += line + "\n"; }
+    if (atEnd) pre.scrollTop = pre.scrollHeight;
+    logSeq = s.log_seq;
+  }
+  const checkState = ck ? ck.status : "";
+  if (lastRunning !== s.running || checkState !== lastCheck) loadSessions();
+  lastRunning = s.running; lastCheck = checkState;
+}
+async function loadSessions() {
+  const list = await (await fetch("/api/sessions")).json();
+  $("sessions").innerHTML = list.map((x) => {
+    const ck = x.check === "recording" ? `<span class="tag bad">recording</span>`
+      : x.check ? `<a href="/api/sessions/${encodeURIComponent(x.name)}/check" target="_blank"
+      class="tag ${x.check === "PASS" ? "ok" : "bad"}">${x.check}</a>` : "–";
+    const esc = (t) => String(t || "").replace(/[<>&]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m]));
+    return `<tr><td><strong>${esc(x.name)}</strong><br><span style="color:var(--muted);font-size:13px">
+      ${esc((x.started || "").replace("T", " ").slice(0, 16))}</span></td><td>${ck}</td>
+      <td class="num">${x.size_gb} GB</td><td>${esc(x.sensors.join(", "))}</td><td>${esc(x.note)}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" style="color:var(--muted)">No sessions yet</td></tr>`;
+}
+$("btnStart").onclick = async () => {
+  unlockAudio();
+  $("msg").textContent = "";
+  const sensors = ["radar", "camera", "lidar"].filter((k) => $("s_" + k).checked);
+  try {
+    await post("/api/start", { name: $("name").value.trim(), note: $("note").value, secs: $("secs").value,
+                               delay: $("delay").value, sensors, guide: $("g_stage3").checked ? "stage3" : null });
+    $("g_stage3").checked = false;              // one-off: the next session is a plain recording again
+    $("name").value = suggestName();
+  } catch (e) { $("msg").textContent = e.message; }
+  refresh();
+};
+$("btnStop").onclick = async () => {
+  if (!confirm("Stop the recording? The sensors will be stopped and the session finalized.")) return;
+  $("msg").textContent = "";
+  try { await post("/api/stop"); } catch (e) { $("msg").textContent = e.message; }
+  refresh();
+};
+$("name").value = suggestName();
+refresh(); loadSessions();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

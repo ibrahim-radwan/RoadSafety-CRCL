@@ -1,0 +1,385 @@
+﻿==============================================================================
+  RE-AUDIT SUMMARY - Stage 1 diagnostics + P0-5 ghost-gate fix
+  generated: 2026-08-25 21:42
+==============================================================================
+
+------------------------------------------------------------------------------
+A_S01   (333 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\A_S01
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 333
+    Frames with cloud>0  : 326  (97.9%)
+      sg_rej total       : 19  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg pts/frame      : 1.77
+      avg accum_pts  /all frames : 19.7  (Phase 2)
+      avg accum_pts  /detected   : 20.1  (Phase 2)
+      avg cluster_pts/detected   : 18.5  (Phase 3)
+      avg cluster_pts/has-cluster: 20.4  (Phase 3)
+      wide_cluster_rej   : 14  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.068 m  p90=0.825 m  max=1.753 m  (vs eps=0.80)
+      comp_residual_x    : median=0.245 m  max=4.204 m  (merged-cloud x-extent)
+      n_subjects         : max=1  frames with >1: 0 of 333
+      separation_m       : no multi-subject frames
+      compensated        : 313 of 333 frames (94%) - suppressed while multi-subject
+      multi_used         : 0 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=1  frames with >1 RAW cluster: 0 of 333  (before age>=2 confirmation)
+        rx kept     n= 295  median=0.117 m  max=0.587 m
+        rx REJECTED n=  14  median=1.061 m  max=1.061 m   <-- censored above 0.65 m
+      x mean ± std       : +0.066 ± 0.274 m
+      y mean ± std       : 5.774 ± 1.815 m
+    [CHECK] emit_all ON: avg pts/frame = 1.77
+
+------------------------------------------------------------------------------
+A_S02   (309 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\A_S02
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 309
+    Frames with cloud>0  : 302  (97.7%)
+      sg_rej total       : 113  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg pts/frame      : 1.89
+      avg accum_pts  /all frames : 10.7  (Phase 2)
+      avg accum_pts  /detected   : 11.0  (Phase 2)
+      avg cluster_pts/detected   : 9.0  (Phase 3)
+      avg cluster_pts/has-cluster: 11.2  (Phase 3)
+      wide_cluster_rej   : 0  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.184 m  p90=0.935 m  max=2.076 m  (vs eps=0.80)
+      comp_residual_x    : median=0.391 m  max=3.732 m  (merged-cloud x-extent)
+      n_subjects         : max=2  frames with >1: 9 of 309
+      separation_m       : median=1.383 m  min=1.117  max=1.882  (n=9)
+      compensated        : 262 of 309 frames (85%) - suppressed while multi-subject
+      multi_used         : 18 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=2  frames with >1 RAW cluster: 15 of 309  (before age>=2 confirmation)
+        rx kept     n= 242  median=0.128 m  max=0.554 m
+        rx REJECTED n=   0   (no censoring)
+      x mean ± std       : +0.007 ± 0.376 m
+      y mean ± std       : 6.055 ± 1.840 m
+    [CHECK] emit_all ON: avg pts/frame = 1.89
+
+------------------------------------------------------------------------------
+A_S03   (71 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\A_S03
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 71
+    Frames with cloud>0  : 0  (0.0%)
+      sg_rej total       : 0  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg accum_pts  /all frames : 0.0  (Phase 2)
+      wide_cluster_rej   : 0  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.000 m  p90=0.000 m  max=0.000 m  (vs eps=0.80)
+      comp_residual_x    : median=0.000 m  max=0.000 m  (merged-cloud x-extent)
+      n_subjects         : max=0  frames with >1: 0 of 71
+      separation_m       : no multi-subject frames
+      compensated        : 0 of 71 frames (0%) - suppressed while multi-subject
+      multi_used         : 0 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=0  frames with >1 RAW cluster: 0 of 71  (before age>=2 confirmation)
+        rx kept     n=   0
+        rx REJECTED n=   0   (no censoring)
+
+------------------------------------------------------------------------------
+B_S01   (309 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\B_S01
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 309
+    Frames with cloud>0  : 305  (98.7%)
+      sg_rej total       : 184  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg pts/frame      : 1.76
+      avg accum_pts  /all frames : 26.2  (Phase 2)
+      avg accum_pts  /detected   : 26.5  (Phase 2)
+      avg cluster_pts/detected   : 17.1  (Phase 3)
+      avg cluster_pts/has-cluster: 24.3  (Phase 3)
+      wide_cluster_rej   : 88  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.479 m  p90=0.912 m  max=2.062 m  (vs eps=0.80)
+      comp_residual_x    : median=1.559 m  max=4.106 m  (merged-cloud x-extent)
+      n_subjects         : max=2  frames with >1: 11 of 309
+      separation_m       : median=1.657 m  min=1.574  max=1.746  (n=11)
+      compensated        : 292 of 309 frames (94%) - suppressed while multi-subject
+      multi_used         : 11 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=2  frames with >1 RAW cluster: 12 of 309  (before age>=2 confirmation)
+        rx kept     n= 214  median=0.242 m  max=0.635 m
+        rx REJECTED n=  88  median=0.994 m  max=1.969 m   <-- censored above 0.65 m
+      x mean ± std       : -0.344 ± 1.027 m
+      y mean ± std       : 3.127 ± 0.623 m
+    [CHECK] emit_all ON: avg pts/frame = 1.76
+
+------------------------------------------------------------------------------
+B_S02   (262 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\B_S02
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 262
+    Frames with cloud>0  : 261  (99.6%)
+      sg_rej total       : 17  (P0-6 off-range contamination removed)
+      sg_bypass total    : 1  (frames passed ungated — track stale)
+      avg pts/frame      : 1.32
+      avg accum_pts  /all frames : 18.4  (Phase 2)
+      avg accum_pts  /detected   : 18.5  (Phase 2)
+      avg cluster_pts/detected   : 16.0  (Phase 3)
+      avg cluster_pts/has-cluster: 18.2  (Phase 3)
+      wide_cluster_rej   : 21  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.132 m  p90=1.036 m  max=1.874 m  (vs eps=0.80)
+      comp_residual_x    : median=0.275 m  max=2.797 m  (merged-cloud x-extent)
+      n_subjects         : max=1  frames with >1: 0 of 262
+      separation_m       : no multi-subject frames
+      compensated        : 257 of 262 frames (98%) - suppressed while multi-subject
+      multi_used         : 0 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=1  frames with >1 RAW cluster: 0 of 262  (before age>=2 confirmation)
+        rx kept     n= 230  median=0.112 m  max=0.607 m
+        rx REJECTED n=  21  median=0.747 m  max=0.747 m   <-- censored above 0.65 m
+      x mean ± std       : -0.313 ± 1.042 m
+      y mean ± std       : 3.248 ± 0.366 m
+    [CHECK] emit_all ON: avg pts/frame = 1.32
+
+------------------------------------------------------------------------------
+B_S03   (381 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\B_S03
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 381
+    Frames with cloud>0  : 374  (98.2%)
+      sg_rej total       : 143  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg pts/frame      : 1.78
+      avg accum_pts  /all frames : 24.7  (Phase 2)
+      avg accum_pts  /detected   : 25.1  (Phase 2)
+      avg cluster_pts/detected   : 13.1  (Phase 3)
+      avg cluster_pts/has-cluster: 23.1  (Phase 3)
+      wide_cluster_rej   : 156  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.411 m  p90=1.530 m  max=2.317 m  (vs eps=0.80)
+      comp_residual_x    : median=1.474 m  max=3.384 m  (merged-cloud x-extent)
+      n_subjects         : max=1  frames with >1: 0 of 381
+      separation_m       : no multi-subject frames
+      compensated        : 369 of 381 frames (97%) - suppressed while multi-subject
+      multi_used         : 0 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=1  frames with >1 RAW cluster: 0 of 381  (before age>=2 confirmation)
+        rx kept     n= 212  median=0.368 m  max=0.593 m
+        rx REJECTED n= 156  median=0.796 m  max=0.960 m   <-- censored above 0.65 m
+      x mean ± std       : -0.367 ± 1.061 m
+      y mean ± std       : 3.207 ± 0.634 m
+    [CHECK] emit_all ON: avg pts/frame = 1.78
+
+------------------------------------------------------------------------------
+C_S01   (262 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\C_S01
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 262
+    Frames with cloud>0  : 177  (67.6%)
+      sg_rej total       : 35  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg pts/frame      : 1.82
+      avg accum_pts  /all frames : 12.1  (Phase 2)
+      avg accum_pts  /detected   : 17.9  (Phase 2)
+      avg cluster_pts/detected   : 15.4  (Phase 3)
+      avg cluster_pts/has-cluster: 17.8  (Phase 3)
+      wide_cluster_rej   : 2  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.105 m  p90=0.891 m  max=1.192 m  (vs eps=0.80)
+      comp_residual_x    : median=0.328 m  max=2.673 m  (merged-cloud x-extent)
+      n_subjects         : max=1  frames with >1: 0 of 262
+      separation_m       : no multi-subject frames
+      compensated        : 167 of 262 frames (64%) - suppressed while multi-subject
+      multi_used         : 0 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=1  frames with >1 RAW cluster: 0 of 262  (before age>=2 confirmation)
+        rx kept     n= 153  median=0.121 m  max=0.638 m
+        rx REJECTED n=   2  median=0.991 m  max=0.991 m   <-- censored above 0.65 m
+      x mean ± std       : +0.123 ± 0.286 m
+      y mean ± std       : 5.808 ± 1.724 m
+    [CHECK] emit_all ON: avg pts/frame = 1.82
+
+------------------------------------------------------------------------------
+C_S02   (309 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\C_S02
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 309
+    Frames with cloud>0  : 190  (61.5%)
+      sg_rej total       : 61  (P0-6 off-range contamination removed)
+      sg_bypass total    : 1  (frames passed ungated — track stale)
+      avg pts/frame      : 1.98
+      avg accum_pts  /all frames : 6.5  (Phase 2)
+      avg accum_pts  /detected   : 10.6  (Phase 2)
+      avg cluster_pts/detected   : 7.2  (Phase 3)
+      avg cluster_pts/has-cluster: 9.9  (Phase 3)
+      wide_cluster_rej   : 10  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.039 m  p90=1.203 m  max=2.169 m  (vs eps=0.80)
+      comp_residual_x    : median=0.070 m  max=3.449 m  (merged-cloud x-extent)
+      n_subjects         : max=2  frames with >1: 18 of 309
+      separation_m       : median=1.633 m  min=1.180  max=1.974  (n=18)
+      compensated        : 144 of 309 frames (47%) - suppressed while multi-subject
+      multi_used         : 35 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=2  frames with >1 RAW cluster: 27 of 309  (before age>=2 confirmation)
+        rx kept     n= 138  median=0.109 m  max=0.468 m
+        rx REJECTED n=  10  median=0.881 m  max=1.259 m   <-- censored above 0.65 m
+      x mean ± std       : +0.109 ± 0.397 m
+      y mean ± std       : 6.292 ± 1.727 m
+    [CHECK] emit_all ON: avg pts/frame = 1.98
+
+------------------------------------------------------------------------------
+C_S03   (421 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\C_S03
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 421
+    Frames with cloud>0  : 330  (78.4%)
+      sg_rej total       : 53  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg pts/frame      : 1.91
+      avg accum_pts  /all frames : 13.0  (Phase 2)
+      avg accum_pts  /detected   : 16.5  (Phase 2)
+      avg cluster_pts/detected   : 13.3  (Phase 3)
+      avg cluster_pts/has-cluster: 16.7  (Phase 3)
+      wide_cluster_rej   : 21  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.113 m  p90=1.512 m  max=2.049 m  (vs eps=0.80)
+      comp_residual_x    : median=0.278 m  max=4.487 m  (merged-cloud x-extent)
+      n_subjects         : max=2  frames with >1: 7 of 421
+      separation_m       : median=1.697 m  min=1.586  max=1.735  (n=7)
+      compensated        : 293 of 421 frames (70%) - suppressed while multi-subject
+      multi_used         : 16 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=2  frames with >1 RAW cluster: 10 of 421  (before age>=2 confirmation)
+        rx kept     n= 263  median=0.142 m  max=0.530 m
+        rx REJECTED n=  21  median=0.809 m  max=0.835 m   <-- censored above 0.65 m
+      x mean ± std       : +0.006 ± 0.322 m
+      y mean ± std       : 5.822 ± 2.004 m
+    [CHECK] emit_all ON: avg pts/frame = 1.91
+
+------------------------------------------------------------------------------
+D_S01   (333 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\D_S01
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 333
+    Frames with cloud>0  : 331  (99.4%)
+      sg_rej total       : 65  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg pts/frame      : 1.79
+      avg accum_pts  /all frames : 13.9  (Phase 2)
+      avg accum_pts  /detected   : 14.0  (Phase 2)
+      avg cluster_pts/detected   : 12.2  (Phase 3)
+      avg cluster_pts/has-cluster: 14.2  (Phase 3)
+      wide_cluster_rej   : 14  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.173 m  p90=0.965 m  max=1.805 m  (vs eps=0.80)
+      comp_residual_x    : median=0.618 m  max=3.176 m  (merged-cloud x-extent)
+      n_subjects         : max=1  frames with >1: 0 of 333
+      separation_m       : no multi-subject frames
+      compensated        : 307 of 333 frames (92%) - suppressed while multi-subject
+      multi_used         : 0 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=1  frames with >1 RAW cluster: 0 of 333  (before age>=2 confirmation)
+        rx kept     n= 284  median=0.139 m  max=0.529 m
+        rx REJECTED n=  14  median=0.902 m  max=1.016 m   <-- censored above 0.65 m
+      x mean ± std       : +0.057 ± 0.290 m
+      y mean ± std       : 5.801 ± 1.924 m
+    [CHECK] emit_all ON: avg pts/frame = 1.79
+
+------------------------------------------------------------------------------
+D_S02   (309 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\D_S02
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 309
+    Frames with cloud>0  : 0  (0.0%)
+      sg_rej total       : 0  (P0-6 off-range contamination removed)
+      sg_bypass total    : 0  (frames passed ungated — track stale)
+      avg accum_pts  /all frames : 0.0  (Phase 2)
+      wide_cluster_rej   : 0  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.000 m  p90=0.000 m  max=0.000 m  (vs eps=0.80)
+      comp_residual_x    : median=0.000 m  max=0.000 m  (merged-cloud x-extent)
+      n_subjects         : max=0  frames with >1: 0 of 309
+      separation_m       : no multi-subject frames
+      compensated        : 0 of 309 frames (0%) - suppressed while multi-subject
+      multi_used         : 0 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=0  frames with >1 RAW cluster: 0 of 309  (before age>=2 confirmation)
+        rx kept     n=   0
+        rx REJECTED n=   0   (no censoring)
+
+------------------------------------------------------------------------------
+D_S03   (391 input frames)
+  source: testing\live_capture_validation\05_outdoor_data_collection\frames\D_S03
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 391
+    Frames with cloud>0  : 391  (100.0%)
+      sg_rej total       : 102  (P0-6 off-range contamination removed)
+      sg_bypass total    : 3  (frames passed ungated — track stale)
+      avg pts/frame      : 1.96
+      avg accum_pts  /all frames : 18.2  (Phase 2)
+      avg accum_pts  /detected   : 18.2  (Phase 2)
+      avg cluster_pts/detected   : 12.5  (Phase 3)
+      avg cluster_pts/has-cluster: 17.1  (Phase 3)
+      wide_cluster_rej   : 69  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.240 m  p90=1.590 m  max=3.060 m  (vs eps=0.80)
+      comp_residual_x    : median=0.697 m  max=5.217 m  (merged-cloud x-extent)
+      n_subjects         : max=3  frames with >1: 19 of 391
+      separation_m       : median=1.855 m  min=1.825  max=1.874  (n=19)
+      compensated        : 349 of 391 frames (89%) - suppressed while multi-subject
+      multi_used         : 20 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=3  frames with >1 RAW cluster: 21 of 391  (before age>=2 confirmation)
+        rx kept     n= 285  median=0.174 m  max=0.635 m
+        rx REJECTED n=  69  median=0.837 m  max=1.028 m   <-- censored above 0.65 m
+      x mean ± std       : +0.042 ± 0.312 m
+      y mean ± std       : 5.848 ± 2.090 m
+    [CHECK] emit_all ON: avg pts/frame = 1.96
+
+------------------------------------------------------------------------------
+outdoor_long   (1447 input frames)   [path override]
+  source: testing\live_capture_validation\06_outdoor_multiple_subjects\frames
+------------------------------------------------------------------------------
+    P0-6 subject gate             : ON
+    Stage 4.2 limb mode           : adaptive  (k=1.75)
+    Frames total         : 1447
+    Frames with cloud>0  : 1286  (88.9%)
+      sg_rej total       : 327  (P0-6 off-range contamination removed)
+      sg_bypass total    : 48  (frames passed ungated — track stale)
+      avg pts/frame      : 2.11
+      avg accum_pts  /all frames : 17.0  (Phase 2)
+      avg accum_pts  /detected   : 19.1  (Phase 2)
+      avg cluster_pts/detected   : 14.2  (Phase 3)
+      avg cluster_pts/has-cluster: 18.8  (Phase 3)
+      wide_cluster_rej   : 178  (frames dropped: rx > max_cluster_radius)
+      comp_step_x        : median=0.100 m  p90=0.844 m  max=2.399 m  (vs eps=0.80)
+      comp_residual_x    : median=0.367 m  max=5.787 m  (merged-cloud x-extent)
+      n_subjects         : max=3  frames with >1: 29 of 1447
+      separation_m       : median=2.003 m  min=1.085  max=3.229  (n=29)
+      compensated        : 1161 of 1447 frames (80%) - suppressed while multi-subject
+      multi_used         : 52 frames used the multi-subject path (1-frame lag vs n_subjects - see accumulate.py)
+      n_raw_clusters     : max=4  frames with >1 RAW cluster: 41 of 1447  (before age>=2 confirmation)
+        rx kept     n= 971  median=0.173 m  max=0.611 m
+        rx REJECTED n= 178  median=1.036 m  max=1.741 m   <-- censored above 0.65 m
+      x mean ± std       : -0.081 ± 0.714 m
+      y mean ± std       : 6.252 ± 4.191 m
+    [CHECK] emit_all ON: avg pts/frame = 2.11
+
+==============================================================================
+  RUN RESULT: 13 audited, 0 skipped, 0 failed
+==============================================================================
+  WHAT TO LOOK FOR (post P0-5 fix)
+==============================================================================
+  1. accum_pts should RISE vs the previous run.
+     Pre-fix the buffer froze during steady walking (>1.03 m/s),
+     so accum_pts was pinned low. A/D were ~22-27; expect higher.
+  2. rx median must NO LONGER equal rx max.
+     B_S03/C_S03/D_S03 previously reported identical values across
+     300+ frames - the frozen-buffer signature.
+  3. wide_cluster_rej counts WILL change.
+     Appendix B numbers were measured on frozen output and are void.
+  4. cluster_noise should be non-zero.
+     C_S03/D_S03 previously had accum == cluster exactly (zero noise).
+  5. outdoor_long is the multi-subject session - expect larger rx
+     and higher rx variance than any single-subject session.

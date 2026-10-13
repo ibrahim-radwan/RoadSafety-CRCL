@@ -1,0 +1,1 @@
+python uart_uniflash.py -p /dev/ttyACM0 --cfg=my_cascade.cfg

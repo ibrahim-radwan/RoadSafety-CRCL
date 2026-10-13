@@ -1,0 +1,21 @@
+{
+  "lidar_ms": 0.0,
+  "radar_ms": 12.65,
+  "radar_sigma_ms": 1.45,
+  "camera_ms": 23.34,
+  "camera_sigma_ms": 3.28,
+  "sessions": [
+    "/mnt/sdcard/sessions/stage3_01",
+    "/mnt/sdcard/sessions/stage3_02",
+    "/mnt/sdcard/sessions/stage3_03"
+  ],
+  "measured_local": "2026-10-11T10:34:01+1100",
+  "valid_for": {
+    "radar_firmware": "r075m_v2_8fps",
+    "dca_packet_delay_us": 25,
+    "camera": "ZED 2i, config.yaml as of 2026-10-11",
+    "lidar": "RS-Fairy, config.yaml as of 2026-10-11, mounted facing forward"
+  },
+  "method": "measure_sync_offset.py, 3 daylight sessions, LiDAR reference, --lidar-range-pct 10 (plate surface); pct 20 gave radar +12.67 ms",
+  "note": "offsets are ADDED to each sensor's time. Re-measure if firmware/frame period, DCA delay, camera mode or LiDAR config changes."
+}

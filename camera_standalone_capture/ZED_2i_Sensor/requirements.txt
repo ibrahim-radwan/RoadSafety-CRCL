@@ -1,0 +1,4 @@
+# Install the matching pyzed API through the existing ZED SDK installation.
+numpy>=1.20,<2
+PyYAML>=5.3,<7
+Pillow>=8,<12

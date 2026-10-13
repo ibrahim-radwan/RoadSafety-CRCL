@@ -1,0 +1,158 @@
+Environment: rel_1_py_3_8
+Environment path: /home/jetson/miniconda3/envs/rel_1_py_3_8
+Python: 3.8.20
+Platform: Linux aarch64
+Purpose: Standalone Intel RealSense D455 camera capture
+
+Validated camera dependencies:
+- pyrealsense2 2.55.1.6486
+- opencv-python 4.12.0.88
+- numpy 1.24.4
+
+Complete Conda package inventory:
+
+Name                     Version                  Build               Channel
+_libgcc_mutex             0.1                      main
+_openmp_mutex             5.1                      51_gnu
+blas                      1.0                      openblas
+blinker                   1.6.2                    py38hd43f75c_0
+brotli-python             1.0.9                    py38h419075a_8
+bzip2                     1.0.8                    h998d150_6
+c-ares                    1.19.1                   h998d150_0
+ca-certificates           2025.7.15                hd43f75c_0
+certifi                   2025.8.3                 pypi_0              pypi
+chardet                   4.0.0                    py38hd43f75c_1003
+charset-normalizer        3.4.2                    pypi_0              pypi
+click                     8.1.7                    py38hd43f75c_0
+cmake                     4.1.0                    pypi_0              pypi
+colorama                  0.4.6                    pypi_0              pypi
+contourpy                 1.1.1                    pypi_0              pypi
+cycler                    0.12.1                   pypi_0              pypi
+cyrus-sasl                2.1.28                   hcb8e05b_3
+dbus                      1.13.18                  h821dc26_0
+expat                     2.7.1                    h419075a_0
+filelock                  3.16.1                   pypi_0              pypi
+flask                     3.0.3                    py38hd43f75c_0
+fontconfig                2.14.1                   h881afe3_3
+fonttools                 4.57.0                   pypi_0              pypi
+fpga-udp                  1.3.0                    pypi_0              pypi
+freetype                 2.13.3                   h6df46f4_0
+fsspec                    2025.3.0                 pypi_0              pypi
+glib                      2.84.2                   h419075a_0
+glib-tools                2.84.2                   h419075a_0
+gst-plugins-base          1.14.1                   h419075a_1
+gstreamer                 1.14.1                   h998d150_1
+icu                       73.1                     h419075a_0
+idna                      3.10                     pypi_0              pypi
+importlib-metadata        7.0.1                    py38hd43f75c_0
+importlib-resources       6.4.5                    pypi_0              pypi
+importlib_metadata         7.0.1                    hd3eb1b0_0
+itsdangerous              2.2.0                    py38hd43f75c_0
+jinja2                    3.1.6                    pypi_0              pypi
+joblib                    1.4.2                    py38hd43f75c_0
+jpeg                      9e                       h998d150_3
+kiwisolver                1.4.7                    pypi_0              pypi
+krb5                      1.20.1                   h2e2fba8_1
+ld_impl_linux-aarch64     2.40                     h48e3ba3_0
+libabseil                 20250127.0               cxx17_h419075a_0
+libclang                  14.0.6                   default_hd3a980f_2
+libclang13                14.0.6                   default_h5e70c7c_2
+libcups                   2.4.2                    haec519c_2
+libcurl                   8.14.1                   h2e08ae6_1
+libedit                   3.1.20230828             h998d150_0
+libev                     4.33                     hfd63f10_1
+libffi                    3.4.4                    h419075a_1
+libgcc-ng                 11.2.0                   h1234567_1
+libgfortran-ng            11.2.0                   h6e398d7_1
+libgfortran5              11.2.0                   h1234567_1
+libglib                   2.84.2                   h4c1cdc3_0
+libgomp                   11.2.0                   h1234567_1
+libiconv                  1.16                     h998d150_3
+libkrb5                   1.21.3                   hfa9a360_3
+libllvm14                 14.0.6                   hbfe7563_4
+libnghttp2                1.57.0                   hb788212_0
+libopenblas               0.3.29                   h29fea54_0
+libpng                    1.6.39                   h998d150_0
+libpq                     17.4                     h33f8927_2
+libprotobuf               5.29.3                   h708d2a9_1
+libssh2                   1.11.1                   hfa2bbb0_0
+libstdcxx-ng              11.2.0                   h1234567_1
+libuuid                   1.41.5                   h998d150_0
+libxcb                    1.17.0                   hf66535e_0
+libxkbcommon              1.9.1                    h417a37e_0
+libxml2                   2.13.8                   h6097fa9_0
+llvmlite                  0.41.0                   py38h94b7715_0
+lmdb                      0.9.29                   h22f4aa5_0
+lz4-c                     1.9.4                    h419075a_1
+markupsafe                2.1.5                    pypi_0              pypi
+matplotlib                3.7.5                    pypi_0              pypi
+mpmath                    1.3.0                    pypi_0              pypi
+mysql                     8.4.0                    hc6c5d2e_2
+ncurses                   6.5                      h419075a_0
+networkx                  3.1                      pypi_0              pypi
+numba                     0.58.1                   py38h419075a_0
+numpy                     1.24.4                   pypi_0              pypi
+numpy-base                1.24.3                   py38h4a83355_0
+onnx                      1.17.0                   pypi_0              pypi
+onnxslim                  0.1.64                   pypi_0              pypi
+opencv-python             4.12.0.88                pypi_0              pypi
+openldap                  2.6.4                    h418a7c9_0
+openssl                   3.0.17                   h998d150_0
+packaging                 25.0                     pypi_0              pypi
+pandas                    2.0.3                    pypi_0              pypi
+pcre2                     10.42                    hcfaa891_1
+pillow                    10.4.0                   pypi_0              pypi
+pip                       25.0.1                   pypi_0              pypi
+platformdirs              3.10.0                   py38hd43f75c_0
+ply                       3.11                     py38hd43f75c_0
+pooch                     1.7.0                    py38hd43f75c_0
+protobuf                  5.29.5                   pypi_0              pypi
+psutil                    7.0.0                   pypi_0              pypi
+pthread-stubs             0.3                      hfd63f10_1
+py-cpuinfo                9.0.0                    pypi_0              pypi
+pyparsing                 3.1.4                    pypi_0              pypi
+pyqt                      5.15.10                  py38h419075a_0
+pyqt5-sip                 12.13.0                  py38h998d150_0
+pyqtgraph                 0.13.1                   py38hd43f75c_0
+pyrealsense2              2.55.1.6486              pypi_0              pypi
+pysocks                   1.7.1                    py38hd43f75c_0
+python                    3.8.20                   h4bb2201_0
+python-dateutil            2.9.0.post0              pypi_0              pypi
+pytz                      2025.2                   pypi_0              pypi
+pyyaml                    6.0.2                   pypi_0              pypi
+qt-main                   5.15.2                   h1e70531_12
+readline                  8.2                      h998d150_0
+requests                  2.32.4                   pypi_0              pypi
+scikit-learn              1.3.0                    py38hfb1e5ee_1
+scipy                     1.10.1                   pypi_0              pypi
+setuptools                75.3.2                   pypi_0              pypi
+sip                       6.7.12                   py38h419075a_0
+six                       1.17.0                   pypi_0              pypi
+sqlite                    3.50.2                   h998d150_1
+sympy                     1.13.3                   pypi_0              pypi
+tbb                       2021.8.0                 hb8fdbf2_0
+threadpoolctl             3.5.0                    py38ha5ee653_0
+tk                        8.6.14                   hb5ae6a8_1
+tomli                     2.0.1                   py38hd43f75c_0
+torch                     2.1.0a0+41361538.nv23.6 pypi_0              pypi
+torchvision               0.16.0                   pypi_0              pypi
+tqdm                      4.67.1                   pypi_0              pypi
+typing-extensions         4.13.2                   pypi_0              pypi
+tzdata                    2025.2                   pypi_0              pypi
+ultralytics               8.3.175                  pypi_0              pypi
+ultralytics-thop          2.0.15                   pypi_0              pypi
+urllib3                   2.2.3                   py38hd43f75c_0
+werkzeug                  3.0.3                   py38hd43f75c_0
+wheel                     0.45.1                   pypi_0              pypi
+xkeyboard-config          2.44                     h998d150_0
+xorg-libx11               1.8.12                   hf66535e_1
+xorg-libxau               1.1.0                    hf66535e_0
+xorg-libxdmcp              1.1.5                   hf66535e_0
+xorg-xorgproto             2024.1                   h998d150_1
+xz                        5.6.4                    h998d150_1
+zipp                      3.20.2                   py38hd43f75c_0
+zlib                      1.2.13                   h998d150_1
+zstd                      1.5.6                    h6a09583_0
+
+To regenerate the exact current inventory:
+conda list -n rel_1_py_3_8

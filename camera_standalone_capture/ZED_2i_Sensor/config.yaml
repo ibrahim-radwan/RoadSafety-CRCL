@@ -1,0 +1,87 @@
+# Standalone Python SDK configuration: no ROS installation or topics required.
+# Equivalent baseline to ../zed2i_recorder.yaml: ZED 2i, HD1080/NATIVE,
+# 30 FPS, SYSTEM_CLOCK and independent IMU. No live depth/tracking by default.
+camera:
+  model: zed2i
+  serial_number: null  # Set this when more than one camera is connected.
+  resolution: HD1080
+  fps: 30
+  width: 1920
+  height: 1080
+  coordinate_system: RIGHT_HANDED_Z_UP_X_FWD
+  units: METER
+  # Fix calibration across capture/replay for reproducible rectification.
+  # Use the same setting during stereo calibration and dataset collection.
+  disable_self_calibration: true
+
+synchronization:
+  clock_domain: SYSTEM_CLOCK
+  timestamp_tolerance_sec: 5.0
+
+depth:
+  # Used only for optional offline export, or if live tracking is enabled.
+  mode: PERFORMANCE
+  confidence_threshold: 50
+  texture_confidence_threshold: 100
+  stabilization: 1
+  min_distance_m: 0.0
+  max_distance_m: 20.0
+
+tracking:
+  enabled: false
+  imu_fusion: true
+  area_memory: true
+  pose_smoothing: false
+
+sensors:
+  # CURRENT samples, deduplicated by each sensor's original timestamp.
+  # IMU is not resampled to the image rate. Poll up to native 400 Hz.
+  # 200 Hz: polling competes with the camera loop for the GIL and caused
+  # frame drops at 400 Hz; the native-rate IMU is still archived in SVO2.
+  poll_rate_hz: 200.0
+  # Release the Python GIL for this fraction of each image interval.
+  # SDK 4.1 blocking grab otherwise starves the independent IMU thread.
+  # Larger values favor sensors but can lower the image recording FPS.
+  poll_window_fraction: 0.4
+  # Not needed for the radar/camera/LiDAR dataset; off to cut capture load.
+  magnetometer: false
+  barometer: false
+  temperature: false
+
+recording:
+  dataset_root: ./dataset
+  session_prefix: zed2i_sdk_session
+  # Hardware lossless compression is supported on this Jetson AGX Orin.
+  # LOSSLESS is a portable CPU alternative; H264/H265 are lossy options.
+  # No silent fallback to lossy encoding or a lower resolution.
+  compression: H264_LOSSLESS
+  # Keep sessions raw (SVO2 + CSVs); extract images offline with export.py.
+  auto_export: false
+  min_free_space_gb: 2.0
+  csv_queue_records: 10000
+
+export:
+  # Default export: only the configured stereo PNGs, sensors and calibration.
+  # Depth/disparity/confidence are optional and computed only during export.
+  include_depth: false
+  point_cloud: false
+  png_compression: 1
+
+images:
+  # false: generate PNGs after recording. --direct-images opts into live writes.
+  enabled: false
+  # Both rectified and original unrectified stereo are useful dataset inputs.
+  streams: [left, right, left_raw, right_raw]
+  format: PNG
+  writer_backend: auto  # Threads for BMP; spawned shared-memory workers for PNG/JPEG.
+  workers: 4
+  # Bounded number of frames including active workers; applies backpressure.
+  queue_frames: 8
+  png_compression: 1
+  jpeg_quality: 95  # JPEG only: 4:4:4 color; lossy, explicitly labeled in metadata.
+
+runtime:
+  open_timeout_sec: 30.0
+  warmup_sec: 2.0
+  status_interval_sec: 1.0
+  grab_failure_timeout_sec: 5.0
