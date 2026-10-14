@@ -29,9 +29,18 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from pathlib import Path
+
+# `conda activate` runs qt-main's activation script, which sets
+# QT_XCB_GL_INTEGRATION=none: Qt then has neither GLX nor EGL, and the 3D LiDAR
+# window (OpenGL) fails with "Cannot create platform OpenGL context". Re-enable
+# Qt's default GL integration for this process, before Qt is loaded. Any other
+# value the user sets is respected.
+if os.environ.get("QT_XCB_GL_INTEGRATION") == "none":
+    del os.environ["QT_XCB_GL_INTEGRATION"]
 
 import numpy as np
 from matplotlib import cm

@@ -47,6 +47,16 @@ Each item cost real debugging time. Read before changing the related code.
 - **The camera recorder and pyzed need the conda environment.** The web server
   runs the launcher with `/usr/bin/python3`, which is also 3.8.
 - **pyqtgraph 0.13:** `ImageItem.setRect` needs an image set first.
+- **`conda activate rel_1_py_3_8` sets `QT_XCB_GL_INTEGRATION=none`**, through
+  the `qt-main` package's activation script. That disables Qt's OpenGL on X11,
+  so the 3D LiDAR window fails with "Cannot create platform OpenGL context,
+  neither GLX nor EGL are enabled". `replay_session.py` clears that value for
+  its own process (fixed 2026-10-14). Any other Qt OpenGL tool needs the same,
+  or `unset QT_XCB_GL_INTEGRATION`.
+  - **Test GUI/OpenGL changes the way users run them:** on the real display,
+    in a terminal with the environment *activated*. Calling the environment's
+    Python directly, or Qt's off-screen platform, skips that script and hides
+    the problem.
 
 ## Analysis
 - **A clean PASS from `check_session` doesn't prove timing.** Use Stage 3 or

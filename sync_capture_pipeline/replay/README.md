@@ -144,6 +144,12 @@ cloud.
 - The *range* selector also sets the 3D view's extent.
 - A screenshot (`s` key) also saves `<name>_3d.png` when the window is open.
 
+**OpenGL with conda:** `conda activate` sets `QT_XCB_GL_INTEGRATION=none`
+(the `qt-main` activation script), which disables Qt's OpenGL. The replay
+clears that value for its own process, so no extra step is needed (fixed
+2026-10-14; before that the 3D window failed with "neither GLX nor EGL are
+enabled").
+
 **Requires PyOpenGL.** Version 3.1.10, pure Python with no dependencies, was
 installed in `rel_1_py_3_8` on 2026-10-11. The only change to the environment
 was that one package; `pip check` is clean and every project component and the
