@@ -66,6 +66,41 @@ processing work, user `ibrahim`.
 - ROS Foxy sets `PYTHONPATH` in this user's shell, so run the tools with it
   unset.
 
+## Merging the radar chain into `perception/` (since 2026-10-25)
+
+The plan, agreed with the owner:
+
+- **One PyTorch library** (`sync_capture_pipeline/perception/`) holds every
+  processing, filtering and detection stage, for both GPU and CPU.
+- It replaces the old chain (`cascaded_radar_capture_pipeline/processing`)
+  and its separate CuPy copy, plus the report's `RadarProcessor`.
+- It is migrated stage by stage. Each port is tested for equivalence against
+  the golden frames and scored against the baseline before the old code goes.
+
+| Step | State |
+|---|---|
+| 1. Baseline | **Done 2026-10-25.** `perception/baseline.py`. Scores of all 7 reference sessions in `perception/baseline/scores.json` (git), for ours and the old chain's clouds on both paths. Golden per-frame outputs of 20 frames on `freewalk_ref_02`, `stage3_02` and `run_20261014_1326` (`<session>/sync/baseline/`, not in git). Our detector's regression test: `tests/test_baseline.py`. |
+| 2. Shared core | Next: configuration, readers, geometry, calibration and conventions in one place. |
+| 3. Port the old chain's stages | Capon/MUSIC, sidelobe/consistency filters, focus mask, elevation, accumulation, micro-Doppler. |
+| 4. Remove duplicates | `gpu_accel.py`, `RadarProcessor`; the report on the library. |
+
+What the baseline showed:
+
+- **The old chain on the GPU path (CASO) matches the CPU path (OS)** on
+  `freewalk_ref_02`: 49% / 50% detected, 5.0° / 4.9° spread. Its cloud there
+  is now the GPU one. The CPU one is kept as
+  `sync/radar_cloud_filtered_cpu.npz`.
+- **Our LiDAR detection drops to 47% / 27% on `run_20261014_1325` / `1326`**
+  (92–97% elsewhere). There the walker stays within 2.7–6.6 m, close to other
+  structures, and our grid clustering merges them into one 6–7 m object.
+  This under-segmentation is the first LiDAR technique to fix.
+- **The radar azimuth spread on `freewalk_ref_01`** (11.7°) reflects its
+  nominal radar times after the DCA throttle fault. The radar–LiDAR yaw of
+  the Oct 14 mounting is about +2.4° to +7.7°.
+- **`stage3_01` scores like `stage3_02`/`03`.** Its radar data is clean: it
+  was recorded with `r075m_v2_8fps`. The replay README's note that it is
+  degraded seems to refer to an older recording of the same name.
+
 ## Open items and ideas
 
 - **On hold (owner's decision):** recommending a 90 s Stage 3 check on the

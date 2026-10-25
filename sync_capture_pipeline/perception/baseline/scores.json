@@ -1,0 +1,280 @@
+{
+  "git_commit": "fe3ad42+dirty",
+  "created": "2026-10-25",
+  "rx_phase_file_md5": "f206cbe7d163",
+  "metrics": "see run_perception.py: detected = a detection within 0.6 m range and 10 deg of the LiDAR walker; az_spread = median |err - bias|; team_* = the old chain's filtered clouds (cpu: OS-CFAR, gpu: CASO on range-Doppler)",
+  "sessions": {
+    "freewalk_ref_02": {
+      "ours_radar": {
+        "frames_with_target": 3937,
+        "detected": 0.718,
+        "az_bias_deg": -5.02,
+        "az_spread_deg": 2.41,
+        "az_within_3deg_of_bias": 0.543,
+        "confirmed_track_on_target": 0.654,
+        "other_confirmed_tracks_per_frame": 1.1,
+        "confirmed_tracks_per_empty_frame": 0.87,
+        "detections_per_frame": 3.85
+      },
+      "ours_lidar": {
+        "sweeps_with_target": 4956,
+        "detected": 0.95,
+        "confirmed_track_on_target": 0.949,
+        "class_of_target": {
+          "other": 0.129,
+          "pedestrian": 0.835,
+          "two-wheeler": 0.023,
+          "vehicle": 0.013
+        },
+        "objects_per_sweep": 26.74
+      },
+      "ours_radar_vs_lidar": {
+        "confirmed_tracks_in_fov": 7555,
+        "supported_by_lidar": 0.578,
+        "unsupported_per_frame": 0.66
+      },
+      "team_gpu": {
+        "frames_with_target": 3937,
+        "detected": 0.493,
+        "az_bias_deg": -2.74,
+        "az_spread_deg": 4.97,
+        "az_within_3deg_of_bias": 0.312,
+        "detections_per_frame": 1.08
+      },
+      "team_cpu": {
+        "frames_with_target": 3937,
+        "detected": 0.495,
+        "az_bias_deg": -2.77,
+        "az_spread_deg": 4.93,
+        "az_within_3deg_of_bias": 0.309,
+        "detections_per_frame": 1.35
+      }
+    },
+    "freewalk_ref_01": {
+      "ours_radar": {
+        "frames_with_target": 530,
+        "detected": 0.343,
+        "az_bias_deg": -0.51,
+        "az_spread_deg": 11.74,
+        "az_within_3deg_of_bias": 0.071,
+        "confirmed_track_on_target": 0.491,
+        "other_confirmed_tracks_per_frame": 0.92,
+        "confirmed_tracks_per_empty_frame": 0.19,
+        "detections_per_frame": 1.83
+      },
+      "ours_lidar": {
+        "sweeps_with_target": 1274,
+        "detected": 0.918,
+        "confirmed_track_on_target": 0.918,
+        "class_of_target": {
+          "other": 0.109,
+          "pedestrian": 0.848,
+          "two-wheeler": 0.011,
+          "vehicle": 0.032
+        },
+        "objects_per_sweep": 25.84
+      },
+      "ours_radar_vs_lidar": {
+        "confirmed_tracks_in_fov": 827,
+        "supported_by_lidar": 0.495,
+        "unsupported_per_frame": 0.51
+      },
+      "team_gpu": {
+        "frames_with_target": 530,
+        "detected": 0.283,
+        "az_bias_deg": -6.41,
+        "az_spread_deg": 9.15,
+        "az_within_3deg_of_bias": 0.176,
+        "detections_per_frame": 0.7
+      }
+    },
+    "stage3_01": {
+      "ours_radar": {
+        "frames_with_target": 641,
+        "detected": 0.682,
+        "az_bias_deg": -1.43,
+        "az_spread_deg": 1.36,
+        "az_within_3deg_of_bias": 0.753,
+        "confirmed_track_on_target": 0.811,
+        "other_confirmed_tracks_per_frame": 1.33,
+        "confirmed_tracks_per_empty_frame": 2.22,
+        "detections_per_frame": 5.97
+      },
+      "ours_lidar": {
+        "sweeps_with_target": 982,
+        "detected": 0.966,
+        "confirmed_track_on_target": 0.969,
+        "class_of_target": {
+          "other": 0.182,
+          "pedestrian": 0.8,
+          "two-wheeler": 0.018
+        },
+        "objects_per_sweep": 27.8
+      },
+      "ours_radar_vs_lidar": {
+        "confirmed_tracks_in_fov": 1580,
+        "supported_by_lidar": 0.419,
+        "unsupported_per_frame": 1.27
+      },
+      "team_gpu": {
+        "frames_with_target": 641,
+        "detected": 0.56,
+        "az_bias_deg": 2.33,
+        "az_spread_deg": 3.5,
+        "az_within_3deg_of_bias": 0.421,
+        "detections_per_frame": 1.48
+      }
+    },
+    "stage3_02": {
+      "ours_radar": {
+        "frames_with_target": 645,
+        "detected": 0.71,
+        "az_bias_deg": -1.69,
+        "az_spread_deg": 1.31,
+        "az_within_3deg_of_bias": 0.75,
+        "confirmed_track_on_target": 0.896,
+        "other_confirmed_tracks_per_frame": 1.04,
+        "confirmed_tracks_per_empty_frame": 1.67,
+        "detections_per_frame": 5.53
+      },
+      "ours_lidar": {
+        "sweeps_with_target": 992,
+        "detected": 0.973,
+        "confirmed_track_on_target": 0.973,
+        "class_of_target": {
+          "other": 0.203,
+          "pedestrian": 0.788,
+          "two-wheeler": 0.009
+        },
+        "objects_per_sweep": 24.89
+      },
+      "ours_radar_vs_lidar": {
+        "confirmed_tracks_in_fov": 1416,
+        "supported_by_lidar": 0.508,
+        "unsupported_per_frame": 0.97
+      },
+      "team_gpu": {
+        "frames_with_target": 645,
+        "detected": 0.563,
+        "az_bias_deg": 1.4,
+        "az_spread_deg": 3.25,
+        "az_within_3deg_of_bias": 0.45,
+        "detections_per_frame": 1.47
+      },
+      "note": "radar phase correction measured on this session: radar azimuth scores are in-sample"
+    },
+    "stage3_03": {
+      "ours_radar": {
+        "frames_with_target": 643,
+        "detected": 0.706,
+        "az_bias_deg": -1.87,
+        "az_spread_deg": 1.38,
+        "az_within_3deg_of_bias": 0.715,
+        "confirmed_track_on_target": 0.844,
+        "other_confirmed_tracks_per_frame": 1.07,
+        "confirmed_tracks_per_empty_frame": 1.75,
+        "detections_per_frame": 5.68
+      },
+      "ours_lidar": {
+        "sweeps_with_target": 989,
+        "detected": 0.967,
+        "confirmed_track_on_target": 0.967,
+        "class_of_target": {
+          "other": 0.205,
+          "pedestrian": 0.779,
+          "two-wheeler": 0.016
+        },
+        "objects_per_sweep": 25.1
+      },
+      "ours_radar_vs_lidar": {
+        "confirmed_tracks_in_fov": 1417,
+        "supported_by_lidar": 0.478,
+        "unsupported_per_frame": 1.03
+      },
+      "team_gpu": {
+        "frames_with_target": 643,
+        "detected": 0.532,
+        "az_bias_deg": 2.94,
+        "az_spread_deg": 3.45,
+        "az_within_3deg_of_bias": 0.446,
+        "detections_per_frame": 1.48
+      },
+      "note": "radar phase correction measured on this session: radar azimuth scores are in-sample"
+    },
+    "run_20261014_1325": {
+      "ours_radar": {
+        "frames_with_target": 155,
+        "detected": 0.419,
+        "az_bias_deg": 7.68,
+        "az_spread_deg": 8.28,
+        "az_within_3deg_of_bias": 0.387,
+        "confirmed_track_on_target": 0.761,
+        "other_confirmed_tracks_per_frame": 0.99,
+        "confirmed_tracks_per_empty_frame": 1.2,
+        "detections_per_frame": 4.23
+      },
+      "ours_lidar": {
+        "sweeps_with_target": 275,
+        "detected": 0.469,
+        "confirmed_track_on_target": 0.429,
+        "class_of_target": {
+          "other": 0.209,
+          "pedestrian": 0.667,
+          "two-wheeler": 0.124
+        },
+        "objects_per_sweep": 19.05
+      },
+      "ours_radar_vs_lidar": {
+        "confirmed_tracks_in_fov": 608,
+        "supported_by_lidar": 0.564,
+        "unsupported_per_frame": 0.6
+      },
+      "team_gpu": {
+        "frames_with_target": 155,
+        "detected": 0.239,
+        "az_bias_deg": 12.16,
+        "az_spread_deg": 5.87,
+        "az_within_3deg_of_bias": 0.252,
+        "detections_per_frame": 1.53
+      }
+    },
+    "run_20261014_1326": {
+      "ours_radar": {
+        "frames_with_target": 203,
+        "detected": 0.65,
+        "az_bias_deg": 2.43,
+        "az_spread_deg": 8.08,
+        "az_within_3deg_of_bias": 0.31,
+        "confirmed_track_on_target": 0.951,
+        "other_confirmed_tracks_per_frame": 1.4,
+        "confirmed_tracks_per_empty_frame": 1.86,
+        "detections_per_frame": 5.01
+      },
+      "ours_lidar": {
+        "sweeps_with_target": 366,
+        "detected": 0.265,
+        "confirmed_track_on_target": 0.238,
+        "class_of_target": {
+          "other": 0.753,
+          "pedestrian": 0.206,
+          "two-wheeler": 0.021,
+          "vehicle": 0.021
+        },
+        "objects_per_sweep": 20.29
+      },
+      "ours_radar_vs_lidar": {
+        "confirmed_tracks_in_fov": 879,
+        "supported_by_lidar": 0.404,
+        "unsupported_per_frame": 1.24
+      },
+      "team_gpu": {
+        "frames_with_target": 203,
+        "detected": 0.7,
+        "az_bias_deg": -4.6,
+        "az_spread_deg": 5.82,
+        "az_within_3deg_of_bias": 0.167,
+        "detections_per_frame": 2.06
+      }
+    }
+  }
+}

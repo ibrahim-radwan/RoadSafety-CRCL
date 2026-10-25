@@ -15,6 +15,7 @@ reference-session scores. See `docs/knowledge/09_working_practices.md`.
 | `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, oriented boxes, size class. ~20 ms. |
 | `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation. For radar, Doppler is an EKF measurement plus a consistency check. |
 | `estimate_rx_phase.py` | The in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. |
+| `baseline.py` | The frozen reference for the merge: golden per-frame outputs (old chain on both paths, ours) and the scores of every reference session (`baseline/scores.json`). |
 | `../run_perception.py` | A whole session → `sync/perception_{radar,lidar}.npz` and `sync/perception.json` (scores). |
 
 ```bash
@@ -23,6 +24,34 @@ python run_perception.py --session /mnt/sdcard/sessions/<name>          # ~4 min
 python perception/estimate_rx_phase.py --session <s1> [<s2> ...] [--write]
 python -m pytest -q tests/test_perception.py
 ```
+
+## Baseline and regression check (merge step 1, 2026-10-25)
+
+Every change of an algorithm is measured before it replaces the old one:
+
+```bash
+python run_perception.py --session <s> ...            # current outputs
+python perception/baseline.py compare --session <s> ...   # scores vs perception/baseline/scores.json
+python -m pytest -q tests/test_baseline.py            # our detector still reproduces the golden frames
+```
+
+- **`perception/baseline/scores.json`** (in git) holds the scores of every
+  reference session for three outputs, against the LiDAR walker:
+  - our radar and LiDAR;
+  - the old chain's filtered clouds, on both its paths: `team_cpu` (OS-CFAR)
+    and `team_gpu` (CASO).
+
+  The radar scores of `stage3_02`/`03` are in-sample, because the phase
+  correction was measured on them.
+- **`<session>/sync/baseline/golden_*.npz`** (on the data drive, not in git)
+  holds the per-frame intermediate outputs on 20 fixed frames:
+  - for the old chain, on both paths: RD, RA, RE, CFAR masks and thresholds,
+    and xyz;
+  - for our detector: RD, RA and detections.
+
+  Ported stages are tested against them for equivalence. If a deliberate
+  change makes them obsolete, re-create them with
+  `baseline.py golden --session <s>`.
 
 ## Radar, per frame
 
