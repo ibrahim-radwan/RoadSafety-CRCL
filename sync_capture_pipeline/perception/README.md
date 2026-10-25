@@ -22,7 +22,7 @@ reference-session scores. See `docs/knowledge/09_working_practices.md`.
 - Capon, MUSIC, Bartlett;
 - the elevation map. |
 | `radar_chain.py` | `RadarChain`: the old chain's front end (`process_frame` stages 1–7 and 9) composed from those stages. It reproduces the old chain's golden frames on both paths (`cfar="caso"` or `"os"`), at ~21 ms/frame against ~100 ms (old GPU path) and ~1 s (old CPU path). |
-| `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
+| `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms, built on the `radar_dsp.py` stages. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
 | `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, oriented boxes, size class. ~20 ms. |
 | `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation. For radar, Doppler is an EKF measurement plus a consistency check. |
 | `estimate_rx_phase.py` | The in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. |

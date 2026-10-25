@@ -81,15 +81,13 @@ The plan, agreed with the owner:
 |---|---|
 | 1. Baseline | **Done 2026-10-25.** `perception/baseline.py`. Scores of all 7 reference sessions in `perception/baseline/scores.json` (git), for ours and the old chain's clouds on both paths. Golden per-frame outputs of 20 frames on `freewalk_ref_02`, `stage3_02` and `run_20261014_1326` (`<session>/sync/baseline/`, not in git). Our detector's regression test: `tests/test_baseline.py`. |
 | 2. Shared core | **Done 2026-10-25.** `perception/core/`: `radar_config`, `radar_io` (both moved from the old chain, with history), `calibration`, `lidar_io`, `session`, `conventions`. The replay, `run_perception.py`, `radar_cloud.py`, `baseline.py`, `estimate_rx_phase.py` and the report's `RadarProcessor` use it. The old chain reads its config and frames through shims. Verified: no output changes (the old chain reproduces its golden frames exactly on both paths; our golden frames and scores are unchanged). |
-| 3. Port the old chain's stages | **In progress.** Done 2026-10-25:
+| 3. Port the old chain's stages | **Done 2026-10-25.**
 - `perception/radar_dsp.py`: every general stage of `process_frame` in PyTorch.
-- `perception/radar_chain.py`: those stages composed as the old front end. It reproduces the golden frames of both old paths (all maps within 0.01 dB, identical range-Doppler detections) at ~21 ms/frame.
-- Tests: `tests/test_baseline.py` and `tests/test_radar_dsp.py`.
-
-Pending:
-- the single-subject "body-shape" gates of stage 8, and the xyz cloud (a decision);
-- multi-frame accumulation and micro-Doppler (`accumulate.py`, `microdoppler.py`). |
-| 4. Remove duplicates | `gpu_accel.py`, `RadarProcessor`; the report on the library. |
+- `perception/radar_chain.py`: those stages composed as the old front end. It reproduces the golden frames of both old paths at ~21 ms/frame.
+- Our `RadarDetector` (`perception/radar.py`) runs on the same stages; its golden frames and scores are unchanged.
+- Tests: `tests/test_baseline.py`, `tests/test_radar_dsp.py`.
+- **Retired** (owner's decision, 2026-10-25): stage 8's single-person gates, the old xyz cloud, and the single-subject accumulation and micro-Doppler. The pipeline's radar point cloud is our multi-object detections. Accumulation and micro-Doppler are to be rebuilt per tracked object in the techniques phase. The old behaviour stays reproducible from git history and the golden files. |
+| 4. Remove duplicates | Next: delete the old chain (`processing/` except the shims' targets, `gpu_accel.py`, its GUI and CLI tools), `radar_cloud.py` and the replay's "filtered" option; move the report's `RadarProcessor` onto the library. |
 
 What porting the old chain showed (2026-10-25):
 

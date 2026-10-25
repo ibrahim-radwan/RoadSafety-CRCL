@@ -57,6 +57,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import radar_dsp as dsp
 from .core.calibration import RX_PHASE_FILE, apply_phase, load_radar_config, rx_phase_for  # noqa: F401
 from .core.conventions import AZIMUTH_SIGN
 
@@ -93,17 +94,15 @@ class RadarDetector:
         self.n_pos = n_pos = max(c["az"] for c in ch_az) + 1
         self.ch_tx = torch.tensor([c["tx"] for c in ch_az], device=self.dev)
         self.ch_rx = torch.tensor([c["rx"] for c in ch_az], device=self.dev)
-        self.ch_pos = torch.tensor([c["az"] for c in ch_az], device=self.dev)
-        counts = np.bincount([c["az"] for c in ch_az], minlength=n_pos).astype(np.float32)
-        self.pos_w = torch.as_tensor(1.0 / np.maximum(counts, 1), device=self.dev)
+        self.ch_pos_np = np.array([c["az"] for c in ch_az], float)              # aperture position per channel
         # elevation row: top channel and the azimuth position it shares with the bottom row
         self.el_tx = torch.tensor([c["tx"] for c in ch_el], device=self.dev)
         self.el_rx = torch.tensor([c["rx"] for c in ch_el], device=self.dev)
-        self.el_pos = torch.tensor([c["az"] for c in ch_el], device=self.dev)
+        self.el_pos = torch.tensor([c["az"] for c in ch_el], device=self.dev)   # = index in the uniform array
         self.d_el = float(cfg.d_el_lambda)
-        self.win_r = torch.hann_window(self.n_s, periodic=False, device=self.dev)
-        self.win_d = torch.hann_window(self.n_loops, periodic=False, device=self.dev)
-        self.win_a = torch.hann_window(n_pos, periodic=False, device=self.dev)
+        self.win_r = dsp.window("hann", self.n_s, device=self.dev)
+        self.win_d = dsp.window("hann", self.n_loops, device=self.dev)
+        self.win_a = dsp.window("hann", n_pos, device=self.dev)
         self.n_az = int(cfg.az_fft_size)
         self.range_res = float(cfg.range_res_m)
         self.n_range = int(cfg.n_range)
@@ -152,7 +151,7 @@ class RadarDetector:
         x = torch.as_tensor(raw, device=self.dev).view(self.n_loops, self.n_tx, self.n_rx, self.n_s, 2).float()
         iq = torch.complex(x[..., 1], x[..., 0]) if self.iq_swap else torch.complex(x[..., 0], x[..., 1])
         cube = iq.permute(1, 0, 2, 3) * self.corr[:, None, :, None]       # TDM: chirp = loop * n_tx + tx
-        return torch.fft.fft(cube * self.win_r, dim=-1)[..., :self.n_range]
+        return dsp.range_fft(cube, self.win_r, self.n_s)[..., :self.n_range]
 
     def process(self, raw: np.ndarray, moving_only: bool = True, detect: bool = True):
         """Returns dict: rd [doppler, range] dB, ra [az, range] dB (processing azimuth order),
@@ -160,24 +159,17 @@ class RadarDetector:
         detection map)."""
         torch = self.torch
         rng = self.range_cube(raw)
-        virt = rng[self.ch_tx, :, self.ch_rx, :]                                 # [ch, loop, range]
-        el = rng[self.el_tx, :, self.el_rx, :]                                   # [8, loop, range]
-        if moving_only:
-            virt = virt - virt.mean(dim=1, keepdim=True)
-            el = el - el.mean(dim=1, keepdim=True)
-        wd = self.win_d[None, :, None]
-        dch = torch.fft.fftshift(torch.fft.fft(virt * wd, dim=1), dim=1)         # [ch, dop, range]
-        el_dop = torch.fft.fftshift(torch.fft.fft(el * wd, dim=1), dim=1)       # [8, dop, range]
+        virt = dsp.virtual_array(rng, self.ch_tx, self.ch_rx)                   # [loop, range, ch]
+        el = dsp.virtual_array(rng, self.el_tx, self.el_rx)                     # [loop, range, 8]
+        dch = dsp.doppler_fft(virt, self.win_d, self.n_loops, remove_clutter=moving_only)    # [dop, range, ch]
+        el_dop = dsp.doppler_fft(el, self.win_d, self.n_loops, remove_clutter=moving_only)   # [dop, range, 8]
         if self.doppler_comp:
-            dch = dch * self.tdm_comp[self.ch_tx][:, :, None]
-            el_dop = el_dop * self.tdm_comp[self.el_tx][:, :, None]
-        dop = torch.zeros((self.n_pos,) + dch.shape[1:], dtype=dch.dtype, device=self.dev)
-        dop.index_add_(0, self.ch_pos, dch)
-        dop = dop * self.pos_w[:, None, None]                                    # uniform array [pos, dop, range]
-        rd = 10 * torch.log10((dop.abs() ** 2).sum(dim=0) + 1e-6)               # [dop, range]
-        # azimuth on the last (contiguous) axis: unstrided cuFFT, contiguous per-cell spectra
-        az = torch.fft.fft((dop * self.win_a[:, None, None]).permute(1, 2, 0), n=self.n_az, dim=-1)
-        p_az = torch.fft.fftshift(az.real ** 2 + az.imag ** 2, dim=-1)          # [dop, range, az]
+            dch = dch * self.tdm_comp[self.ch_tx].T[:, None, :]
+            el_dop = el_dop * self.tdm_comp[self.el_tx].T[:, None, :]
+        dop, _ = dsp.unique_aperture(dch, self.ch_pos_np)                      # uniform array [dop, range, pos]
+        rd = dsp.power_db(dop, dim=-1)                                           # [dop, range]
+        az = dsp.az_spectrum(dop, self.win_a, self.n_az)                        # [dop, range, az]
+        p_az = az.real ** 2 + az.imag ** 2
         ra = 10 * torch.log10(p_az.sum(dim=0).T + 1e-6)                          # [az, range]
         out = {"rd": rd, "ra": ra}
         if detect:
@@ -231,9 +223,9 @@ class RadarDetector:
         rdel = torch.where(rden.abs() > 1e-6, 0.5 * (r0 - r2) / rden, torch.zeros_like(rden)).clamp(-0.5, 0.5)
         rng_m = (ri.float() + rdel) * self.range_res
         # elevation: phase of top x conj(bottom) over the pairs, at this range-Doppler cell (unverified)
-        top = el_dop[:, di, ri]                                                  # [8, N]
-        bot = dop[self.el_pos][:, di, ri]
-        phase = torch.angle((top * bot.conj()).sum(dim=0))
+        top = el_dop[di, ri]                                                     # [N, 8]
+        bot = dop[di, ri][:, self.el_pos]
+        phase = torch.angle((top * bot.conj()).sum(dim=1))
         sin_el = (phase / (2 * np.pi * self.d_el)).clamp(-1, 1)
         # assemble: one row per (cell, azimuth peak)
         sel = ok.flatten()
