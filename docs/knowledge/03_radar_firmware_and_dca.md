@@ -58,14 +58,59 @@ This page is the background an agent needs before touching radar code.
 
 ## Processing caveats (see `sync_capture_pipeline/NOTES_FOR_TEAM.md`)
 
-- **Azimuth sign is mirrored** in the processing (radar_config's TX/RX table).
-  - Replay and report correct it: `RadarProcessor.MIRROR_AZIMUTH`.
-  - The team's `process_frame` is unchanged.
-- **Weak angular focusing:** a person appears as an arc. The antenna
-  calibration was probably measured with the old HPF, and recalibration
-  belongs to the team.
-- **Elevation is unreliable:** it comes from a single 8-channel row.
+- **The "azimuth mirror" is a frame convention, not an error** (settled
+  2026-10-24).
+  - The team's processing azimuth is positive to the **right**; their README
+    says so ("x = lateral, positive = right of boresight").
+  - The pipeline frame is y **left**, so world azimuth = − processing
+    azimuth.
+  - Verified against the LiDAR walker on `freewalk_ref_02`: 90% sign agreement
+    beyond ±8°.
+  - The earlier "mirrored" finding came from the replay reading the
+    processing azimuth as left-positive.
+  - `RadarProcessor.MIRROR_AZIMUTH` (report), `radar_cloud.py` (`y = −team_x`)
+    and `perception/radar.py` all apply this conversion. Nothing in the team's
+    code needs to change.
+- **Doppler sign:** positive = receding. 99% sign agreement with the LiDAR
+  range rate (corr +0.83 on freewalk_ref_02, +0.98 on stage3).
+- **Weak angular focusing: phase calibration errors, measured in situ**
+  (`perception/estimate_rx_phase.py`).
+  - The residual phase per virtual channel against the LiDAR azimuth is stable.
+  - **TX3 and TX4 (the slave AWR2243) sit ~100–125° off TX0–TX2 (the
+    master):** an inter-device TX phase error in the cascade calibration.
+  - There is also a smaller per-RX pattern.
+  - The correction measured on the plate sessions (`stage3_02` + `03`) is
+    stored in `calibration/radar_rx_phase.json`. On `freewalk_ref_02`, which
+    was not used to measure it, it cuts the azimuth spread from 5.95° to
+    2.43°.
+  - Even so, sidelobes stay only ~5–10 dB below the peak. A proper
+    calibration (a reflector over a wide angle span) belongs to the team; the
+    in-situ correction is provisional.
+- **The radar–LiDAR yaw differs between mountings:**
+  - stage3 (2026-10-11 morning): about +3°;
+  - freewalk_ref_02 (afternoon): about −0.4°;
+  - run_20261014_1326: about +2° (with the per-channel correction).
+  
+  This is extrinsic calibration (the team's). The phase correction removes
+  its beam-steering part so as not to absorb it.
+- **TDM-MIMO Doppler phase:** a moving target's phase advances between the 6
+  TX slots of a loop. `perception/radar.py` compensates it per Doppler bin. The
+  team's `process_frame` does not.
+- **Multipath ghosts:** a walker produces images at 2× range with 1.9×
+  radial velocity (radar → person → rig → person → radar), and images behind
+  the walker at the same radial velocity (via walls). `perception/radar.py`
+  flags both (`ghost` column).
+- **Elevation is unreliable:**
+  - It comes from a single 8-channel row on TX5, which is on the slave device
+    (see the TX phase error above).
+  - The walker reads ~+13° on freewalk_ref_02.
+  - Not corrected: that needs a vertical reference.
 - **Old `.cfg` files implied Q-first.** Corrected: `adcbufCfg -1 0 0 1 1`.
+- **The team's GPU and CPU paths differ.** `process_frame` requests CASO-CFAR
+  on range-Doppler (`force_caso=True`). Without CuPy, the fallback
+  `_cfar_2d_cpu(heat, cfg)` drops that flag and runs `cfg.cfar_method`, which
+  is OS. With CuPy (installed 2026-10-24), `radar_cloud.py` runs the GPU path
+  at ~0.1 s per frame. Clouds made before that used the CPU path.
 
 ## Flashing (from the Jetson)
 

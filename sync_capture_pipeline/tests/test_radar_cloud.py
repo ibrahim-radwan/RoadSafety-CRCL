@@ -36,7 +36,7 @@ def test_conversion_to_pipeline_frame(S):
     d = np.load(S / "sync" / "radar_cloud_filtered.npz")
     t, x = d["team_xyz"], d["xyz"]
     np.testing.assert_allclose(x[:, 0], t[:, 1])          # forward
-    np.testing.assert_allclose(x[:, 1], -t[:, 0])         # left (mirror-corrected)
+    np.testing.assert_allclose(x[:, 1], -t[:, 0])         # left (team x is right-positive)
     np.testing.assert_allclose(x[:, 2], t[:, 2])
     np.testing.assert_allclose(d["doppler"], t[:, 4])
 

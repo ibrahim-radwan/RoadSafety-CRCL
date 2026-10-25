@@ -6,13 +6,13 @@ keeps its LATEST product ready for the GUI. The GUI never waits on a sensor.
 
     CameraSource  ZED SDK replays the SVO2 (decoded on the GPU); the frame
                   shown is the last one captured at or before the clock.
-    RadarSource   each radar frame is processed on the GPU with PyTorch:
-                  range FFT -> virtual array -> Doppler FFT -> azimuth FFT.
-                  Products: range-Doppler map and a bird's-eye (BEV) map.
+    RadarSource   each radar frame is processed on the GPU (perception/radar.py):
+                  range-Doppler and bird's-eye maps, CFAR detections, tracks.
     LidarSource   rs_driver decodes lidar.pcap through a named pipe that a
                   feeder thread fills in step with the clock (pause, speed
                   and seek work; rs_driver alone can only play a file from
-                  the start). Product: BEV point density, per sweep.
+                  the start). Products per sweep: the 2D view, the points
+                  for the 3D view, and objects + tracks (perception/lidar.py).
 
 Times come from sync/ (align_session.py), so offsets applied there apply
 here too.
@@ -270,11 +270,12 @@ class RadarProcessor:
     """GPU (PyTorch) radar products for one raw frame, using the repo's own
     configuration, channel geometry and antenna calibration."""
 
-    # The processing's azimuth sign is MIRRORED relative to the world: on
-    # freewalk_ref_02 (2026-10-11) a walker 3 m to the right at 8 m (camera and
-    # LiDAR agree) came out on the left, and vice versa. The raw data is fine;
-    # the TX/RX -> azimuth table in radar_config is unverified. Until the team's
-    # antenna calibration settles it, the BEV lookup flips the sign.
+    # Kept for the session report (report/collect.py); the replay uses
+    # perception/radar.py. The processing's azimuth is positive to the RIGHT (the
+    # team's convention: x lateral, positive = right of boresight); the pipeline
+    # frame is y LEFT, so the BEV lookup negates it. A frame conversion, not an
+    # error (verified against the LiDAR on freewalk_ref_02: 90% sign agreement
+    # off boresight, see docs/knowledge/03_radar_firmware_and_dca.md).
     MIRROR_AZIMUTH = True
 
     def __init__(self, bev_x, bev_y, cfg_path: Path, device="cuda", mirror_azimuth: bool = None):
@@ -348,29 +349,54 @@ class RadarProcessor:
 
 
 class RadarSource(Source):
+    """Radar replay: our GPU detector (perception/radar.py) on every frame the clock reaches,
+    with read-ahead, clustering and a Doppler-aware tracker. Publishes a dict:
+        t, k            frame time (t_ref) and index
+        rd              range-Doppler map [doppler, range] dB
+        bev             bird's-eye power on the (bev_x, bev_y) grid, NaN outside the FOV
+        ra              range-azimuth map [az, range] dB (processing azimuth order)
+        det             detections (perception.radar.DET_COLS), multipath ghosts flagged
+        tracks          [(id, x, y, vx, vy, v_r, age)] confirmed tracks
+    """
     name_ = "radar"
+    PREFETCH = 12                       # frames read ahead (slow disks: NTFS/FUSE, USB)
 
-    def __init__(self, clock, session: Path, bev_x, bev_y, moving_only=True):
+    def __init__(self, clock, session: Path, bev_x, bev_y, moving_only=True, rx_phase=True):
         super().__init__(clock)
+        sys.path.insert(0, str(PIPELINE))
+        from perception.radar import RadarDetector, rx_phase_for
         self.session = session
         rows = load_csv(session / "sync" / "radar_timeline.csv")
         self.t = np.array([float(r["t_ref"]) for r in rows])
         self.files = [r["filename"] for r in rows]
         variant, how = radar_firmware.session_variant(session)
-        print(f"[radar] firmware {variant} ({how})")
-        self.proc = RadarProcessor(bev_x, bev_y, radar_firmware.cfg_for_variant(variant))
+        rx = rx_phase_for(variant) if rx_phase else None
+        print(f"[radar] firmware {variant} ({how}); in-situ RX phase correction: "
+              f"{'on' if rx is not None else 'off'}")
+        self.proc = RadarDetector(radar_firmware.cfg_for_variant(variant), rx_phase_deg=rx)
+        torch = self.proc.torch
+        # BEV lookup: each (x forward, y left) cell -> (range bin, processing azimuth bin)
+        X, Y = np.meshgrid(bev_x, bev_y, indexing="ij")
+        r = np.hypot(X, Y)
+        az_world = np.degrees(np.arctan2(Y, X))
+        ri = np.round(r / self.proc.range_res).astype(int)
+        ai = np.clip(np.searchsorted(self.proc.az_axis, -az_world), 0, self.proc.n_az - 1)
+        valid = (X > 0) & (ri < self.proc.n_range) & (np.abs(az_world) <= 85.0)
+        dev = self.proc.dev
+        self.bev_ri = torch.as_tensor(np.where(valid, ri, 0), device=dev)
+        self.bev_ai = torch.as_tensor(np.where(valid, ai, 0), device=dev)
+        self.bev_valid = torch.as_tensor(valid, device=dev)
         al_path = session / "sync" / "alignment.json"
         self.timing_source = (json.loads(al_path.read_text()).get("radar", {}).get("timing_source", "")
                               if al_path.is_file() else "")
         self.moving_only = moving_only
         self.ms_per_frame = 0.0
-        # Raw point cloud: one point per range-azimuth cell, world azimuth = the
-        # processing's azimuth mirrored (MIRROR_AZIMUTH), z = 0 (no elevation here).
-        az = np.radians(-self.proc.az_axis if self.proc.mirror_azimuth else self.proc.az_axis)
-        r = np.asarray(self.proc.range_axis)
-        self.ra_x = (np.cos(az)[:, None] * r[None, :]).astype(np.float32)     # [az, range]
-        self.ra_y = (np.sin(az)[:, None] * r[None, :]).astype(np.float32)
-        self.ra_r = np.broadcast_to(r[None, :], self.ra_x.shape)
+        # Raw point cloud: one point per range-azimuth cell (world azimuth = - processing azimuth), z = 0
+        az = np.radians(-self.proc.az_axis)
+        rr = np.asarray(self.proc.range_axis)
+        self.ra_x = (np.cos(az)[:, None] * rr[None, :]).astype(np.float32)     # [az, range]
+        self.ra_y = (np.sin(az)[:, None] * rr[None, :]).astype(np.float32)
+        self.ra_r = np.broadcast_to(rr[None, :], self.ra_x.shape)
         # Filtered point cloud: the team's process_frame, pre-computed by radar_cloud.py
         self.cloud = None
         cp = session / "sync" / "radar_cloud_filtered.npz"
@@ -378,6 +404,8 @@ class RadarSource(Source):
             d = np.load(cp)
             if len(d["start"]) == len(self.files) + 1:
                 self.cloud = {k: d[k] for k in ("start", "xyz", "doppler", "power")}
+        self._cache, self._want = {}, 0
+        self._clock_cv = threading.Condition()
 
     def raw_points(self, ra, thr_db: float, max_range: float):
         """Cells more than thr_db above this frame's median, within max_range: (xyz N x 3, dB above floor)."""
@@ -395,11 +423,40 @@ class RadarSource(Source):
     def span(self):
         return float(self.t[0]), float(self.t[-1])
 
+    def _prefetch(self):
+        """Read frames want .. want + PREFETCH ahead of the processing thread."""
+        while not self.stop_evt.is_set():
+            want = self._want
+            todo = [k for k in range(want, min(want + self.PREFETCH, len(self.files))) if k not in self._cache]
+            if not todo:
+                time.sleep(0.005)
+                continue
+            k = todo[0]
+            try:
+                raw = np.fromfile(self.session / "radar" / self.files[k], dtype=np.int16)
+            except OSError:
+                time.sleep(0.05)
+                continue
+            for old in [j for j in list(self._cache) if j < self._want - 2 or j > self._want + 2 * self.PREFETCH]:
+                self._cache.pop(old, None)
+            self._cache[k] = raw
+
+    def _raw(self, k: int):
+        raw = self._cache.get(k)
+        return raw if raw is not None else np.fromfile(self.session / "radar" / self.files[k], dtype=np.int16)
+
     def run(self):
+        sys.path.insert(0, str(PIPELINE))
+        from perception.radar import RADAR_TRACKER, cluster_detections
+        from perception.tracking import Tracker
+        threading.Thread(target=self._prefetch, daemon=True, name="radar-prefetch").start()
+        tracker = Tracker(**RADAR_TRACKER)
+        torch = self.proc.torch
         try:
-            k_done, mode = -1, None
+            k_done, mode, gen = -1, None, None
             while not self.stop_evt.is_set():
                 k = int(np.searchsorted(self.t, self.clock.now(), side="right")) - 1
+                self._want = max(k, 0)
                 if k < 0:                               # before the radar's first frame
                     if k_done != -1:
                         k_done = -1
@@ -409,13 +466,27 @@ class RadarSource(Source):
                 if k == k_done and mode == self.moving_only:
                     time.sleep(0.004)
                     continue
-                raw = np.fromfile(self.session / "radar" / self.files[k], dtype=np.int16)
+                if gen != self.clock.seek_gen or k < k_done or k > k_done + 8:
+                    tracker.reset()                     # a jump: tracks start over
+                gen = self.clock.seek_gen
+                raw = self._raw(k)
                 t0 = time.perf_counter()
-                rd, bev = self.proc.process(raw, self.moving_only)
+                out = self.proc.process(raw, self.moving_only)
+                bev = out["ra"][self.bev_ai, self.bev_ri]
+                bev = torch.where(self.bev_valid, bev, torch.full_like(bev, float("nan")))
+                rd, bev, ra = out["rd"].cpu().numpy(), bev.cpu().numpy(), out["ra"].cpu().numpy()
+                det = out["detections"]
+                _, ob = cluster_detections(det)
+                tracker.update(float(self.t[k]), ob[:, :2], list(ob[:, 4]), radial=ob[:, 4])
+                tracks = [(tr.id, tr.x[0], tr.x[1], tr.x[2], tr.x[3], float(tr.payload or 0.0), tr.hits)
+                          for tr in tracker.reported()]
                 self.ms_per_frame = (time.perf_counter() - t0) * 1e3
                 k_done, mode = k, self.moving_only
-                self.publish((float(self.t[k]), k, rd, bev, self.proc.last_ra))
+                self.publish({"t": float(self.t[k]), "k": k, "rd": rd, "bev": bev, "ra": ra, "det": det,
+                              "tracks": tracks})
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             self.error = f"radar: {exc}"
 
 
@@ -459,11 +530,22 @@ def _fill_gaps(rgb: np.ndarray) -> np.ndarray:
     return out
 
 
-def render_lidar(pts: np.ndarray, view: dict):
+def top_extent(view: dict):
+    """(x0, x1, y0, y1) of a top view: forward range R (top: 0..R; top360: -R..R) and the
+    lateral extent that fills the panel's aspect (view["aspect"] = width / height on screen)."""
+    R, asp = float(view["range_m"]), max(0.3, float(view.get("aspect", 1.0)))
+    if view["mode"] == "top360":
+        return -R, R, -R * asp, R * asp
+    return 0.0, R, -R * asp / 2, R * asp / 2
+
+
+def render_lidar(pts: np.ndarray, view: dict, ground_z=None):
     """pts: N x 6 (x, y, z, range, intensity, dt). Returns (rgb HxWx3, extent, n_shown).
     extent = (left, bottom, width, height) in plot coordinates: top views use
     plot-x = y (left +) and plot-y = x (forward); the panorama uses plot-x =
-    azimuth (deg, left +) and plot-y = elevation (deg)."""
+    azimuth (deg, left +) and plot-y = elevation (deg). Top views fill the
+    panel (view["aspect"]) at about view["px"] cells across; colour by height
+    runs from the ground (ground_z, when known) to 3 m above it."""
     x, y, z, r, inten = pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3], pts[:, 4]
     keep = r >= view["near_m"]                    # drop the mount / vehicle body
     x, y, z, r, inten = x[keep], y[keep], z[keep], r[keep], inten[keep]
@@ -481,9 +563,8 @@ def render_lidar(pts: np.ndarray, view: dict):
             d = np.log(r[ok] + 0.1)
             rgb = _paint(cells, d, nw * nh, "min", _lut("turbo_r"))
         return _fill_gaps(rgb.reshape(nh, nw, 3)), (a0, e0, a1 - a0, e1 - e0), int(ok.sum())
-    R = float(view["range_m"])
-    x0, x1, y0, y1 = (-R, R, -R, R) if view["mode"] == "top360" else (0.0, R, -R / 2, R / 2)
-    res = max(x1 - x0, y1 - y0) / 350.0           # ~350 cells across the longer side
+    x0, x1, y0, y1 = top_extent(view)
+    res = max(x1 - x0, y1 - y0) / float(np.clip(view.get("px", 500), 250, 900))   # ~ one cell per pixel
     nx, ny = int(round((x1 - x0) / res)), int(round((y1 - y0) / res))
     ix, iy = ((x - x0) / res).astype(np.int64), ((y - y0) / res).astype(np.int64)
     ok = (x >= x0) & (y >= y0) & (ix < nx) & (iy < ny)
@@ -496,9 +577,58 @@ def render_lidar(pts: np.ndarray, view: dict):
         rgb = _paint(np.flatnonzero(np.isfinite(h)), vals, nx * ny, "max", _lut("viridis"), 0.0, hi)
     elif view["color"] == "intensity":
         rgb = _paint(cells, inten[ok], nx * ny, "max", _lut("viridis"))
-    else:                                         # highest point per cell, coloured by height
+    elif ground_z is not None and np.isfinite(ground_z):  # highest point per cell, ground .. +3 m
+        rgb = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"), ground_z - 0.1, ground_z + 3.0)
+    else:
         rgb = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"))
     return _fill_gaps(rgb.reshape(nx, ny, 3)), (y0, x0, y1 - y0, x1 - x0), int(ok.sum())
+
+
+def lidar_pcap_index(session: Path, pcap=None) -> dict:
+    """Packet table of lidar.pcap: byte offset, length, host CLOCK_MONOTONIC ns, port, and
+    for MSOP packets the LiDAR timestamp (lts, s) with its host time (mts, ns).
+    Cached in sync/lidar_pcap_index.npz - building it reads the whole PCAP once."""
+    cache = session / "sync" / "lidar_pcap_index.npz"
+    keys = ("off", "ln", "ht", "port", "lts", "mts")
+    if cache.is_file():
+        z = np.load(cache)
+        return {k: z[k] for k in keys}
+    buf = pcap if pcap is not None else np.memmap(session / "lidar" / "lidar.pcap", dtype=np.uint8, mode="r")
+    off, ln, ht, port, lts, mts = [], [], [], [], [], []
+    o, n = 24, len(buf)
+    while o + 16 <= n:
+        sec, nsec, incl, _ = struct.unpack_from("<IIII", buf, o)
+        if o + 16 + incl > n:
+            break
+        t = sec * 1_000_000_000 + nsec
+        p = struct.unpack_from("!H", buf, o + 16 + 36)[0]
+        off.append(o); ln.append(16 + incl); ht.append(t); port.append(p)
+        pl = o + 16 + 42
+        if bytes(buf[pl:pl + 4]) == MSOP_ID:
+            lts.append(int.from_bytes(bytes(buf[pl + 20:pl + 26]), "big")
+                       + int.from_bytes(bytes(buf[pl + 26:pl + 30]), "big") * 1e-6)
+            mts.append(t)
+        o += 16 + incl
+    idx = {"off": np.array(off), "ln": np.array(ln), "ht": np.array(ht, dtype=np.int64), "port": np.array(port),
+           "lts": np.array(lts), "mts": np.array(mts, dtype=np.int64)}
+    np.savez(cache, **idx)
+    return idx
+
+
+def lidar_to_mono(index: dict, offset_s: float = 0.0):
+    """LiDAR clock (s) -> session CLOCK_MONOTONIC (s, LiDAR offset applied): the same
+    lower-envelope fit as align_session.py."""
+    sys.path.insert(0, str(PIPELINE))
+    import align_session as al
+    a, b, l0, _, _ = al.envelope_fit(index["lts"], index["mts"] / 1e9)
+    return lambda tl: a * (np.asarray(tl) - l0) + b + offset_s
+
+
+def sweep_time(points: np.ndarray, ts: float) -> float:
+    """LiDAR-clock time at which the sweep's radar-boresight points (within ~5 deg ahead) were
+    scanned; points column 5 = per-point time offset from the sweep timestamp ts."""
+    fwd = (points[:, 0] > 0) & (np.abs(points[:, 1]) <= 0.09 * points[:, 0])
+    return ts + float(np.median(points[fwd, 5])) if fwd.any() else ts + 0.05
 
 
 class LidarSource(Source):
@@ -510,47 +640,20 @@ class LidarSource(Source):
         super().__init__(clock)
         self.session = session
         self.offset_s = offset_s
-        self.view = dict(mode="top", range_m=40.0, color="height", near_m=0.5, version=0)
+        self.view = dict(mode="top", range_m=40.0, color="height", near_m=0.5, version=0, aspect=1.0, px=500)
         self.view.update(view or {})
+        self.detect = True                  # objects + tracks per sweep (perception/lidar.py)
+        self.want_labels = False            # per-point labels, only while the 3D view shows them
+        self._det_cache = (None, None)      # (sweep time, detection result)
+        self._tracker, self._trk_gen, self._trk_t = None, None, None
         self.vlock = threading.Lock()
         self.pcap = np.memmap(session / "lidar" / "lidar.pcap", dtype=np.uint8, mode="r")
-        self._index()
-        sys.path.insert(0, str(PIPELINE))
-        import align_session as al
-        a, b, l0, _, _ = al.envelope_fit(self.lts, self.mts / 1e9)
-        self.to_mono = lambda tl: a * (np.asarray(tl) - l0) + b + offset_s
+        idx = lidar_pcap_index(session, self.pcap)
+        self.off, self.ln, self.ht, self.port, self.lts, self.mts = (idx[k] for k in
+                                                                     ("off", "ln", "ht", "port", "lts", "mts"))
+        self.to_mono = lidar_to_mono(idx, offset_s)
         self.sweeps = []                    # (t_mono, raw points N x 6), last ~1.5 s
         self.slock = threading.Lock()
-
-    def _index(self):
-        """Packet table: byte offset, length, host CLOCK_MONOTONIC ns, port.
-        Cached in sync/ - building it reads the whole PCAP once."""
-        cache = self.session / "sync" / "lidar_pcap_index.npz"
-        if cache.is_file():
-            z = np.load(cache)
-            self.off, self.ln, self.ht, self.port, self.lts, self.mts = (z[k] for k in
-                                                                         ("off", "ln", "ht", "port", "lts", "mts"))
-            return
-        buf = self.pcap
-        off, ln, ht, port, lts, mts = [], [], [], [], [], []
-        o, n = 24, len(buf)
-        while o + 16 <= n:
-            sec, nsec, incl, _ = struct.unpack_from("<IIII", buf, o)
-            if o + 16 + incl > n:
-                break
-            t = sec * 1_000_000_000 + nsec
-            p = struct.unpack_from("!H", buf, o + 16 + 36)[0]
-            off.append(o); ln.append(16 + incl); ht.append(t); port.append(p)
-            pl = o + 16 + 42
-            if bytes(buf[pl:pl + 4]) == MSOP_ID:
-                lts.append(int.from_bytes(bytes(buf[pl + 20:pl + 26]), "big")
-                           + int.from_bytes(bytes(buf[pl + 26:pl + 30]), "big") * 1e-6)
-                mts.append(t)
-            o += 16 + incl
-        self.off, self.ln, self.ht, self.port = (np.array(off), np.array(ln), np.array(ht, dtype=np.int64),
-                                                 np.array(port))
-        self.lts, self.mts = np.array(lts), np.array(mts, dtype=np.int64)
-        np.savez(cache, off=self.off, ln=self.ln, ht=self.ht, port=self.port, lts=self.lts, mts=self.mts)
 
     def span(self):
         return float(self.ht[0]) / 1e9 + self.offset_s, float(self.ht[-1]) / 1e9 + self.offset_s
@@ -561,20 +664,60 @@ class LidarSource(Source):
             self.view.update(changes)
             self.view["version"] += 1
 
+    def _detect(self, sweep):
+        """Objects and confirmed tracks for a sweep, once per sweep (view changes reuse it)."""
+        if self._det_cache[0] == sweep[0] and (not self.want_labels or self._det_cache[1].get("point_label")
+                                               is not None):
+            return self._det_cache[1]
+        sys.path.insert(0, str(PIPELINE))
+        from perception.lidar import CLASSES, LIDAR_TRACKER, O, LidarDetector
+        from perception.tracking import Tracker
+        if self._tracker is None:
+            self._detector = LidarDetector(near_m=max(0.05, float(self.view["near_m"])))
+            self._tracker = Tracker(**LIDAR_TRACKER)
+        t = sweep[0]
+        tic = time.perf_counter()
+        res = self._detector.detect(sweep[1], labels=self.want_labels)
+        if self._det_cache[0] == t:             # same sweep again, now with labels: tracks unchanged
+            res["tracks"], res["ms_total"] = self._det_cache[1]["tracks"], 1e3 * (time.perf_counter() - tic)
+            self._det_cache = (t, res)
+            return res
+        if self._trk_gen != self.clock.seek_gen or (self._trk_t is not None and not 0 < t - self._trk_t < 0.5):
+            self._tracker.reset()               # a seek or a jump: tracks start over
+        self._trk_gen, self._trk_t = self.clock.seek_gen, t
+        ob = res["objects"]
+        mov = ob[ob[:, O["cls"]] != CLASSES.index("structure")]
+        self._tracker.update(t, mov[:, [O["x"], O["y"]]], list(mov[:, O["cls"]]))
+        res["tracks"] = [(tr.id, tr.x[0], tr.x[1], tr.x[2], tr.x[3], int(tr.payload), tr.hits)
+                         for tr in self._tracker.reported()]
+        res["ms_total"] = 1e3 * (time.perf_counter() - tic)
+        self._det_cache = (t, res)
+        return res
+
     def _render(self, sweep):
         with self.vlock:
             view = dict(self.view)
-        rgb, extent, shown = render_lidar(sweep[1], view)
+        det = None
+        if self.detect:
+            try:
+                det = self._detect(sweep)
+            except Exception as exc:            # detection must never stop the replay
+                self.error = f"lidar detection: {exc}"
+        rgb, extent, shown = render_lidar(sweep[1], view, None if det is None else det["ground_z"])
         # Raw points for the 3D view: valid returns only (the RS-Fairy fills
         # no-return directions with zero range), beyond the near filter.
         p = sweep[1]
         ok = np.isfinite(p[:, 3]) & (p[:, 3] > max(0.05, float(view["near_m"])))
+        lab = None if det is None or det.get("point_label") is None else det["point_label"][ok]
         with self.vlock:
-            self.points = (sweep[0], np.ascontiguousarray(p[ok, :5]))
-        return (sweep[0], rgb, shown, extent, view["mode"], view["version"])
+            self.points = (sweep[0], np.ascontiguousarray(p[ok, :5]), lab,
+                           None if det is None else det["ground_z"])
+        return {"t": sweep[0], "rgb": rgb, "n_shown": shown, "ext": extent, "mode": view["mode"],
+                "version": view["version"], "det": det}
 
     def get_points(self):
-        """(time, N x 5 [x, y, z, range, intensity]) of the sweep last published, or None."""
+        """(time, N x 5 [x, y, z, range, intensity], point labels or None, ground z or None)
+        of the sweep last published, or None."""
         with self.vlock:
             return getattr(self, "points", None)
 
@@ -595,6 +738,8 @@ class LidarSource(Source):
                 while (not self.stop_evt.is_set() and gen == self.clock.seek_gen):
                     time.sleep(0.05)
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             self.error = f"lidar: {exc}"
         finally:
             import shutil
@@ -617,9 +762,7 @@ class LidarSource(Source):
             p = np.asarray(points)
             if ts <= 0 or len(p) == 0:
                 return
-            fwd = (p[:, 0] > 0) & (np.abs(p[:, 1]) <= 0.09 * p[:, 0])          # within ~5 deg ahead
-            tb = ts + float(np.median(p[fwd, 5])) if fwd.any() else ts + 0.05
-            item = (float(self.to_mono(tb)), p.astype(np.float32, copy=True))
+            item = (float(self.to_mono(sweep_time(p, ts))), p.astype(np.float32, copy=True))
             with self.slock:
                 self.sweeps.append(item)
                 self.sweeps = self.sweeps[-15:]
@@ -683,7 +826,9 @@ class LidarSource(Source):
             with self.slock:
                 ready = [s for s in self.sweeps if s[0] <= self.clock.now()]
             latest = self.latest
-            if ready and (latest is None or ready[-1][0] != latest[0] or latest[5] != self.view["version"]):
+            if ready and (latest is None or ready[-1][0] != latest["t"] or latest["version"] != self.view["version"]
+                          or (self.want_labels and latest["det"] is not None
+                              and latest["det"].get("point_label") is None)):
                 self.publish(self._render(ready[-1]))        # new sweep, or the view changed
             time.sleep(0.01)
         feed_stop.set()

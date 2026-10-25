@@ -54,3 +54,25 @@
 - **It was once found turned 57°** after the sensors were reconnected; Stage 3
   found it. Check orientation before calibration or collection, for example in
   the replay: a person straight ahead should be at ~0° azimuth.
+
+## Object detection (ours, 2026-10-24)
+
+`sync_capture_pipeline/perception/lidar.py`, live in the replay and offline in
+`run_perception.py`. See `perception/README.md`.
+
+- **Local ground, not one plane.** A single RANSAC plane failed on
+  `freewalk_ref_02`: a carport with a driveway sloping ~13° down. The plane
+  tilted 9°, and the roof plus the sloped ground merged into one 13 × 8 m
+  "object".
+  - Now: the lowest return per 1 m cell, with a lifted-cell rule (> 0.35 m
+    above its 3×3 minimum).
+- **Overhead structures removed:** a 0.2 m column is an obstacle only if
+  something in it reaches down to within 1 m of the ground. This drops roofs,
+  canopies and branches.
+- On `freewalk_ref_02`:
+  - the walker is detected in 95% of sweeps and tracked in 95%;
+  - it is classed `pedestrian` in 84% (`other` in most of the rest);
+  - about 27 objects per sweep (walls, bins, bikes, the parked car);
+  - ~20 ms per sweep on the GPU.
+- Size classes are heuristics. Walls with things against them can be boxed as
+  "vehicle".

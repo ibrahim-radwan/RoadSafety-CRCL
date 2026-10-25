@@ -1,54 +1,43 @@
 # Session replay
 
-Replays a three-sensor session in real time, with every sensor on one clock.
-It can show all three sensors or any one of them.
+Replays a three-sensor session in real time, with every sensor on one clock,
+and runs our GPU detection and tracking live on the radar and the LiDAR
+(`../perception/`). It can show all three sensors or any one of them.
+
+One window, six panels (2026-10-24; the 3D view used to be a separate window):
 
 | Panel | What it shows | Source |
 |---|---|---|
 | Camera | ZED left image, 960 px wide | SVO2, decoded on the GPU by the ZED SDK |
-| LiDAR | One of three views (below), with the radar FOV (±85°) dashed | `lidar.pcap`, decoded by rs_driver |
-| Radar BEV | Range-azimuth power, on the **same metric grid** as the LiDAR BEV | radar `.bin`, processed on the GPU (PyTorch) |
-| Radar range-Doppler | Range vs radial velocity | same |
+| LiDAR | One of three views (below), filling the panel; object boxes coloured by size class, track IDs `L<n>` | `lidar.pcap`, decoded by rs_driver; objects: `perception/lidar.py` (GPU) |
+| LiDAR 3D | The same sweep as an orbitable point cloud, 3D boxes, radar points | same |
+| Radar BEV | Range-azimuth power on the **same forward window** as the LiDAR; detections; tracks `R<n>` | radar `.bin`, `perception/radar.py` (GPU) |
+| Range-Doppler | Range vs radial velocity (+ = receding), detections | same |
+| Objects | Confirmed tracks of both sensors: range, azimuth, speed, radial velocity | the trackers |
 
-Each panel title shows the session time of the data on screen. For the radar
-frame on screen, the status line shows the paired camera frame and LiDAR sweep
-from `sync/pairs.csv`, with their time errors and any flags (`camera_gap`,
-`lidar_gap`, …).
-
-## LiDAR views
-
-Choose a view from the **LiDAR view** row under the controls, or with
-`--lidar-view`, `--lidar-range`, `--lidar-color` and `--lidar-near`. Changes
-apply at once, even while paused.
-
-| View | Best for | Notes |
-|---|---|---|
-| **Top - forward** (default) | Road sessions; direct comparison with the radar BEV | 0 to R m ahead, R/2 either side |
-| **Top - 360°** | Seeing the whole surroundings, including behind | ±R m around the LiDAR |
-| **Panorama** | Recognising the scene; reads like a photo | Azimuth × elevation, coloured by distance (red = near) |
-
-- **Range:** 5, 10, 20, 40 or 80 m. Use 5–10 m indoors and 40 m on the road.
-  Mouse wheel and drag zoom further.
-- **Colour:**
-  - **height** (top views): the highest return in each cell;
-  - **intensity**: reflectivity;
-  - **density**: point count.
-- **Hide nearer than** (default **0.5 m**) hides returns from the LiDAR's own
-  mount and the vehicle body. On the desk bench this was **69% of all
-  points**, which is why the earlier view looked almost empty. Set it to 0 to
-  see everything; nothing is discarded, only hidden.
+- **Maximise a panel:** double-click its title, its ⤢ button, or keys **1–6**
+  (in the order above). **Esc** or **0** restores. `--maximise <panel>` at
+  start.
+- **Resize** with the splitters between panels; the bird's-eye views re-fit.
+- Each panel title shows the session time of the data on screen. For the radar
+  frame on screen, the status line shows the paired camera frame and LiDAR
+  sweep from `sync/pairs.csv`, with their time errors and any flags
+  (`camera_gap`, `lidar_gap`, …).
 
 ## Run
 
-Run these from `sync_capture_pipeline/` on the Jetson desktop. The replay
-needs `sync/` from `align_session.py`, and uses its offsets.
+Run these from `sync_capture_pipeline/` on the Jetson desktop, with the
+environment **activated** (that is how users run it; see the OpenGL note
+below). The replay needs `sync/` from `align_session.py`, and uses its
+offsets.
 
 ```bash
-PY=/home/jetson/miniconda3/envs/rel_1_py_3_8/bin/python
-$PY align_session.py --session sessions/run05            # once per session
-$PY replay/replay_session.py --session sessions/run05
-$PY replay/replay_session.py --session sessions/run05 --sensors lidar          # one sensor
-$PY replay/replay_session.py --session sessions/run05 --sensors camera,radar --start 30 --speed 0.5
+conda activate rel_1_py_3_8
+python align_session.py --session sessions/run05            # once per session
+python replay/replay_session.py --session sessions/run05
+python replay/replay_session.py --session sessions/run05 --sensors lidar          # one sensor
+python replay/replay_session.py --session sessions/run05 --sensors camera,radar --start 30 --speed 0.5
+python replay/replay_session.py --session sessions/run05 --maximise lidar3d
 ```
 
 | Control | Action |
@@ -56,16 +45,184 @@ $PY replay/replay_session.py --session sessions/run05 --sensors camera,radar --s
 | **Space** / Play button | Play or pause |
 | **← / →** | Previous or next radar frame (all sensors follow) |
 | **[ / ]** | Slower or faster (0.25×, 0.5×, 1×, 2×) |
-| Slider | Seek |
+| Slider, event strip | Seek (click the event strip to jump) |
 | **m** | Radar: moving targets only (static scene removed) or everything |
-| **s** | Save a screenshot to `<session>/sync/replay_<time>.png` |
+| **1–6**, **Esc** | Maximise a panel, restore |
+| **s** | Save a screenshot to `<session>/sync/replay_<time>.png` (the 3D panel included) |
 
 Before a sensor's first frame, for example before the radar starts (the radar
 always starts last), that sensor's panel reads *no data at this time*.
 
+## LiDAR views
+
+Choose a view in the **LiDAR** group under the controls, or with
+`--lidar-view`, `--lidar-range`, `--lidar-color` and `--lidar-near`. Changes
+apply at once, even while paused.
+
+| View | Best for | Notes |
+|---|---|---|
+| **Top - forward** (default) | Road sessions; direct comparison with the radar BEV | 0 to R m ahead, as wide as the panel |
+| **Top - 360°** | Seeing the whole surroundings, including behind | ±R m around the LiDAR, as wide as the panel |
+| **Panorama** | Recognising the scene; reads like a photo | Azimuth × elevation, coloured by distance (red = near) |
+
+- **The top views fill their panel** (2026-10-24). The forward extent is the
+  selected range; the lateral extent follows the panel's shape, and the image
+  is rendered at about one cell per screen pixel. Before, the image covered
+  only a square R × R window in the middle of a wider panel.
+- **Range:** 5, 10, 20 (default), 40 or 80 m. Use 5–10 m indoors, 20 m for
+  walking scenes and 40 m on the road. Mouse wheel and drag zoom further.
+- **Colour:**
+  - **height** (top views): the highest return in each cell, from the ground
+    (measured by the detector) to 3 m above it;
+  - **intensity**: reflectivity;
+  - **density**: point count.
+- **Hide <** (default **0.5 m**) hides returns from the LiDAR's own mount and
+  the vehicle body. On the desk bench this was **69% of all points**. Set it
+  to 0 to see everything; nothing is discarded, only hidden.
+
+## Detections and tracks (2026-10-24)
+
+Our own pipeline, on the GPU, live during replay. The team's processing chain
+is not used or changed here. See `../perception/` and `../run_perception.py`
+for the details and the measured scores.
+
+**LiDAR** (`perception/lidar.py`, ~20 ms per sweep on its own, ~35–45 ms
+while all sensors replay):
+
+- The ground is local, not one plane, so slopes, kerbs and driveways stay
+  ground.
+- Overhead structures with free space below (carport roofs, canopies, signs,
+  branches) are not obstacles.
+- Obstacles are grouped into objects with oriented boxes, coloured by a
+  **size heuristic**: pedestrian, two-wheeler, vehicle, other, or structure.
+  This is a heuristic, not a learned classifier. A wall segment with a bike
+  against it can be boxed as a "vehicle". Use the track's speed to tell
+  moving road users from static structure.
+- Tracks: `L<n>`.
+
+**Radar** (`perception/radar.py`, ~16 ms per frame on its own, ~30–50 ms
+while all sensors replay). Per frame:
+
+1. CFAR on the range-Doppler map after coherent beamforming.
+2. One azimuth per detection.
+3. TDM-MIMO Doppler compensation.
+4. The in-situ phase correction (`calibration/radar_rx_phase.json`;
+   `--no-rx-phase` turns it off).
+5. Multipath ghosts flagged.
+6. Doppler-aware tracking: `R<n>`.
+
+The BEV shows detections as dots coloured by radial velocity (blue
+approaching, red receding). Multipath ghosts are hollow grey dots.
+
+**Tracks** appear in the table and as labels. A track is confirmed after 3
+hits in 5 updates, and shown while it keeps being updated. A radar track must
+also keep its Doppler consistent with its motion. A seek starts the trackers
+over.
+
+**Detections group:** the boxes, the track IDs and the LiDAR target can each
+be switched off. `--no-detect` turns off the LiDAR detector.
+
+## Radar points
+
+Choose in the **Radar** group, or `--radar-points {detections,raw,filtered,off}`
+at start. The points are drawn on the radar bird's-eye view and in the 3D
+panel. *z = 0* (on by default) draws them in the sensor plane, because the
+radar elevation is not verified (see the radar topic page).
+
+- **Detections** (default): ours, above.
+- **Raw** (the team's definition: before any filtering). Every range–azimuth
+  cell of the current frame above a *raw* threshold (dB above the frame's
+  median, a display setting only). No CFAR, no clustering.
+- **Filtered:** the team's `processing/radar_processing.process_frame`
+  output, **unchanged**, coloured by radial velocity.
+  - It is too slow to run live, so it is computed once per session with
+    `radar_cloud.py --session <s>` (or
+    `make_report.py --session <s> --radar-cloud`).
+  - With CuPy (in `rel_1_py_3_8` since 2026-10-24), that is ~38 ms per frame
+    with 3 GPU workers, against ~1 s per frame on the CPU.
+  - The team's GPU and CPU paths use different range-Doppler CFARs. See
+    `radar_cloud.py` and `radar_cloud_filtered.json` (`rd_cfar`).
+  - Saved as `sync/radar_cloud_filtered.npz`, with the team's original values
+    plus the points converted to the pipeline frame (x forward, y left).
+- The radar is assumed co-located with the LiDAR; there is no extrinsic
+  calibration yet. The radar–LiDAR yaw differs between mountings by a few
+  degrees (about −5° to +3° on the reference sessions); that is the team's
+  extrinsic calibration.
+
+## Overlays and navigation
+
+- **One forward range for both bird's-eye views.** The LiDAR *range*
+  selector sets the same forward window on the LiDAR and radar views. The
+  radar BEV is computed out to `--bev-range` (default 80 m), and the
+  range–Doppler range axis follows the same selector.
+- **Radar colour scales.** The radar BEV runs from 3 dB above the frame's
+  median, but never more than 30 dB below its peak, so a near target's
+  sidelobes do not flood the map. Range–Doppler starts at median + 3 dB.
+- **LiDAR target overlay.** It shows:
+  - a white circle on both bird's-eye views;
+  - a white marker in 3D;
+  - a dashed line at its range on the range–Doppler map;
+  - its range and angle in the info line.
+
+  It comes from `sync/timing_lidar_track.npz`, which `make_report.py` writes,
+  so run the report once per session. It is a single-target reference track:
+  with several people it follows one of them.
+- **Event strip** above the slider:
+  - camera gaps (aqua) and LiDAR gaps (orange) from `pairs.csv`;
+  - a time cursor; **click to jump**;
+  - a note when radar times are nominal (DCA backlog).
+
+## 3D LiDAR panel
+
+- **Controls:** left drag to orbit, wheel to zoom, middle or ctrl drag to pan.
+  *Reset view* returns to the default.
+- **Default camera:** behind and above the sensors, looking forward, so
+  vehicle-left is on the left as in the other views.
+- **Colour:**
+  - **height**;
+  - **objects**: each object's points in its class colour, with the ground
+    dimmed;
+  - **intensity**;
+  - **range**.
+- **Drawn as well:**
+  - a 1 m ground grid at the ground height the detector measures;
+  - the radar's ±60° field of view, in blue;
+  - the LiDAR target, in white;
+  - 3D object boxes and track IDs within 1.3 × the selected range;
+  - the radar points.
+- Only valid returns are shown (zero-range "no return" points are removed),
+  and the *hide <* filter applies.
+
+**OpenGL with conda:** `conda activate` sets `QT_XCB_GL_INTEGRATION=none`
+(the `qt-main` activation script), which disables Qt's OpenGL. The replay
+clears that value for its own process, so no extra step is needed (fixed
+2026-10-14). Without PyOpenGL (3.1.10 in `rel_1_py_3_8`), the 3D panel reads
+*3D view unavailable* and the rest works.
+
 ## Measured on this Jetson
 
-Tested on a 48 s three-sensor session, playing all sensors at 1×:
+### 2026-10-24, `ibrahim-desktop`
+
+Conditions: `freewalk_ref_02` read from an external USB disk (NTFS through
+FUSE), with all sensors, detection on, at 1×.
+
+| Sensor | Updates/s | GPU time per product |
+|---|---|---|
+| Camera | 29.5–29.9 | (ZED SDK decode) |
+| Radar | 7.9–8.0 at 8 fps | 30–50 ms (16 ms alone) |
+| LiDAR | 9.9–10.0 | 35–47 ms (20 ms alone) |
+
+- **The radar used to reach only 3.0 updates/s on this disk.** Cold reads of
+  a 3 MB frame take 78 ms median (up to 390 ms) on NTFS through FUSE.
+- The radar now reads 12 frames ahead in a separate thread. Sessions on ext4
+  (the SD card, internal storage) read much faster.
+- Do not use scikit-learn in the per-frame path. Its per-call threadpool
+  introspection held the GIL long enough to starve the GUI (see
+  `docs/knowledge/08_pitfalls_and_lessons.md`).
+
+### 2026-10-11, the original board
+
+Conditions: a 48 s three-sensor session, all sensors, 1×, before detection.
 
 | Sensor | Updates/s | Lag behind the clock |
 |---|---|---|
@@ -87,9 +244,14 @@ Frames come back through shared memory. Playback decodes forward. It seeks
 only on real jumps, because seeking an H.264 stream re-decodes from a
 keyframe.
 
-**Radar.** The repo's config, channel geometry and antenna calibration
-(`cascaded_radar_capture_pipeline/processing/radar_config.py`), with all FFTs
-in PyTorch on the GPU.
+**Radar.**
+
+- `perception/radar.RadarDetector` builds the products and detections in one
+  pass on the GPU (PyTorch). It uses the repo's config, channel geometry and
+  antenna calibration (`cascaded_radar_capture_pipeline/processing/radar_config.py`).
+- A prefetch thread reads frames ahead of the clock.
+- `RadarProcessor` (the older, products-only processor) is kept unchanged for
+  the session report.
 
 **LiDAR.**
 
@@ -99,110 +261,34 @@ in PyTorch on the GPU.
 - The feeder sends the last device-info packet first, and starts 0.3 s before
   a seek point so a complete sweep is ready.
 - Sweeps are split behind the vehicle (`split_angle: 180`).
-- A packet index is cached in `sync/lidar_pcap_index.npz` on first use.
-
-## Overlays and navigation (2026-10-11)
-
-- **One range for both bird's-eye views.** The LiDAR *range* selector sets the
-  same window on the LiDAR and radar views. The radar BEV is computed out to
-  `--bev-range` (default 80 m), and the range–Doppler range axis follows the
-  same selector.
-- **Colour scales relative to the noise floor.** The radar BEV runs from
-  median + 3 dB of that frame, and range–Doppler likewise. An empty scene stays
-  dark instead of auto-scaling noise to full colour.
-- **LiDAR target overlay.** It shows:
-  - a white circle on both bird's-eye views;
-  - a dashed line at its range on the range–Doppler map;
-  - its range and angle in the info line.
-
-  It comes from `sync/timing_lidar_track.npz`, which `make_report.py` writes,
-  so run the report once per session. It is a single-target track: with several
-  people it follows one of them.
-- **Event strip** above the slider:
-  - camera gaps (aqua) and LiDAR gaps (orange) from `pairs.csv`;
-  - a time cursor; **click to jump**;
-  - a note when radar times are nominal (DCA backlog).
-
-## 3D LiDAR view (2026-10-11)
-
-The **3D LiDAR** button, or `--lidar-3d` at start, opens a second window that
-follows the replay. It shows the same sweep as the 2D LiDAR panel, as a point
-cloud.
-
-- **Controls:** left drag to orbit, wheel to zoom, middle or ctrl drag to pan.
-  *Reset view* returns to the default.
-- **Default camera:** behind and above the sensors, looking forward, so
-  vehicle-left is on the left as in the other views.
-- **Colour:** by height, intensity or range.
-- **Drawn as well:**
-  - a 1 m ground grid; the ground level is estimated from the first sweep,
-    since the mount height is not recorded;
-  - the radar's ±60° field of view, in blue;
-  - the LiDAR target, in white.
-- Only valid returns are shown (zero-range "no return" points are removed),
-  and the *hide nearer than* filter applies.
-- The *range* selector also sets the 3D view's extent.
-- A screenshot (`s` key) also saves `<name>_3d.png` when the window is open.
-
-**OpenGL with conda:** `conda activate` sets `QT_XCB_GL_INTEGRATION=none`
-(the `qt-main` activation script), which disables Qt's OpenGL. The replay
-clears that value for its own process, so no extra step is needed (fixed
-2026-10-14; before that the 3D window failed with "neither GLX nor EGL are
-enabled").
-
-**Requires PyOpenGL.** Version 3.1.10, pure Python with no dependencies, was
-installed in `rel_1_py_3_8` on 2026-10-11. The only change to the environment
-was that one package; `pip check` is clean and every project component and the
-report tests were re-verified. To remove it: `pip uninstall PyOpenGL`. Without
-it, the button just prints that the 3D view is unavailable.
-
-## Radar point cloud (2026-10-13)
-
-*Radar points* (main window), or `--radar-points {off,raw,filtered}` at start.
-The points are drawn on the radar bird's-eye view and in the 3D window,
-together with the LiDAR cloud.
-
-- **Raw** (the team's definition: before any filtering). Every range–azimuth
-  cell of the current frame, computed live on the GPU: no CFAR, no clustering.
-  - Static-clutter removal follows the *moving only* tick box.
-  - A *raw threshold* (dB above the frame's median) is a display setting only.
-  - z = 0, since there is no elevation in this path.
-  - Shown as cyan dots on the bird's-eye view, and coloured by power in 3D.
-- **Filtered** (after CFAR and all the filters of the team's pipeline). The
-  output of `processing/radar_processing.process_frame`, **unchanged**.
-  - It takes ~1 s per frame on the CPU, too slow to run live, so it is
-    computed once per session:
-    `radar_cloud.py --session <s>` or `make_report.py --session <s> --radar-cloud`.
-    That is about 1.1× the recording time on 10 cores; 10.8 min for the
-    10-min `freewalk_ref_02`.
-  - Saved as `sync/radar_cloud_filtered.npz`, with the team's original values
-    plus the points converted to the pipeline frame (x forward, y left,
-    mirror-corrected).
-  - Coloured by radial velocity: blue −, grey 0, red +.
-  - *z = 0* ignores the pipeline's elevation, which is unverified.
-  - Typically 1–9 detections per frame, tuned for a single subject.
-- The radar is assumed co-located with the LiDAR; there is no extrinsic
-  calibration yet.
+- A packet index is cached in `sync/lidar_pcap_index.npz` on first use
+  (`lidar_pcap_index()`, shared with `run_perception.py`).
+- Each sweep is detected once. View changes re-render without re-detecting.
+  Per-point labels are computed only while the 3D panel shows *colour:
+  objects*.
 
 ## Limitations
 
-- **Radar azimuth:** the processing's angle sign was mirrored. On freewalk_ref_02 a
-  walker 3 m to the right (camera and LiDAR agree) appeared on the left. The BEV
-  now flips it (`RadarProcessor.MIRROR_AZIMUTH`).
-- **Radar angular focusing is weak** with the current, uncalibrated channel
-  processing. A single person appears as an arc across much of the field of view,
-  but the arc's peak sits at the LiDAR target. Range is sharp. The team's antenna
-  calibration should address it.
-- **Camera decode limit:** lossless H.264 decodes at only ~40–50 frames/s on the
-  Orin. While the radar and LiDAR also run, the camera panel can drop to ~15–25
-  updates/s. Sync is unaffected: it shows the latest decoded frame for the
-  current time, and the panel title gives its timestamp. Use 0.5× for every
-  camera frame.
+- **Radar azimuth convention (settled 2026-10-24):** the processing's
+  azimuth is positive to the right (the team's convention), and the pipeline
+  frame is y left. The conversion is a sign flip. It is not a mirror error in
+  the team's code (see `docs/knowledge/03_radar_firmware_and_dca.md`).
+- **Radar angular focusing is still weak.** The in-situ phase correction
+  halves the azimuth spread against the LiDAR (5.95° → 2.43° on
+  freewalk_ref_02), but sidelobes stay only ~5–10 dB below the peak. A
+  person still shows a faint arc. The team's recalibration should fix it.
+- **Radar–LiDAR yaw:** a few degrees, different per mounting; there is no
+  extrinsic calibration yet.
+- **LiDAR size classes are heuristics** (see above).
+- **Camera decode limit:** lossless H.264 decodes at only ~40–50 frames/s on
+  the Orin. Sync is unaffected: the camera panel shows the latest decoded
+  frame for the current time, and its title gives the timestamp. Use 0.5× for
+  every camera frame.
+- **No camera overlays:** there is no camera–LiDAR/radar extrinsic
+  calibration yet.
 - **Radar data recorded before 2026-10-10 is degraded:** about 50% stale
   buffer words per chirp (a firmware defect, not compression). This affects
   `stage3_01` and `ipad_test_01`. Sessions from `r075m_v2` / `r075m_v2_8fps`
   are clean. Replay picks each session's `.cfg` from
   `session.json["radar_firmware"]`; older sessions are assumed r075m.
-  **Before 2026-10-10, replay decoded Q-first, which mirrored the radar range
-  spectrum;** it now decodes I first.
 - A display is needed. It runs on the Jetson desktop, not over the iPad web page.

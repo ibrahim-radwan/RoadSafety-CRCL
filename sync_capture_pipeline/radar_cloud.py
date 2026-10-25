@@ -5,11 +5,16 @@ the team's own processing chain, unchanged:
 cascaded_radar_capture_pipeline/processing/radar_processing.process_frame
 (MTI, CFAR, sidelobe/consistency filters, azimuth + elevation, xyz).
 
-process_frame takes ~1 s per frame on the CPU (its CFAR runs as the CPU
-fallback; no CuPy), so it cannot run live in the replay at 8 frames/s. It is
-run once per session over several CPU cores and saved; the replay reads it.
+With CuPy installed (cupy-cuda11x 12.3 in rel_1_py_3_8, 2026-10-24) the team's
+own GPU path runs: ~0.1 s per frame instead of ~1 s on the CPU. The two paths
+DIFFER, inside the team's code: process_frame asks for CASO-CFAR on the
+range-Doppler map (cfar_2d_gpu(..., force_caso=True)), but without CuPy the
+fallback _cfar_2d_cpu(heat, cfg) drops force_caso and runs cfg.cfar_method
+(OS). The team's own environment has CuPy, so the GPU path is what they get;
+clouds computed before 2026-10-24 used the CPU path. The path used is recorded
+in radar_cloud_filtered.json. --cpu forces the CPU fallback (the old output).
 
-    python radar_cloud.py --session /mnt/sdcard/sessions/<name> [--workers 10]
+    python radar_cloud.py --session /mnt/sdcard/sessions/<name> [--workers N] [--cpu]
 
 Writes <session>/sync/radar_cloud_filtered.npz:
     frame_t      [F]     radar frame times t_ref (s, CLOCK_MONOTONIC, Stage 3 offset applied)
@@ -18,9 +23,10 @@ Writes <session>/sync/radar_cloud_filtered.npz:
     team_xyz     [N, 7]  process_frame's xyz_cloud, AS RETURNED:
                          x (lateral, = r cos(el) sin(az)), y (forward), z, power, doppler, range, az
     xyz          [N, 3]  the same points in the pipeline frame used everywhere else:
-                         x forward, y LEFT, z up. y = -team_x corrects the processing's
-                         mirrored azimuth sign (verified against camera and LiDAR on
-                         freewalk_ref_02). z is the team's elevation estimate (unverified).
+                         x forward, y LEFT, z up. y = -team_x: the team's lateral axis is
+                         positive to the RIGHT (their convention, not an error; verified
+                         against camera and LiDAR on freewalk_ref_02). z is the team's
+                         elevation estimate (unverified).
     doppler      [N]     m/s (processing convention)
     power        [N]     dB
 Needs align_session.py to have been run (sync/radar_timeline.csv).
@@ -47,7 +53,9 @@ TEAM = HERE.parent / "cascaded_radar_capture_pipeline"
 _W = {}
 
 
-def _init(cfg_path: str, radar_dir: str):
+def _init(cfg_path: str, radar_dir: str, cpu: bool = False):
+    if cpu:
+        sys.modules["cupy"] = None                         # the team's gpu_accel falls back to the CPU
     sys.path.insert(0, str(TEAM))
     from processing.radar_config import parse_calibration, parse_cfg_file
     with contextlib.redirect_stdout(io.StringIO()):
@@ -70,8 +78,19 @@ def _one(fn: str):
 def main() -> int:
     ap = argparse.ArgumentParser(description="Filtered radar point cloud (team pipeline) for a session")
     ap.add_argument("--session", type=Path, nargs="+", required=True)
-    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 2))
+    ap.add_argument("--workers", type=int, default=None,
+                    help="processes (default: 3 on the GPU path, CPU cores - 2 on the CPU path)")
+    ap.add_argument("--cpu", action="store_true", help="the team's CPU fallback (OS-CFAR on range-Doppler)")
     a = ap.parse_args()
+    gpu = False
+    if not a.cpu:
+        try:
+            import cupy  # noqa: F401
+            gpu = True
+        except Exception:
+            print("CuPy not available: the team's CPU fallback runs (~1 s/frame, OS-CFAR on range-Doppler)")
+    if a.workers is None:
+        a.workers = 3 if gpu else max(1, (os.cpu_count() or 4) - 2)
     sys.path.insert(0, str(HERE))
     import radar_firmware
     for S in a.session:
@@ -83,7 +102,7 @@ def main() -> int:
         print(f"=== {S}: {len(files)} frames, {a.workers} workers, cfg {Path(cfg_path).name}", flush=True)
         t0 = time.monotonic()
         clouds = []
-        with Pool(a.workers, initializer=_init, initargs=(cfg_path, str(S / "radar"))) as pool:
+        with Pool(a.workers, initializer=_init, initargs=(cfg_path, str(S / "radar"), not gpu)) as pool:
             for k, c in enumerate(pool.imap(_one, files, chunksize=4)):
                 clouds.append(c)
                 if k % 500 == 0:
@@ -96,14 +115,16 @@ def main() -> int:
         np.savez_compressed(out, frame_t=np.array([float(r["t_ref"]) for r in rows]), frame_file=np.array(files),
                             start=np.r_[0, np.cumsum(n)], team_xyz=team, xyz=xyz, doppler=team[:, 4],
                             power=team[:, 3],
-                            note=np.array("xyz: x forward, y left (team x mirrored), z up; team_xyz as returned "
+                            note=np.array("xyz: x forward, y left (= -team x: team x is right-positive), z up; team_xyz as returned "
                                           "by process_frame"))
         el = time.monotonic() - t0
         print(f"  wrote {out}: {int(n.sum()):,} points, {n.mean():.1f}/frame (max {n.max()}), "
               f"frames with points {int((n > 0).sum())}/{len(n)}, {el:.0f} s ({1e3 * el / len(n):.0f} ms/frame)",
               flush=True)
         meta = {"frames": len(n), "points": int(n.sum()), "seconds": round(el, 1), "workers": a.workers,
-                "cfg": Path(cfg_path).name}
+                "cfg": Path(cfg_path).name, "team_path": "GPU (CuPy)" if gpu else "CPU fallback",
+                "rd_cfar": "CASO (as process_frame requests)" if gpu else
+                "OS (the CPU fallback ignores force_caso)", "computed": time.strftime("%Y-%m-%d")}
         (S / "sync" / "radar_cloud_filtered.json").write_text(json.dumps(meta, indent=2))
     return 0
 

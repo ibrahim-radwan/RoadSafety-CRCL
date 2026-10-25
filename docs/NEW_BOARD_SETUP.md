@@ -45,17 +45,49 @@ conda env create -f ~/dev/CascadedRadarRoadSafetyOnTwoWheelers/environment/rel_1
 conda activate rel_1_py_3_8
 ```
 
-Then install the three vendor wheels the environment file can't include.
+**The pip step of `conda env create` fails** (seen 2026-10-24 on
+`ibrahim-desktop`) on `fpga-udp==1.3.0`, which is not on PyPI. The conda
+packages are installed by then. Nothing in the repo imports `fpga-udp`.
+
+Do **not** simply remove it and re-run: `ultralytics` in the same list pulls
+`torchvision 0.19` and a **CPU-only `torch 2.4`** from PyPI, which would
+replace NVIDIA's CUDA torch. Nothing in the repo imports ultralytics.
+
+So install torch first (3a), then the rest of the pip list without those
+packages, with torch pinned:
+
+```bash
+sed -n '/- pip:/,$p' environment/rel_1_py_3_8.yml | grep "==" | sed 's/^ *- //' \
+    | grep -v -E "^(fpga-udp|ultralytics)" > /tmp/req.txt
+echo "torch==2.1.0a0+41361538.nv23.06" > /tmp/constraints.txt
+pip install -r /tmp/req.txt -c /tmp/constraints.txt
+```
+
+Then install the vendor wheels the environment file can't include.
 
 **3a. PyTorch for JetPack 5 (CUDA).** NVIDIA's wheel, the one used on the
 original board:
 
 ```bash
-# from NVIDIA's JetPack 5 PyTorch index (jp/v512) - check the exact URL on NVIDIA's
-# "PyTorch for Jetson" page for your JetPack version
+# NVIDIA's JetPack 5.1.2 index (jp/v512); the download often stops early, so resume with -C -
+curl -L -C - -O "https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl"
+python -m zipfile -t torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl     # must not fail (170,246,840 bytes)
 pip install torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
 python -c "import torch; print(torch.cuda.is_available())"     # must print True
 ```
+
+**3a'. CuPy (optional; the team's `process_frame` GPU path, used by
+`radar_cloud.py`).** CuPy 12.3 is the last series for Python 3.8. Its
+`fastrlock` dependency must be pinned, because the newest sdist needs
+Python ≥ 3.9:
+
+```bash
+pip install "fastrlock==0.8.2" "cupy-cuda11x==12.3.0" -c /tmp/constraints.txt
+python -c "import cupy; print(cupy.arange(3).sum())"
+```
+
+The first `process_frame` call compiles kernels for ~25 s; they are cached in
+`~/.cupy/kernel_cache`.
 
 **3b. torchvision 0.16.0 (optional).** It was built from source against that
 torch on the original board, but **no code in this repository imports it**.
@@ -173,6 +205,21 @@ EOF
 
 Without it, the launcher warns that the firmware is unknown, and processing
 assumes the old `r075m`.
+
+## 9b. Shell environment
+
+- **ROS:** if a ROS install puts its packages on `PYTHONPATH` (for example
+  `/opt/ros/foxy`), unset it for this pipeline:
+
+  ```bash
+  unset PYTHONPATH
+  ```
+
+  Otherwise pytest loads ROS's plugins and fails on `lark`.
+- **User site-packages:** packages in `~/.local/lib/python3.8` are imported
+  ahead of the conda env's own. Check with
+  `python -c "import numpy; print(numpy.__file__)"`, and set
+  `PYTHONNOUSERSITE=1` if they conflict.
 
 ## 10. Verify
 

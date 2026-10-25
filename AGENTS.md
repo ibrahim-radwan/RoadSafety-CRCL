@@ -39,6 +39,7 @@ a separate Windows machine with its own repository.
    | Time sync, Stage 3 calibration | [07_synchronisation_and_stage3.md](docs/knowledge/07_synchronisation_and_stage3.md), `sync_capture_pipeline/SYNC_DESIGN_3_SENSORS.md` |
    | Operating the rig | `sync_capture_pipeline/DATA_COLLECTION_GUIDE.md` |
    | Replay tool | `sync_capture_pipeline/replay/README.md` |
+| Detection (ours), processing speed | `sync_capture_pipeline/perception/README.md`, [03](docs/knowledge/03_radar_firmware_and_dca.md), [05](docs/knowledge/05_lidar.md) |
    | Facts for the research team | `sync_capture_pipeline/NOTES_FOR_TEAM.md` |
 
 ## Repository map
@@ -51,14 +52,18 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   check_session.py              completeness check, PASS/FAIL (stdlib only)
   measure_sync_offset.py        Stage 3 offset measurement (plate routine)
   make_report.py, report/       descriptive HTML session report (no verdicts) + data collection
-  radar_cloud.py                filtered radar point cloud via the team's process_frame (pre-computed)
+  radar_cloud.py                filtered radar point cloud via the team's process_frame (pre-computed; CuPy GPU path)
+  perception/                   OUR GPU detection: radar.py (CFAR, TDM comp, multipath flags), lidar.py
+                                (local ground, objects), tracking.py, estimate_rx_phase.py; README.md
+  run_perception.py             our detection + tracking over a session -> sync/perception_*.npz, scores
   timing_consistency.py         range-based timing check per window (geometry-biased; see 07)
   radar_firmware.py             which firmware recorded a session -> which .cfg
   board_health.py               Jetson temperatures
   check_radar_frames.py         radar stale-word / range-time check
   calibration/stage3_offsets.json   the offsets in use (applied by align_session by default)
+  calibration/radar_rx_phase.json   in-situ radar phase correction (provisional, until the team's recalibration)
   web_control/                  Flask iPad control (systemd service, port 8080)
-  replay/                       PyQt/pyqtgraph replay (GPU radar, LiDAR 2D/3D, camera process)
+  replay/                       PyQt/pyqtgraph replay: one window, 6 panels, live detection (camera in its own process)
   tests/                        pytest (needs the reference sessions; skips when absent)
   handover/                     briefs sent to the Windows firmware-build agent
   legacy/                       superseded originals, kept for reference
@@ -102,8 +107,11 @@ docs/                           knowledge base + new-board setup
 - **Spatial frame:** x forward, y **left**, z up (the LiDAR frame; the radar is
   assumed co-located until the team's extrinsic calibration). Bird's-eye views
   draw forward up and vehicle-left on the left, like the camera image.
-- **Radar azimuth sign is mirrored** in the processing. The replay and report
-  correct it (`RadarProcessor.MIRROR_AZIMUTH`).
+- **Radar azimuth:** the team's processing azimuth is positive to the
+  **right** (their convention; it is not a mirror error). World azimuth
+  (+left) = − processing azimuth. Report (`RadarProcessor.MIRROR_AZIMUTH`),
+  `radar_cloud.py` and `perception/radar.py` all convert. Radar v_r > 0 =
+  receding.
 - **Radar frame layout:** int16 LE, I first,
   `[loop 64][tx 6][dev 2][rx 4][sample 256][I,Q]`.
 - **Sensor colours** in figures and UI: radar `#2a78d6`, LiDAR `#eb6834`,
@@ -118,7 +126,8 @@ conda activate rel_1_py_3_8                       # most tools
 cd sync_capture_pipeline
 python capture_session.py --out /mnt/sdcard/sessions/<name> --secs 60 --camera-stage ~/camera_stage   # (normally via the iPad page)
 python make_report.py --session /mnt/sdcard/sessions/<name> [--radar-cloud]   # align + pairs.csv + HTML report
-python replay/replay_session.py --session /mnt/sdcard/sessions/<name> [--lidar-3d] [--radar-points raw|filtered]
+python replay/replay_session.py --session /mnt/sdcard/sessions/<name> [--maximise lidar3d] [--radar-points detections|raw|filtered]
+python run_perception.py --session /mnt/sdcard/sessions/<name>               # our detections + scores
 python -m pytest -q tests
 ```
 

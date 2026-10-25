@@ -8,31 +8,38 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
 
 ## Radar
 
-1. **Azimuth sign is mirrored in the current processing.**
-   - **Seen:** a walker 3 m to the right at 8 m (camera and LiDAR agree)
-     comes out on the left, and vice versa.
-   - **Where:** both in the replay's processor and in
-     `processing/radar_processing.process_frame`. A test frame with the LiDAR
-     at −7.3° gave `xyz_cloud` azimuth **+6.3°**: right magnitude, opposite
-     sign.
-   - **Status:** the replay and the session report correct it
-     (`RadarProcessor.MIRROR_AZIMUTH`). **`process_frame` has not been
-     changed.** It is your research chain, so the fix is your decision. The
-     likely source is the TX/RX → azimuth table in `radar_config`, which is
-     unverified.
-2. **Angular focusing is weak.**
-   - **Seen:** a single person appears in range–azimuth maps as an arc across
-     much of the field of view. The arc's peak is at the right angle; range
-     is sharp.
-   - **Cause:** the antenna calibration in the `.cfg` files was probably
-     measured with the old HPF setting (2/2). The v2 firmware uses 0/0, which
-     changes the RX phase response. Recalibrating with the v2 images should
-     sharpen it.
+1. **Azimuth: your processing is right; it is a convention difference
+   (updated 2026-10-24).**
+   - Your azimuth is positive to the **right**, as your README says ("x =
+     lateral, positive = right of boresight").
+   - Our pipeline frame is y **left**, so we negate it.
+   - Checked on `freewalk_ref_02` against the LiDAR walker: 90% sign agreement
+     beyond ±8°.
+   - The earlier note called this a mirror in `process_frame`. That was wrong:
+     our replay had read your azimuth as left-positive. Nothing in your code
+     needs to change.
+2. **Weak angular focusing: phase errors, now measured.** A single person
+   shows as an arc, with a second peak ~13° away only ~4 dB down.
+   - Using the LiDAR as the angle reference, we measured the residual phase of
+     each virtual channel on the plate sessions (`stage3_02`, `stage3_03`).
+   - It is stable: the two halves of the data agree within 2.7° median.
+   - **TX3 and TX4 are ~100–125° off TX0–TX2.** Your chirp table puts TX0–2 on
+     the master AWR2243 and TX3–5 on the slave, so this looks like an
+     **inter-device TX phase error** in the cascade calibration. There is also
+     a smaller per-RX pattern, consistent with the HPF change (2/2 → 0/0) in
+     the v2 images.
+   - The values are in `calibration/radar_rx_phase.json` (deg, [tx][rx]).
+   - Applied on top of the `.cfg` calibration, they cut the azimuth spread on
+     `freewalk_ref_02` (not used to measure them) from 5.95° to 2.43°.
+   - Sidelobes still stay only ~5–10 dB below the peak. A proper
+     recalibration with a reflector over a wide angle span should do much
+     better. Ours is a stopgap until yours arrives.
 3. **Elevation is unreliable.**
-   - **Seen:** `process_frame` placed a walking person 1.8–2.1 m above the
-     radar.
-   - Elevation comes from a single 8-channel row (TX5) and has not been
-     verified.
+   - `process_frame` placed a walking person 1.8–2.1 m above the radar, and
+     our detector reads ~+13° on the walker.
+   - Elevation comes from the single 8-channel row on TX5, which is on the
+     **slave device**. The inter-device phase error above would bias it in
+     exactly this way. Worth checking in your recalibration.
 4. **Velocity wraps above ±4.7 m/s** with the r075m waveform (64 loops × 6
    TX TDM). Targets faster than ~17 km/h, such as passing vehicles, show an
    aliased radial velocity. This is a waveform property, not fixable in
@@ -45,6 +52,35 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
 7. **Frame times.** Use `sync/radar_timeline.csv` `t_ref`. It is de-jittered,
    has the Stage 3 offset applied, and falls back to nominal times if the
    DCA1000 backlogged (`alignment.json` → `radar.timing_source`).
+
+8. **TDM-MIMO Doppler phase is not compensated in `process_frame`.** A moving
+   target's phase advances between the 6 TX slots of a loop (2π f_d × 35 µs
+   per slot). Our detector rotates each channel back by its TX slot, per
+   Doppler bin. It is a small gain at walking speed (median azimuth error
+   3.65° → 3.42°), but it grows with speed.
+9. **Your GPU and CPU paths give different detections.** `process_frame`
+   calls `cfar_2d_gpu(RD_mti_linear, cfg, force_caso=True)`.
+   - Without CuPy, `cfar_2d_gpu` returns `_cfar_2d_cpu(heat, cfg)`, which
+     drops `force_caso` and runs `cfg.cfar_method` (`os`). The CPU path
+     therefore runs **OS**-CFAR on range-Doppler; the GPU path runs **CASO**.
+   - The thresholds differ by up to 34 dB.
+   - On `freewalk_ref_02` frames 2000–2029, half the frames had a different
+     point count; the GPU path usually keeps fewer points.
+   - Your environment has CuPy, so you see the CASO results. Our filtered
+     clouds made before 2026-10-24 used the CPU path; `radar_cloud.py` now
+     uses the GPU one and records which (`radar_cloud_filtered.json`).
+   - Also, `gpu_accel.py` defines `cfar_2d_gpu` twice; the second definition
+     wins.
+10. **Multipath.** A walker produces radar images:
+    - at **2× its range with 1.9× its radial velocity** (radar → person → rig
+       → person → radar);
+    - behind it at its own radial velocity (via walls and fences).
+
+    Our detector flags both (`ghost` column). They were most of the radar
+    detections the LiDAR did not support on `stage3_02`.
+11. **The radar–LiDAR yaw differs between mountings by several degrees**
+    (about −5° to +3° on the reference sessions). This is extrinsic
+    calibration; ours assumes them co-located.
 
 ## LiDAR (RoboSense RS-Fairy)
 
@@ -91,7 +127,23 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
 - **Filtered:** your `process_frame` output, unchanged, pre-computed per
   session into `sync/radar_cloud_filtered.npz`. It holds your original
   `xyz_cloud` columns (`team_xyz`) and the same points in the pipeline frame
-  (`xyz`: x forward, y left, mirror-corrected), indexed per radar frame
+  (`xyz`: x forward, y left, i.e. your x negated), indexed per radar frame
   (`start`). See `replay/README.md`.
 - `process_frame` itself was not modified. Its azimuth sign and x/y
   convention are converted at display time only.
+
+## Our detections (delivered 2026-10-24)
+
+- `run_perception.py --session <s>` writes, in `sync/`:
+  - `perception_radar.npz`: per frame, detections with a multipath flag,
+    objects and tracks;
+  - `perception_lidar.npz`: per sweep, objects with boxes and size classes,
+    and tracks;
+  - `perception.json`: scores against the LiDAR walker track.
+- The column layouts are in the script's docstring. The frame is x forward,
+  y left; times are `t_ref`.
+- They are independent of your chain and do not change it. See
+  `perception/README.md` for the method and the measured scores. On
+  `freewalk_ref_02`, compared with `process_frame` on the same frames:
+  - the walker is detected in 72% of radar frames against 50%;
+  - the azimuth spread against the LiDAR is 2.4° against 4.9°.

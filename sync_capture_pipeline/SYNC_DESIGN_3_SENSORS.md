@@ -533,8 +533,17 @@ first plate check on the free-walk session suggested −23 ms.
 - Noise-floor-relative radar colour scales.
 - LiDAR target overlay.
 - Clickable event strip.
-- Radar azimuth mirror correction.
+- Radar azimuth conversion: the team's azimuth is right-positive; ours is
+  left-positive. This was first described as a "mirror correction"; it is a
+  convention, settled 2026-10-24.
 - 3D LiDAR window (PyOpenGL 3.1.10 added to `rel_1_py_3_8`; it changed
-  nothing else).
+  nothing else). Since 2026-10-24 it is a panel of the main window.
+
+### 11.6 Detection and tracking (2026-10-24)
+
+`perception/` holds our GPU radar and LiDAR detectors and a shared tracker,
+live in the replay and offline in `run_perception.py`. Both use the aligned
+times (`t_ref`), so radar and LiDAR objects can be compared directly. The
+team's chain is unchanged. See `perception/README.md`.
 
 See `replay/README.md`.

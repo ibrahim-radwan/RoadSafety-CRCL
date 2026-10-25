@@ -7,6 +7,11 @@
 #   pyzed 4.1          ZED SDK 4.1.4  ->  python /usr/local/zed/get_python_api.py
 #   torch 2.1.0a0+41361538.nv23.06   NVIDIA PyTorch wheel for JetPack 5 (CUDA)
 #   torchvision 0.16.0               built from source against that torch
+#   cupy-cuda11x 12.3.0 (+ fastrlock 0.8.2)   optional: the team's process_frame GPU path
+#
+# The pip list below cannot be installed as is (2026-10-24): fpga-udp is not on PyPI, and
+# ultralytics pulls a CPU-only torch from PyPI over the CUDA one. Neither is imported by the
+# repo. Follow docs/NEW_BOARD_SETUP.md section 3.
 name: rel_1_py_3_8
 channels:
   - defaults

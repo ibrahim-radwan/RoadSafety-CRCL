@@ -1,0 +1,80 @@
+{
+  "note": "In-situ radar phase correction (deg), applied on top of the .cfg antenna calibration by perception/radar.py: per RX (8 values) or per channel [tx][rx] (6 x 8). PROVISIONAL: measured against the LiDAR target azimuth by perception/estimate_rx_phase.py; replace with the team's recalibration.",
+  "variants": {
+    "r075m_v2_8fps": {
+      "rx_phase_deg": [
+        [
+          0.0,
+          20.08,
+          31.71,
+          28.82,
+          -19.93,
+          -3.4,
+          5.53,
+          -16.41
+        ],
+        [
+          -26.75,
+          -7.03,
+          5.66,
+          2.03,
+          -44.05,
+          -27.09,
+          -19.1,
+          -40.18
+        ],
+        [
+          5.2,
+          22.57,
+          34.48,
+          34.46,
+          -9.08,
+          7.42,
+          15.17,
+          -1.82
+        ],
+        [
+          97.11,
+          114.62,
+          127.19,
+          127.94,
+          58.02,
+          69.07,
+          72.84,
+          50.36
+        ],
+        [
+          91.73,
+          110.16,
+          122.16,
+          121.01,
+          48.43,
+          60.39,
+          64.82,
+          -5.86
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "kind": "per channel [tx][rx]",
+      "sessions": [
+        "stage3_02",
+        "stage3_03"
+      ],
+      "snapshots": 665,
+      "min_snr_db": 30.0,
+      "coherence": 0.455,
+      "beam_shift_removed_deg": 0.74,
+      "halves_agree_deg_median": 2.7,
+      "measured": "2026-10-24"
+    }
+  }
+}
