@@ -14,7 +14,7 @@ hardware:
 | Synchronisation | Offline alignment on CLOCK_MONOTONIC. **Stage 3 offsets measured**: radar +12.65 ± 1.45 ms, camera +23.34 ± 3.28 ms (LiDAR reference). Applied automatically. See [07](07_synchronisation_and_stage3.md). |
 | Validation | `check_session.py` (completeness, pass/fail) runs after every session. `make_report.py` produces a descriptive HTML report per session, with no verdict. |
 | Replay | One window, six panels (camera, LiDAR, LiDAR 3D, radar BEV, range-Doppler, objects), each can be maximised; bird's-eye views fill their panels; live GPU detection and tracking on radar and LiDAR; event strip; radar point cloud (detections, raw, team-filtered). See `sync_capture_pipeline/replay/README.md`. |
-| Detection (ours) | `sync_capture_pipeline/perception/` + `run_perception.py`: GPU radar CFAR (TDM Doppler compensation, in-situ phase correction, multipath-ghost flags), GPU LiDAR objects (local ground, overhead structures removed), Doppler-aware tracking. Scored against the LiDAR walker: see `perception/README.md`. The team's chain is unchanged. |
+| Detection (ours) | `sync_capture_pipeline/perception/` + `run_perception.py`: GPU radar CFAR (TDM Doppler compensation, in-situ phase correction, multipath-ghost flags), GPU LiDAR objects (local ground, overhead structures removed), Doppler-aware tracking. Scored against the LiDAR walker: see `perception/README.md`. The team's early chain is unchanged so far; it will be merged into this one (see [09](09_working_practices.md)). |
 | Tests | `sync_capture_pipeline/tests/`: 96 report tests, 6 radar-cloud tests and 8 perception tests. Session tests need the reference sessions and skip if absent. |
 
 ## Reference recordings (not in git)
@@ -35,11 +35,16 @@ history.
 ## Ownership
 
 - **End-user research team:** all sensor calibration (radar antenna/intrinsic
-  and the three-sensor extrinsics), and their own radar processing chain
-  (`cascaded_radar_capture_pipeline/processing`, see
-  `sync_capture_pipeline/NOTES_FOR_TEAM.md`).
-- **This repository:** capture, synchronisation, validation, replay and
-  firmware packaging.
+  and the three-sensor extrinsics), data collection, and the use of the data
+  (annotation, ML). They pull this repository and read
+  `sync_capture_pipeline/NOTES_FOR_TEAM.md`.
+- **This repository:** capture, synchronisation, validation, replay,
+  firmware packaging, and **all processing, filtering and detection** (since
+  2026-10-25, at the team's request). That includes the radar processing
+  chain that came from the team's initial Windows work
+  (`cascaded_radar_capture_pipeline/processing`), which is to be merged into
+  `sync_capture_pipeline/perception/`. The team no longer runs the tools in
+  that folder.
 - **The Windows firmware-build machine** (TI SDK, firmware source) has its own
   repository. Briefs to it go through a USB handover folder (see
   [09](09_working_practices.md)).

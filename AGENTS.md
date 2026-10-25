@@ -72,8 +72,8 @@ camera_standalone_capture/ZED_2i_Sensor/   ZED recorder (recorder.py, config.yam
 lidar_standalone_capture/                  LiDAR raw recorder + checker
   rs_driver/                    RoboSense rs_driver (third-party, modified; see its NOTICE.md)
     python_wrapper_2/           our pybind11 wrapper (robosense_lidar.cpp, lidar.py)
-cascaded_radar_capture_pipeline/           the research team's radar code
-  processing/                   their processing chain - DO NOT modify without their approval
+cascaded_radar_capture_pipeline/           radar code from the team's initial Windows work (ours to improve)
+  processing/                   their early processing chain; being merged into perception/ (see 09)
   firmware/                     20 radar firmware images + .cfg + flash configs + firmware_map.json
 flashing/boot/                  TI UART flashing tools + flash_variant.sh (third-party, see NOTICE)
 utils/                          earlier investigation and benchmarking scripts
@@ -89,8 +89,11 @@ docs/                           knowledge base + new-board setup
   - changing network/fstab/sysctl/services;
   - installing into the shared conda environment;
   - pushing to GitHub.
-- **Don't modify** `cascaded_radar_capture_pipeline/processing/` (the research
-  team's chain) or the radar's network/DCA settings unless asked.
+- **The radar processing is ours to improve** (team approval, 2026-10-25):
+  `cascaded_radar_capture_pipeline/processing/` may be modified, restructured
+  or replaced. Measure each algorithm change on the reference sessions before
+  it replaces the old one. Calibration stays the team's.
+- **Don't change** the radar's network/DCA settings unless asked.
 - **Never commit** recordings (`sessions/`, `*.svo2`, `*.pcap`, radar
   `frame_*.bin`) or vendor wheels.
 - **Commits carry no AI-assistant attribution** (no "Co-Authored-By" lines, no

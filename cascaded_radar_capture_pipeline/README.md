@@ -8,7 +8,10 @@
 > - what to know before processing the data: `../sync_capture_pipeline/NOTES_FOR_TEAM.md`;
 > - the overview: `../AGENTS.md`.
 >
-> `processing/` is used unchanged by the Jetson tools (`radar_cloud.py`, the report and the replay).
+> Since 2026-10-25 this code is ours to improve, at the team's request. The team no longer runs the
+> tools here (`main.py`, `live_capture.py`, the streaming viewer, `capture/`); they were part of the
+> initial Windows work. `processing/` is being merged into `../sync_capture_pipeline/perception/`,
+> one tested library. See `../docs/knowledge/09_working_practices.md`.
 
 This project is a Windows-based capture, processing, and live-streaming
 workflow for a fixed shortrange cascade radar (AWR2243-2X, 2-chip cascade,

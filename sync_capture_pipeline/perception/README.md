@@ -1,9 +1,13 @@
 # Perception: our GPU detection and tracking (radar, LiDAR)
 
-Our own detection pipeline, separate from the research team's chain
-(`cascaded_radar_capture_pipeline/processing`, unchanged). It runs live in
-the replay and offline over a whole session. Frame: x forward, y **left**,
-z up. Times: `t_ref`.
+The project's detection pipeline. It runs live in the replay and offline over
+a whole session. Frame: x forward, y **left**, z up. Times: `t_ref`.
+
+The early radar chain from the team's Windows work
+(`cascaded_radar_capture_pipeline/processing`) is still separate and
+unchanged. At the team's request (2026-10-25) it is being merged into this
+library, stage by stage, each port checked against the old output and the
+reference-session scores. See `docs/knowledge/09_working_practices.md`.
 
 | File | What |
 |---|---|
