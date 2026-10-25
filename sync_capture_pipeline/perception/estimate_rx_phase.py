@@ -34,7 +34,6 @@ arrives.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 import time
@@ -44,26 +43,25 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-import radar_firmware                                              # noqa: E402
+from perception.core.conventions import processing_azimuth       # noqa: E402
+from perception.core.session import Session                       # noqa: E402
 from perception.radar import RX_PHASE_FILE, C, RadarDetector      # noqa: E402
 
 
 def snapshots(S: Path, min_snr: float = 30.0, step: int = 1):
     """[(40-channel complex snapshot, processing azimuth of the LiDAR target)], detector."""
-    det = RadarDetector(radar_firmware.cfg_for_session(S), rx_phase_deg=None)
+    sess = Session(S)
+    det = RadarDetector(sess.cfg_path, rx_phase_deg=None)
     torch = det.torch
-    rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))
-    tr = np.load(S / "sync" / "timing_lidar_track.npz")
-    tt, trr, taz = tr["t"], tr["r"], tr["az"]
+    tl = sess.radar
     out = []
-    for k in range(0, len(rows), step):
-        t = float(rows[k]["t_ref"])
-        j = int(np.argmin(np.abs(tt - t)))
-        if abs(tt[j] - t) > 0.05 or not np.isfinite(trr[j]) or not 2.5 <= trr[j] <= 15.0:
+    for k in range(0, len(tl), step):
+        tg = sess.target_at(float(tl.t[k]), 0.05)
+        if tg is None or not 2.5 <= tg[0] <= 15.0:
             continue
-        raw = np.fromfile(S / "radar" / rows[k]["filename"], dtype=np.int16)
+        raw = tl.raw(k)
         d = det.process(raw)["detections"]
-        near = np.abs(d[:, C["range"]] - trr[j]) < 0.5 if len(d) else np.zeros(0, bool)
+        near = np.abs(d[:, C["range"]] - tg[0]) < 0.5 if len(d) else np.zeros(0, bool)
         if not near.any():
             continue
         q = d[near][np.argmax(d[near, C["snr_db"]])]
@@ -75,7 +73,7 @@ def snapshots(S: Path, min_snr: float = 30.0, step: int = 1):
         dch = dch * det.tdm_comp[det.ch_tx][:, :, None]
         ri = int(round(q[C["range"]] / det.range_res))
         di = int(np.argmin(np.abs(det.dop_axis - q[C["v_r"]])))
-        out.append((dch[:, di, ri].cpu().numpy(), -float(taz[j])))       # processing azimuth (+ = right)
+        out.append((dch[:, di, ri].cpu().numpy(), float(processing_azimuth(tg[1]))))   # + = right
     return det, out
 
 
@@ -137,7 +135,7 @@ def main() -> int:
     snaps, det, variants = [], None, set()
     for S in a.session:
         det, sn = snapshots(S, a.min_snr)
-        variants.add(radar_firmware.session_variant(S)[0])
+        variants.add(Session(S).variant)
         print(f"{S.name}: {len(sn)} snapshots")
         snaps += sn
     if len(variants) != 1:

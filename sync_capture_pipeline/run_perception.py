@@ -30,13 +30,8 @@ single-target reference: with two people it follows one of them.
 from __future__ import annotations
 
 import argparse
-import contextlib
-import csv
-import io
 import json
-import queue
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -44,14 +39,12 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE / "replay"))
-import radar_firmware                                                           # noqa: E402
+from perception.core.lidar_io import decode_sweeps                             # noqa: E402
+from perception.core.session import Session, target_at                         # noqa: E402
 from perception.lidar import CLASSES, LIDAR_TRACKER, O, LidarDetector          # noqa: E402
 from perception.radar import (C, DET_COLS, RADAR_TRACKER, RadarDetector, cluster_detections,  # noqa: E402
                               rx_phase_for)
 from perception.tracking import Tracker                                         # noqa: E402
-
-LIDAR_WRAPPER = HERE.parent / "lidar_standalone_capture" / "rs_driver" / "python_wrapper_2"
 
 
 def _trk_rows(step: int, tracker, extra=None) -> list:
@@ -62,64 +55,45 @@ def _trk_rows(step: int, tracker, extra=None) -> list:
 
 
 def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
-    variant, _ = radar_firmware.session_variant(S)
+    sess = Session(S)
+    variant = sess.variant
     rx = rx_phase_for(variant) if use_rx_phase else None
-    det = RadarDetector(radar_firmware.cfg_for_variant(variant), rx_phase_deg=rx)
-    rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))
+    det = RadarDetector(sess.cfg_path, rx_phase_deg=rx)
+    tl = sess.radar
     tracker = Tracker(**RADAR_TRACKER)
     dets, objs, trks, noise = [], [], [], []
     t0 = time.monotonic()
-    for k, r in enumerate(rows):
-        raw = np.fromfile(S / "radar" / r["filename"], dtype=np.int16)
-        out = det.process(raw)
+    for k in range(len(tl)):
+        out = det.process(tl.raw(k))
         d = out["detections"]
         _, ob = cluster_detections(d)
-        tracker.update(float(r["t_ref"]), ob[:, :2], list(ob[:, 4]), radial=ob[:, 4])
+        tracker.update(float(tl.t[k]), ob[:, :2], list(ob[:, 4]), radial=ob[:, 4])
         dets.append(d); objs.append(ob); noise.append(out["noise_db"])
         trks += _trk_rows(k, tracker)
         if k % 1000 == 0:
-            log(f"  radar {k}/{len(rows)}  {time.monotonic() - t0:.0f} s")
+            log(f"  radar {k}/{len(tl)}  {time.monotonic() - t0:.0f} s")
     el = time.monotonic() - t0
     nd, no = np.array([len(x) for x in dets]), np.array([len(x) for x in objs])
-    res = {"frame_t": np.array([float(r["t_ref"]) for r in rows]),
+    res = {"frame_t": tl.t.copy(),
            "det_start": np.r_[0, np.cumsum(nd)], "det": np.concatenate(dets) if nd.sum() else
            np.zeros((0, len(DET_COLS)), np.float32), "obj_start": np.r_[0, np.cumsum(no)],
            "obj": np.concatenate(objs) if no.sum() else np.zeros((0, 8), np.float32),
            "trk": np.asarray(trks, np.float32).reshape(-1, 8), "noise_db": np.array(noise)}
-    res["meta"] = {"variant": variant, "rx_phase_deg": rx, "frames": len(rows), "seconds": round(el, 1),
-                   "ms_per_frame": round(1e3 * el / max(len(rows), 1), 1),
+    res["meta"] = {"variant": variant, "rx_phase_deg": rx, "frames": len(tl), "seconds": round(el, 1),
+                   "ms_per_frame": round(1e3 * el / max(len(tl), 1), 1),
                    "detections_per_frame": round(float(nd.mean()), 2), "objects_per_frame": round(float(no.mean()), 2)}
-    log(f"  radar: {len(rows)} frames in {el:.0f} s ({res['meta']['ms_per_frame']} ms/frame incl. file reads), "
+    log(f"  radar: {len(tl)} frames in {el:.0f} s ({res['meta']['ms_per_frame']} ms/frame incl. file reads), "
         f"{nd.mean():.1f} detections/frame")
     return res
 
 
 def run_lidar(S: Path, log=print, rate: float = 3.0) -> dict:
-    import yaml
-    from sources import lidar_pcap_index, lidar_to_mono, sweep_time
-    sys.path.insert(0, str(LIDAR_WRAPPER))
-    from lidar import Lidar
-    offsets = json.loads((S / "sync" / "alignment.json").read_text()).get("offsets", {}) \
-        if (S / "sync" / "alignment.json").is_file() else {}
-    to_mono = lidar_to_mono(lidar_pcap_index(S), offsets.get("lidar_ms", 0.0) / 1e3)
-    cfg = yaml.safe_load((S / "lidar" / "config_used.yaml").read_text())
-    cfg["lidar"]["split_angle"] = 180.0
-    dcfg = S / "sync" / "perception_lidar_decode.yaml"
-    dcfg.write_text(yaml.safe_dump(cfg, sort_keys=False))
-    q: queue.Queue = queue.Queue(maxsize=200)
-
-    def on_cloud(points, ts, seq):
-        p = np.asarray(points)
-        if ts > 0 and len(p):
-            q.put((float(to_mono(sweep_time(p, ts))), p.astype(np.float32, copy=True)))
-
     det = LidarDetector()
     tracker = Tracker(**LIDAR_TRACKER)
     out = {"t": [], "obj": [], "trk": [], "gz": []}
     ms = []
-
-    def consume(item):
-        t, p = item
+    t0 = time.monotonic()
+    for t, p in decode_sweeps(S, rate):
         tic = time.perf_counter()
         o = det.detect(p, labels=False)
         ms.append(1e3 * (time.perf_counter() - tic))
@@ -129,30 +103,8 @@ def run_lidar(S: Path, log=print, rate: float = 3.0) -> dict:
         k = len(out["t"])
         out["t"].append(t); out["obj"].append(ob); out["gz"].append(o["ground_z"])
         out["trk"] += _trk_rows(k, tracker, extra=lambda tr: tr.payload)
-
-    lid = Lidar(str(dcfg))
-    lid.on_pointcloud(on_cloud)
-    t0 = time.monotonic()
-    with contextlib.redirect_stdout(io.StringIO()):
-        lid.start(pcap_path=str(S / "lidar" / "lidar.pcap"), pcap_rate=rate)
-    pending = []                      # sweeps arrive in order; keep a small reorder buffer anyway
-    while not (lid.input_finished() and q.empty()):
-        try:
-            pending.append(q.get(timeout=0.5))
-        except queue.Empty:
-            continue
-        if len(pending) >= 3:
-            pending.sort(key=lambda w: w[0])
-            consume(pending.pop(0))
-            if len(out["t"]) % 1000 == 0:
-                log(f"  lidar {len(out['t'])} sweeps  {time.monotonic() - t0:.0f} s")
-    time.sleep(1.0)
-    while not q.empty():
-        pending.append(q.get())
-    for item in sorted(pending, key=lambda w: w[0]):
-        consume(item)
-    with contextlib.redirect_stdout(io.StringIO()):
-        lid.stop()
+        if len(out["t"]) % 1000 == 0:
+            log(f"  lidar {len(out['t'])} sweeps  {time.monotonic() - t0:.0f} s")
     el = time.monotonic() - t0
     n = np.array([len(x) for x in out["obj"]])
     res = {"sweep_t": np.array(out["t"]), "obj_start": np.r_[0, np.cumsum(n)],
@@ -167,14 +119,6 @@ def run_lidar(S: Path, log=print, rate: float = 3.0) -> dict:
 
 
 # ── scores against the LiDAR walker track ───────────────────────────────────
-def _track_at(track, t, tol):
-    j = int(np.clip(np.searchsorted(track["t"], t), 1, len(track["t"]) - 1))
-    j = j if abs(track["t"][j] - t) < abs(track["t"][j - 1] - t) else j - 1
-    if abs(track["t"][j] - t) > tol or not np.isfinite(track["r"][j]):
-        return None
-    return float(track["r"][j]), float(track["az"][j])
-
-
 def score_radar_points(frame_t, start, rng, az, track, trk=None, gate_r=0.6, gate_az=10.0) -> dict:
     """Per radar frame with a LiDAR target: a detection within gate_r (range) and gate_az of it;
     azimuth bias/spread of the nearest-in-range one. trk: (frame, id, x, y, ..., confirmed) rows."""
@@ -185,7 +129,7 @@ def score_radar_points(frame_t, start, rng, az, track, trk=None, gate_r=0.6, gat
         for k in np.unique(conf[:, 0]).astype(int):
             by_frame[k] = conf[conf[:, 0] == k][:, 2:4]
     for k, t in enumerate(frame_t):
-        tg = _track_at(track, t, 0.08)
+        tg = target_at(track, t, 0.08)
         ct = by_frame.get(k, np.zeros((0, 2)))
         if tg is None:
             empty_conf.append(len(ct))
@@ -226,7 +170,7 @@ def score_lidar(res, track) -> dict:
         for k in np.unique(conf[:, 0]).astype(int):
             by[k] = conf[conf[:, 0] == k][:, 2:4]
     for k, t in enumerate(res["sweep_t"]):
-        tg = _track_at(track, t, 0.06)
+        tg = target_at(track, t, 0.06)
         if tg is None:
             continue
         n_tgt += 1
@@ -285,10 +229,7 @@ def main() -> int:
         jp = S / "sync" / "perception.json"
         report = json.loads(jp.read_text()) if jp.is_file() else {}       # a partial run keeps the other sensor
         report.update(session=S.name, created=time.strftime("%Y-%m-%dT%H:%M:%S"))
-        track, radar_res, lidar_res = None, None, None
-        if (S / "sync" / "timing_lidar_track.npz").is_file():
-            z = np.load(S / "sync" / "timing_lidar_track.npz")
-            track = {"t": z["t"], "r": z["r"], "az": z["az"]}
+        track, radar_res, lidar_res = Session(S).target, None, None
         if "radar" in sensors and (S / "sync" / "radar_timeline.csv").is_file():
             r = radar_res = run_radar(S, not a.no_rx_phase, log=lambda m: print(m, flush=True))
             meta = r.pop("meta")

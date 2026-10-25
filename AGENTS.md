@@ -53,8 +53,10 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   measure_sync_offset.py        Stage 3 offset measurement (plate routine)
   make_report.py, report/       descriptive HTML session report (no verdicts) + data collection
   radar_cloud.py                filtered radar point cloud via the team's process_frame (pre-computed; CuPy GPU path)
-  perception/                   OUR GPU detection: radar.py (CFAR, TDM comp, multipath flags), lidar.py
-                                (local ground, objects), tracking.py, estimate_rx_phase.py; README.md
+  perception/                   THE processing library: core/ (config, readers, calibration, session,
+                                conventions; numpy only), radar.py (CFAR, TDM comp, multipath flags),
+                                lidar.py (local ground, objects), tracking.py, estimate_rx_phase.py,
+                                baseline.py (merge reference); README.md
   run_perception.py             our detection + tracking over a session -> sync/perception_*.npz, scores
   timing_consistency.py         range-based timing check per window (geometry-biased; see 07)
   radar_firmware.py             which firmware recorded a session -> which .cfg
@@ -73,7 +75,8 @@ lidar_standalone_capture/                  LiDAR raw recorder + checker
   rs_driver/                    RoboSense rs_driver (third-party, modified; see its NOTICE.md)
     python_wrapper_2/           our pybind11 wrapper (robosense_lidar.cpp, lidar.py)
 cascaded_radar_capture_pipeline/           radar code from the team's initial Windows work (ours to improve)
-  processing/                   their early processing chain; being merged into perception/ (see 09)
+  processing/                   their early processing chain; being merged into perception/ (see 09).
+                                radar_config.py / radar_reader.py are shims to perception/core/
   firmware/                     20 radar firmware images + .cfg + flash configs + firmware_map.json
 flashing/boot/                  TI UART flashing tools + flash_variant.sh (third-party, see NOTICE)
 utils/                          earlier investigation and benchmarking scripts

@@ -49,3 +49,24 @@ def test_ours_reproduces_golden(S):
         ref = g["det"][g["det_start"][i]:g["det_start"][i + 1]]
         assert len(d) == len(ref), f"frame {k}: {len(d)} detections, golden {len(ref)}"
         np.testing.assert_allclose(d, ref, atol=0.05)
+
+
+@pytest.mark.parametrize("path", ["gpu", "cpu"])
+@pytest.mark.parametrize("S", SESSIONS, ids=[s.name for s in SESSIONS])
+def test_team_chain_reproduces_golden(S, path, tmp_path):
+    """The old chain's process_frame (until it is retired) must give exactly its golden outputs on
+    both of its paths: the merge moves code around it (config, reader) without changing it."""
+    import subprocess
+    gp = S / "sync" / "baseline" / f"golden_team_{path}.npz"
+    if not gp.is_file():
+        pytest.skip(f"no {gp.name}")
+    g = np.load(gp)
+    if path == "gpu":
+        pytest.importorskip("cupy")
+    out = tmp_path / f"team_{path}.npz"
+    subprocess.run([sys.executable, str(PIPELINE / "perception" / "baseline.py"), "_team", "--session", str(S),
+                    "--path", path, "--frames", ",".join(str(int(k)) for k in g["frames"]), "--out", str(out)],
+                   check=True, capture_output=True)
+    n = np.load(out)
+    for f in ("RD_raw", "RD_mti", "RA", "RE", "rd_det", "ra_det", "rd_thresh", "ra_thresh", "xyz", "xyz_start"):
+        np.testing.assert_allclose(n[f], g[f], rtol=0, atol=1e-4, err_msg=f)

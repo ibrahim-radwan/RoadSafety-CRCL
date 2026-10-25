@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import csv
 import io
 import json
 import os
@@ -57,17 +56,16 @@ def _init(cfg_path: str, radar_dir: str, cpu: bool = False):
     if cpu:
         sys.modules["cupy"] = None                         # the team's gpu_accel falls back to the CPU
     sys.path.insert(0, str(TEAM))
-    from processing.radar_config import parse_calibration, parse_cfg_file
-    with contextlib.redirect_stdout(io.StringIO()):
-        cfg = parse_cfg_file(cfg_path)
-        corr = parse_calibration(cfg_path, cfg.num_tx, cfg.num_rx)
+    sys.path.insert(0, str(HERE))
+    from perception.core.calibration import load_radar_config
+    cfg, corr = load_radar_config(cfg_path)
     cfg.quiet_mode = True
     _W.update(cfg=cfg, corr=corr, dir=radar_dir)
 
 
 def _one(fn: str):
     from processing.radar_processing import process_frame
-    from processing.radar_reader import read_frame
+    from perception.core.radar_io import read_frame
     with contextlib.redirect_stdout(io.StringIO()):
         cube = read_frame(os.path.join(_W["dir"], fn), _W["cfg"], 0)
         res = process_frame(cube, _W["cfg"], _W["corr"], verbose=False)
@@ -92,13 +90,15 @@ def main() -> int:
     if a.workers is None:
         a.workers = 3 if gpu else max(1, (os.cpu_count() or 4) - 2)
     sys.path.insert(0, str(HERE))
-    import radar_firmware
+    from perception.core.conventions import team_xyz_to_pipeline
+    from perception.core.session import Session
     for S in a.session:
-        rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))
-        if not rows:
+        sess = Session(S)
+        tl = sess.radar
+        if not len(tl):
             raise SystemExit(f"{S}: run align_session.py first")
-        files = [r["filename"] for r in rows]
-        cfg_path = str(radar_firmware.cfg_for_session(S))
+        files = tl.files
+        cfg_path = str(sess.cfg_path)
         print(f"=== {S}: {len(files)} frames, {a.workers} workers, cfg {Path(cfg_path).name}", flush=True)
         t0 = time.monotonic()
         clouds = []
@@ -110,9 +110,9 @@ def main() -> int:
                     print(f"  {k}/{len(files)}  {el:.0f} s", flush=True)
         n = np.array([len(c) for c in clouds])
         team = np.concatenate(clouds) if n.sum() else np.zeros((0, 7), np.float32)
-        xyz = np.c_[team[:, 1], -team[:, 0], team[:, 2]].astype(np.float32)
+        xyz = team_xyz_to_pipeline(team)
         out = S / "sync" / "radar_cloud_filtered.npz"
-        np.savez_compressed(out, frame_t=np.array([float(r["t_ref"]) for r in rows]), frame_file=np.array(files),
+        np.savez_compressed(out, frame_t=tl.t, frame_file=np.array(files),
                             start=np.r_[0, np.cumsum(n)], team_xyz=team, xyz=xyz, doppler=team[:, 4],
                             power=team[:, 3],
                             note=np.array("xyz: x forward, y left (= -team x: team x is right-positive), z up; team_xyz as returned "

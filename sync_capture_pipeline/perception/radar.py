@@ -53,47 +53,23 @@ Output columns of `detections` (float32, N x len(DET_COLS)): see DET_COLS.
 """
 from __future__ import annotations
 
-import contextlib
-import io
-import sys
 from pathlib import Path
 
 import numpy as np
 
+from .core.calibration import RX_PHASE_FILE, apply_phase, load_radar_config, rx_phase_for  # noqa: F401
+from .core.conventions import AZIMUTH_SIGN
+
 HERE = Path(__file__).resolve().parent
-RADAR_PKG = HERE.parent.parent / "cascaded_radar_capture_pipeline"
 
 DET_COLS = ("x", "y", "z", "range", "az_deg", "el_deg", "v_r", "power_db", "snr_db", "ghost")
 C = {k: i for i, k in enumerate(DET_COLS)}
-
-
-RX_PHASE_FILE = HERE.parent / "calibration" / "radar_rx_phase.json"
 
 # Tracker settings for radar objects (tuned on freewalk_ref_02 against the LiDAR walker: the walker
 # has a reported track 77% of the time, 1.1 other reported tracks per frame; see run_perception.py).
 # Clusters: eps 1.5 m with Doppler weighted 1 m per 4 m/s, so a walker's limbs (micro-Doppler)
 # stay one object.
 RADAR_TRACKER = dict(gate_m=2.0, meas_std_m=0.6, max_misses=6, max_vr_innov=1.0, accel_std=2.0, merge_m=1.0)
-
-
-def rx_phase_for(variant: str):
-    """The in-situ per-RX phase correction (deg, 8 values) for a firmware variant, or None."""
-    import json
-    if not RX_PHASE_FILE.is_file():
-        return None
-    entry = json.loads(RX_PHASE_FILE.read_text()).get("variants", {}).get(variant)
-    return None if entry is None else entry["rx_phase_deg"]
-
-
-def load_radar_config(cfg_path):
-    """(cfg, calibration matrix [tx, rx]) from the team's parser, silenced."""
-    if str(RADAR_PKG) not in sys.path:
-        sys.path.insert(0, str(RADAR_PKG))
-    from processing.radar_config import parse_calibration, parse_cfg_file
-    with contextlib.redirect_stdout(io.StringIO()):
-        cfg = parse_cfg_file(str(cfg_path))
-        corr = parse_calibration(str(cfg_path), cfg.num_tx, cfg.num_rx)
-    return cfg, np.asarray(corr)
 
 
 class RadarDetector:
@@ -110,10 +86,8 @@ class RadarDetector:
         self.dev = torch.device(device if torch.cuda.is_available() else "cpu")
         self.n_tx, self.n_rx, self.n_loops, self.n_s = cfg.num_tx, cfg.num_rx, cfg.num_loops, cfg.num_samples
         self.iq_swap = bool(cfg.iq_swap)
-        ph = None if rx_phase_deg is None else np.asarray(rx_phase_deg, float)
-        if ph is not None:                       # per RX (8) or per channel (tx x rx, 6 x 8)
-            corr = corr * (np.exp(-1j * np.radians(ph))[None, :] if ph.ndim == 1 else np.exp(-1j * np.radians(ph)))
-        self.rx_phase_deg = ph
+        corr = apply_phase(corr, rx_phase_deg)   # in-situ correction: per RX (8) or per channel (6 x 8)
+        self.rx_phase_deg = None if rx_phase_deg is None else np.asarray(rx_phase_deg, float)
         self.corr = torch.as_tensor(corr, dtype=torch.complex64, device=self.dev)
         ch_az, ch_el, _ = cfg.build_channel_table()
         self.n_pos = n_pos = max(c["az"] for c in ch_az) + 1
@@ -264,7 +238,7 @@ class RadarDetector:
         # assemble: one row per (cell, azimuth peak)
         sel = ok.flatten()
         k = n_idx.flatten()[sel]
-        az_w = -torch.rad2deg(torch.asin(sin_proc.flatten()[sel]))             # world azimuth, + = left
+        az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(sin_proc.flatten()[sel]))   # world azimuth, + = left
         el_d = torch.rad2deg(torch.asin(sin_el))[k]
         r = rng_m[k]
         ca, ce = torch.cos(torch.deg2rad(az_w)), torch.cos(torch.deg2rad(el_d))

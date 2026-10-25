@@ -23,7 +23,6 @@ import csv
 import json
 import os
 import select
-import struct
 import sys
 import tempfile
 import threading
@@ -34,12 +33,12 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 PIPELINE = HERE.parent
-ROOT = PIPELINE.parent
-RADAR_PKG = ROOT / "cascaded_radar_capture_pipeline"
 sys.path.insert(0, str(PIPELINE))
-import radar_firmware                     # noqa: E402  (session -> firmware .cfg)
-LIDAR_WRAPPER = ROOT / "lidar_standalone_capture" / "rs_driver" / "python_wrapper_2"
-MSOP_ID = b"\x55\xaa\x05\x5a"
+from perception.core.conventions import world_azimuth                          # noqa: E402
+from perception.core.lidar_io import (decode_config, lidar_pcap_index, lidar_to_mono,  # noqa: E402,F401
+                                      load_wrapper, sweep_time)
+from perception.core.radar_io import FramePrefetcher                           # noqa: E402
+from perception.core.session import Session                                    # noqa: E402
 
 
 def load_csv(path: Path) -> list:
@@ -280,13 +279,8 @@ class RadarProcessor:
 
     def __init__(self, bev_x, bev_y, cfg_path: Path, device="cuda", mirror_azimuth: bool = None):
         import torch
-        sys.path.insert(0, str(RADAR_PKG))
-        from processing.radar_config import parse_calibration, parse_cfg_file
-        import contextlib
-        import io
-        with contextlib.redirect_stdout(io.StringIO()):       # the parser is verbose
-            cfg = parse_cfg_file(str(cfg_path))
-            corr = parse_calibration(str(cfg_path), cfg.num_tx, cfg.num_rx)
+        from perception.core.calibration import load_radar_config
+        cfg, corr = load_radar_config(cfg_path)                # the .cfg calibration only (as before)
         self.cfg, self.torch = cfg, torch
         self.dev = torch.device(device if torch.cuda.is_available() else "cpu")
         self.n_tx, self.n_rx, self.n_loops, self.n_s = cfg.num_tx, cfg.num_rx, cfg.num_loops, cfg.num_samples
@@ -366,33 +360,31 @@ class RadarSource(Source):
         sys.path.insert(0, str(PIPELINE))
         from perception.radar import RadarDetector, rx_phase_for
         self.session = session
-        rows = load_csv(session / "sync" / "radar_timeline.csv")
-        self.t = np.array([float(r["t_ref"]) for r in rows])
-        self.files = [r["filename"] for r in rows]
-        variant, how = radar_firmware.session_variant(session)
+        sess = Session(session)
+        self.timeline = sess.radar
+        self.t, self.files = self.timeline.t, self.timeline.files
+        variant, how = sess.firmware
         rx = rx_phase_for(variant) if rx_phase else None
         print(f"[radar] firmware {variant} ({how}); in-situ RX phase correction: "
               f"{'on' if rx is not None else 'off'}")
-        self.proc = RadarDetector(radar_firmware.cfg_for_variant(variant), rx_phase_deg=rx)
+        self.proc = RadarDetector(sess.cfg_path, rx_phase_deg=rx)
         torch = self.proc.torch
         # BEV lookup: each (x forward, y left) cell -> (range bin, processing azimuth bin)
         X, Y = np.meshgrid(bev_x, bev_y, indexing="ij")
         r = np.hypot(X, Y)
         az_world = np.degrees(np.arctan2(Y, X))
         ri = np.round(r / self.proc.range_res).astype(int)
-        ai = np.clip(np.searchsorted(self.proc.az_axis, -az_world), 0, self.proc.n_az - 1)
+        ai = np.clip(np.searchsorted(self.proc.az_axis, world_azimuth(az_world)), 0, self.proc.n_az - 1)
         valid = (X > 0) & (ri < self.proc.n_range) & (np.abs(az_world) <= 85.0)
         dev = self.proc.dev
         self.bev_ri = torch.as_tensor(np.where(valid, ri, 0), device=dev)
         self.bev_ai = torch.as_tensor(np.where(valid, ai, 0), device=dev)
         self.bev_valid = torch.as_tensor(valid, device=dev)
-        al_path = session / "sync" / "alignment.json"
-        self.timing_source = (json.loads(al_path.read_text()).get("radar", {}).get("timing_source", "")
-                              if al_path.is_file() else "")
+        self.timing_source = sess.alignment.get("radar", {}).get("timing_source", "")
         self.moving_only = moving_only
         self.ms_per_frame = 0.0
         # Raw point cloud: one point per range-azimuth cell (world azimuth = - processing azimuth), z = 0
-        az = np.radians(-self.proc.az_axis)
+        az = np.radians(world_azimuth(self.proc.az_axis))
         rr = np.asarray(self.proc.range_axis)
         self.ra_x = (np.cos(az)[:, None] * rr[None, :]).astype(np.float32)     # [az, range]
         self.ra_y = (np.sin(az)[:, None] * rr[None, :]).astype(np.float32)
@@ -404,8 +396,7 @@ class RadarSource(Source):
             d = np.load(cp)
             if len(d["start"]) == len(self.files) + 1:
                 self.cloud = {k: d[k] for k in ("start", "xyz", "doppler", "power")}
-        self._cache, self._want = {}, 0
-        self._clock_cv = threading.Condition()
+        self.prefetch = FramePrefetcher(self.timeline, self.PREFETCH)
 
     def raw_points(self, ra, thr_db: float, max_range: float):
         """Cells more than thr_db above this frame's median, within max_range: (xyz N x 3, dB above floor)."""
@@ -423,40 +414,22 @@ class RadarSource(Source):
     def span(self):
         return float(self.t[0]), float(self.t[-1])
 
-    def _prefetch(self):
-        """Read frames want .. want + PREFETCH ahead of the processing thread."""
-        while not self.stop_evt.is_set():
-            want = self._want
-            todo = [k for k in range(want, min(want + self.PREFETCH, len(self.files))) if k not in self._cache]
-            if not todo:
-                time.sleep(0.005)
-                continue
-            k = todo[0]
-            try:
-                raw = np.fromfile(self.session / "radar" / self.files[k], dtype=np.int16)
-            except OSError:
-                time.sleep(0.05)
-                continue
-            for old in [j for j in list(self._cache) if j < self._want - 2 or j > self._want + 2 * self.PREFETCH]:
-                self._cache.pop(old, None)
-            self._cache[k] = raw
-
-    def _raw(self, k: int):
-        raw = self._cache.get(k)
-        return raw if raw is not None else np.fromfile(self.session / "radar" / self.files[k], dtype=np.int16)
+    def stop(self):
+        super().stop()
+        self.prefetch.stop()
 
     def run(self):
         sys.path.insert(0, str(PIPELINE))
         from perception.radar import RADAR_TRACKER, cluster_detections
         from perception.tracking import Tracker
-        threading.Thread(target=self._prefetch, daemon=True, name="radar-prefetch").start()
+        self.prefetch.start()
         tracker = Tracker(**RADAR_TRACKER)
         torch = self.proc.torch
         try:
             k_done, mode, gen = -1, None, None
             while not self.stop_evt.is_set():
                 k = int(np.searchsorted(self.t, self.clock.now(), side="right")) - 1
-                self._want = max(k, 0)
+                self.prefetch.want(k)
                 if k < 0:                               # before the radar's first frame
                     if k_done != -1:
                         k_done = -1
@@ -469,7 +442,7 @@ class RadarSource(Source):
                 if gen != self.clock.seek_gen or k < k_done or k > k_done + 8:
                     tracker.reset()                     # a jump: tracks start over
                 gen = self.clock.seek_gen
-                raw = self._raw(k)
+                raw = self.prefetch.get(k)
                 t0 = time.perf_counter()
                 out = self.proc.process(raw, self.moving_only)
                 bev = out["ra"][self.bev_ai, self.bev_ri]
@@ -584,53 +557,6 @@ def render_lidar(pts: np.ndarray, view: dict, ground_z=None):
     return _fill_gaps(rgb.reshape(nx, ny, 3)), (y0, x0, y1 - y0, x1 - x0), int(ok.sum())
 
 
-def lidar_pcap_index(session: Path, pcap=None) -> dict:
-    """Packet table of lidar.pcap: byte offset, length, host CLOCK_MONOTONIC ns, port, and
-    for MSOP packets the LiDAR timestamp (lts, s) with its host time (mts, ns).
-    Cached in sync/lidar_pcap_index.npz - building it reads the whole PCAP once."""
-    cache = session / "sync" / "lidar_pcap_index.npz"
-    keys = ("off", "ln", "ht", "port", "lts", "mts")
-    if cache.is_file():
-        z = np.load(cache)
-        return {k: z[k] for k in keys}
-    buf = pcap if pcap is not None else np.memmap(session / "lidar" / "lidar.pcap", dtype=np.uint8, mode="r")
-    off, ln, ht, port, lts, mts = [], [], [], [], [], []
-    o, n = 24, len(buf)
-    while o + 16 <= n:
-        sec, nsec, incl, _ = struct.unpack_from("<IIII", buf, o)
-        if o + 16 + incl > n:
-            break
-        t = sec * 1_000_000_000 + nsec
-        p = struct.unpack_from("!H", buf, o + 16 + 36)[0]
-        off.append(o); ln.append(16 + incl); ht.append(t); port.append(p)
-        pl = o + 16 + 42
-        if bytes(buf[pl:pl + 4]) == MSOP_ID:
-            lts.append(int.from_bytes(bytes(buf[pl + 20:pl + 26]), "big")
-                       + int.from_bytes(bytes(buf[pl + 26:pl + 30]), "big") * 1e-6)
-            mts.append(t)
-        o += 16 + incl
-    idx = {"off": np.array(off), "ln": np.array(ln), "ht": np.array(ht, dtype=np.int64), "port": np.array(port),
-           "lts": np.array(lts), "mts": np.array(mts, dtype=np.int64)}
-    np.savez(cache, **idx)
-    return idx
-
-
-def lidar_to_mono(index: dict, offset_s: float = 0.0):
-    """LiDAR clock (s) -> session CLOCK_MONOTONIC (s, LiDAR offset applied): the same
-    lower-envelope fit as align_session.py."""
-    sys.path.insert(0, str(PIPELINE))
-    import align_session as al
-    a, b, l0, _, _ = al.envelope_fit(index["lts"], index["mts"] / 1e9)
-    return lambda tl: a * (np.asarray(tl) - l0) + b + offset_s
-
-
-def sweep_time(points: np.ndarray, ts: float) -> float:
-    """LiDAR-clock time at which the sweep's radar-boresight points (within ~5 deg ahead) were
-    scanned; points column 5 = per-point time offset from the sweep timestamp ts."""
-    fwd = (points[:, 0] > 0) & (np.abs(points[:, 1]) <= 0.09 * points[:, 0])
-    return ts + float(np.median(points[fwd, 5])) if fwd.any() else ts + 0.05
-
-
 class LidarSource(Source):
     name_ = "lidar"
     LOOKAHEAD_S = 0.15      # a sweep is emitted after its last packet; feed ahead of the clock
@@ -724,13 +650,8 @@ class LidarSource(Source):
     def run(self):
         tmp = Path(tempfile.mkdtemp(prefix="replay_lidar_"))   # decode config + FIFOs
         try:
-            sys.path.insert(0, str(LIDAR_WRAPPER))
-            import yaml
-            from lidar import Lidar
-            cfg = yaml.safe_load((self.session / "lidar" / "config_used.yaml").read_text())
-            cfg["lidar"]["split_angle"] = 180.0
-            cfg_path = tmp / "decode.yaml"
-            cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+            Lidar = load_wrapper()
+            cfg_path = decode_config(self.session, tmp / "decode.yaml")
             while not self.stop_evt.is_set():
                 gen = self.clock.seek_gen
                 self._play_from(self.clock.now(), tmp, cfg_path, gen, Lidar)

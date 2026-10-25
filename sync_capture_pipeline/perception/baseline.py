@@ -34,8 +34,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import csv
-import hashlib
 import io
 import json
 import subprocess
@@ -51,6 +49,8 @@ REPO = PIPELINE.parent
 TEAM = REPO / "cascaded_radar_capture_pipeline"
 SCORES = HERE / "baseline" / "scores.json"
 sys.path.insert(0, str(PIPELINE))
+from perception.core.calibration import file_md5 as file_hash                 # noqa: E402
+from perception.core.session import Session                                    # noqa: E402
 
 TEAM_FIELDS = ("RD_raw", "RD_mti", "RA", "RE", "rd_det", "ra_det", "rd_thresh", "ra_thresh")
 # sessions used to measure calibration/radar_rx_phase.json: their radar scores are in-sample
@@ -68,16 +68,11 @@ def git_commit() -> str:
         return "unknown"
 
 
-def file_hash(p: Path) -> str:
-    return hashlib.md5(p.read_bytes()).hexdigest()[:12] if p.is_file() else "none"
-
-
 # ── golden ──────────────────────────────────────────────────────────────────
 def pick_frames(S: Path, n: int) -> list:
     """n frames: 80% evenly over frames with a LiDAR target at 2-20 m, 20% over frames without."""
-    rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))
-    tr = np.load(S / "sync" / "timing_lidar_track.npz")
-    t = np.array([float(r["t_ref"]) for r in rows])
+    sess = Session(S)
+    tr, t = sess.target, sess.radar.t
     j = np.clip(np.searchsorted(tr["t"], t), 1, len(tr["t"]) - 1)
     j = np.where(np.abs(tr["t"][j] - t) < np.abs(tr["t"][j - 1] - t), j, j - 1)
     has = (np.abs(tr["t"][j] - t) < 0.08) & np.isfinite(tr["r"][j]) & (tr["r"][j] > 2) & (tr["r"][j] < 20)
@@ -94,24 +89,20 @@ def _team_golden(S: Path, frames: list, path: str, out: Path):
     if path == "cpu":
         sys.modules["cupy"] = None
     sys.path.insert(0, str(TEAM))
-    import radar_firmware
     from processing import gpu_accel
-    from processing.radar_config import parse_calibration, parse_cfg_file
     from processing.radar_processing import process_frame
-    from processing.radar_reader import read_frame
+    from perception.core.calibration import load_radar_config
+    from perception.core.radar_io import read_frame
     if (path == "gpu") != bool(gpu_accel.GPU_AVAILABLE):
         raise SystemExit(f"team chain: asked for the {path} path but GPU_AVAILABLE={gpu_accel.GPU_AVAILABLE}")
-    cfgp = str(radar_firmware.cfg_for_session(S))
-    with contextlib.redirect_stdout(io.StringIO()):
-        cfg = parse_cfg_file(cfgp)
-        corr = parse_calibration(cfgp, cfg.num_tx, cfg.num_rx)
+    sess = Session(S)
+    cfg, corr = load_radar_config(sess.cfg_path)
     cfg.quiet_mode = True
-    rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))
     acc = {k: [] for k in TEAM_FIELDS}
     xyz, ms = [], []
     for k in frames:
         with contextlib.redirect_stdout(io.StringIO()):
-            cube = read_frame(str(S / "radar" / rows[k]["filename"]), cfg, 0)
+            cube = read_frame(str(sess.radar.path(k)), cfg, 0)
             t0 = time.perf_counter()
             res = process_frame(cube, cfg, corr, verbose=False)
             ms.append(1e3 * (time.perf_counter() - t0))
@@ -127,7 +118,6 @@ def _team_golden(S: Path, frames: list, path: str, out: Path):
 
 
 def golden(S: Path, n: int):
-    import radar_firmware
     from perception.radar import RX_PHASE_FILE, RadarDetector, rx_phase_for
     d = S / "sync" / "baseline"
     d.mkdir(exist_ok=True)
@@ -137,19 +127,19 @@ def golden(S: Path, n: int):
         subprocess.run([sys.executable, __file__, "_team", "--session", str(S), "--path", path,
                         "--frames", ",".join(map(str, frames)), "--out", str(d / f"golden_team_{path}.npz")],
                        check=True)
-    variant, _ = radar_firmware.session_variant(S)
-    det = RadarDetector(radar_firmware.cfg_for_variant(variant), rx_phase_deg=rx_phase_for(variant))
-    rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))
+    sess = Session(S)
+    variant = sess.variant
+    det = RadarDetector(sess.cfg_path, rx_phase_deg=rx_phase_for(variant))
     rd, ra, dets = [], [], []
     for k in frames:
-        o = det.process(np.fromfile(S / "radar" / rows[k]["filename"], dtype=np.int16))
+        o = det.process(sess.radar.raw(k))
         rd.append(o["rd"].cpu().numpy()); ra.append(o["ra"].cpu().numpy()); dets.append(o["detections"])
     n_d = np.array([len(x) for x in dets])
     np.savez_compressed(d / "golden_ours.npz", frames=np.array(frames), rd=np.stack(rd), ra=np.stack(ra),
                         det=np.concatenate(dets), det_start=np.r_[0, np.cumsum(n_d)])
     print(f"  ours: {int(n_d.sum())} detections -> golden_ours.npz")
     meta = {"session": S.name, "frames": frames, "git_commit": git_commit(), "created": time.strftime("%Y-%m-%d"),
-            "cfg": radar_firmware.cfg_for_variant(variant).name, "firmware": variant,
+            "cfg": sess.cfg_path.name, "firmware": variant,
             "rx_phase_file_md5": file_hash(RX_PHASE_FILE),
             "note": "team_cpu: process_frame without CuPy (OS-CFAR on range-Doppler); team_gpu: with CuPy (CASO)"}
     (d / "golden.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -160,8 +150,7 @@ def session_scores(S: Path) -> dict:
     import run_perception as rp
     from perception.radar import C
     out = {}
-    z = np.load(S / "sync" / "timing_lidar_track.npz")
-    track = {"t": z["t"], "r": z["r"], "az": z["az"]}
+    track = Session(S).target
     pr, pl = S / "sync" / "perception_radar.npz", S / "sync" / "perception_lidar.npz"
     radar = lidar = None
     if pr.is_file():
@@ -176,8 +165,7 @@ def session_scores(S: Path) -> dict:
         out["ours_lidar"]["objects_per_sweep"] = round(float(np.diff(lidar["obj_start"]).mean()), 2)
     if radar is not None and lidar is not None:
         out["ours_radar_vs_lidar"] = rp.score_radar_vs_lidar(radar, lidar)
-    rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))
-    frame_t = np.array([float(r["t_ref"]) for r in rows])
+    frame_t = Session(S).radar.t
     for name, f in (("team", "radar_cloud_filtered"), ("team_cpu_kept", "radar_cloud_filtered_cpu")):
         cp = S / "sync" / f"{f}.npz"
         if not cp.is_file():

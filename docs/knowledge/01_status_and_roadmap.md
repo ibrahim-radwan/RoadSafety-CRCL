@@ -80,7 +80,7 @@ The plan, agreed with the owner:
 | Step | State |
 |---|---|
 | 1. Baseline | **Done 2026-10-25.** `perception/baseline.py`. Scores of all 7 reference sessions in `perception/baseline/scores.json` (git), for ours and the old chain's clouds on both paths. Golden per-frame outputs of 20 frames on `freewalk_ref_02`, `stage3_02` and `run_20261014_1326` (`<session>/sync/baseline/`, not in git). Our detector's regression test: `tests/test_baseline.py`. |
-| 2. Shared core | Next: configuration, readers, geometry, calibration and conventions in one place. |
+| 2. Shared core | **Done 2026-10-25.** `perception/core/`: `radar_config`, `radar_io` (both moved from the old chain, with history), `calibration`, `lidar_io`, `session`, `conventions`. The replay, `run_perception.py`, `radar_cloud.py`, `baseline.py`, `estimate_rx_phase.py` and the report's `RadarProcessor` use it. The old chain reads its config and frames through shims. Verified: no output changes (the old chain reproduces its golden frames exactly on both paths; our golden frames and scores are unchanged). |
 | 3. Port the old chain's stages | Capon/MUSIC, sidelobe/consistency filters, focus mask, elevation, accumulation, micro-Doppler. |
 | 4. Remove duplicates | `gpu_accel.py`, `RadarProcessor`; the report on the library. |
 

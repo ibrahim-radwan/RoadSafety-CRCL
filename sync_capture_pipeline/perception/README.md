@@ -11,12 +11,29 @@ reference-session scores. See `docs/knowledge/09_working_practices.md`.
 
 | File | What |
 |---|---|
+| `core/` | **The shared core** (merge step 2; numpy only, no torch, so the report and capture-side tools can import it). See the table below. |
 | `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
 | `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, oriented boxes, size class. ~20 ms. |
 | `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation. For radar, Doppler is an EKF measurement plus a consistency check. |
 | `estimate_rx_phase.py` | The in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. |
 | `baseline.py` | The frozen reference for the merge: golden per-frame outputs (old chain on both paths, ours) and the scores of every reference session (`baseline/scores.json`). |
 | `../run_perception.py` | A whole session → `sync/perception_{radar,lidar}.npz` and `sync/perception.json` (scores). |
+
+### `core/`: one place for configuration, data access and conventions
+
+| Module | What |
+|---|---|
+| `radar_config.py` | The radar `.cfg` parser, array geometry, axes and the processing defaults (`RadarConfig`). Moved from the old chain. |
+| `radar_io.py` | Raw radar frames: the old `read_frame` (moved here), plus `RadarTimeline` (t_ref and file per frame) and `FramePrefetcher` (reads ahead on slow disks). |
+| `calibration.py` | The `.cfg` antenna calibration combined with the in-situ correction: `load_radar_config`, `radar_correction`, `rx_phase_for`. |
+| `lidar_io.py` | `lidar.pcap`: packet index, LiDAR-to-monotonic clock, sweep timing, `decode_sweeps` (a whole session, in order). |
+| `session.py` | `Session`: metadata, firmware variant and `.cfg`, offsets, radar/camera timelines, pairs, and the LiDAR walker track (`target_at`). |
+| `conventions.py` | The frame and sign conventions: world azimuth = − processing azimuth, v_r > 0 receding, the old chain's xyz to the pipeline frame. |
+
+The old chain's `processing/radar_config.py` and `processing/radar_reader.py`
+are shims that re-export these modules, so `process_frame` runs unchanged
+until it is ported. `tests/test_baseline.py` checks that it still reproduces
+its golden frames on both paths.
 
 ```bash
 conda activate rel_1_py_3_8
