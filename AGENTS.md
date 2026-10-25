@@ -52,11 +52,11 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   check_session.py              completeness check, PASS/FAIL (stdlib only)
   measure_sync_offset.py        Stage 3 offset measurement (plate routine)
   make_report.py, report/       descriptive HTML session report (no verdicts) + data collection
-  radar_cloud.py                filtered radar point cloud via the team's process_frame (pre-computed; CuPy GPU path)
   perception/                   THE processing library: core/ (config, readers, calibration, session,
-                                conventions; numpy only), radar.py (CFAR, TDM comp, multipath flags),
-                                lidar.py (local ground, objects), tracking.py, estimate_rx_phase.py,
-                                baseline.py (merge reference); README.md
+                                conventions; numpy only), radar_dsp.py (signal-processing stages, PyTorch),
+                                radar_chain.py (the old chain's front end on them), radar.py (detector:
+                                CFAR, TDM comp, multipath flags), lidar.py (local ground, objects),
+                                tracking.py, estimate_rx_phase.py, baseline.py (reference); README.md
   run_perception.py             our detection + tracking over a session -> sync/perception_*.npz, scores
   timing_consistency.py         range-based timing check per window (geometry-biased; see 07)
   radar_firmware.py             which firmware recorded a session -> which .cfg
@@ -74,12 +74,11 @@ camera_standalone_capture/ZED_2i_Sensor/   ZED recorder (recorder.py, config.yam
 lidar_standalone_capture/                  LiDAR raw recorder + checker
   rs_driver/                    RoboSense rs_driver (third-party, modified; see its NOTICE.md)
     python_wrapper_2/           our pybind11 wrapper (robosense_lidar.cpp, lidar.py)
-cascaded_radar_capture_pipeline/           radar code from the team's initial Windows work (ours to improve)
-  processing/                   their early processing chain; being merged into perception/ (see 09).
-                                radar_config.py / radar_reader.py are shims to perception/core/
+cascaded_radar_capture_pipeline/           radar firmware (the old processing chain was merged into
+                                           perception/ and deleted on 2026-10-25; see git history)
   firmware/                     20 radar firmware images + .cfg + flash configs + firmware_map.json
 flashing/boot/                  TI UART flashing tools + flash_variant.sh (third-party, see NOTICE)
-utils/                          earlier investigation and benchmarking scripts
+utils/                          earlier DCA1000 investigation scripts
 environment/rel_1_py_3_8.yml    conda environment (vendor wheels installed separately)
 docs/                           knowledge base + new-board setup
 ```
@@ -92,10 +91,10 @@ docs/                           knowledge base + new-board setup
   - changing network/fstab/sysctl/services;
   - installing into the shared conda environment;
   - pushing to GitHub.
-- **The radar processing is ours to improve** (team approval, 2026-10-25):
-  `cascaded_radar_capture_pipeline/processing/` may be modified, restructured
-  or replaced. Measure each algorithm change on the reference sessions before
-  it replaces the old one. Calibration stays the team's.
+- **All processing is ours to improve** (team approval, 2026-10-25). The old
+  radar chain was merged into `perception/`. Measure each algorithm change on
+  the reference sessions (`perception/baseline.py compare`, the golden-frame
+  tests) before it replaces the old one. Calibration stays the team's.
 - **Don't change** the radar's network/DCA settings unless asked.
 - **Never commit** recordings (`sessions/`, `*.svo2`, `*.pcap`, radar
   `frame_*.bin`) or vendor wheels.
@@ -115,8 +114,8 @@ docs/                           knowledge base + new-board setup
   draw forward up and vehicle-left on the left, like the camera image.
 - **Radar azimuth:** the team's processing azimuth is positive to the
   **right** (their convention; it is not a mirror error). World azimuth
-  (+left) = − processing azimuth. Report (`RadarProcessor.MIRROR_AZIMUTH`),
-  `radar_cloud.py` and `perception/radar.py` all convert. Radar v_r > 0 =
+  (+left) = − processing azimuth, in one place:
+  `perception/core/conventions.py`. Radar v_r > 0 =
   receding.
 - **Radar frame layout:** int16 LE, I first,
   `[loop 64][tx 6][dev 2][rx 4][sample 256][I,Q]`.
@@ -131,8 +130,8 @@ docs/                           knowledge base + new-board setup
 conda activate rel_1_py_3_8                       # most tools
 cd sync_capture_pipeline
 python capture_session.py --out /mnt/sdcard/sessions/<name> --secs 60 --camera-stage ~/camera_stage   # (normally via the iPad page)
-python make_report.py --session /mnt/sdcard/sessions/<name> [--radar-cloud]   # align + pairs.csv + HTML report
-python replay/replay_session.py --session /mnt/sdcard/sessions/<name> [--maximise lidar3d] [--radar-points detections|raw|filtered]
+python make_report.py --session /mnt/sdcard/sessions/<name>                  # align + pairs.csv + HTML report
+python replay/replay_session.py --session /mnt/sdcard/sessions/<name> [--maximise lidar3d] [--radar-points detections|raw]
 python run_perception.py --session /mnt/sdcard/sessions/<name>               # our detections + scores
 python -m pytest -q tests
 ```

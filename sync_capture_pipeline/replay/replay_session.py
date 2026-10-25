@@ -65,8 +65,8 @@ LIDAR_RANGES = [5.0, 10.0, 20.0, 40.0, 80.0]
 LIDAR_NEAR = [0.0, 0.3, 0.5, 1.0, 2.0]
 SPEEDS = [0.25, 0.5, 1.0, 2.0]
 RADAR_C, LIDAR_C, CAMERA_C = (42, 120, 214), (235, 104, 52), (27, 175, 122)   # report palette
-RADAR_POINTS = [("detections (ours: CFAR + tracking)", "detections"), ("raw (all range-azimuth cells)", "raw"),
-                ("filtered (team pipeline)", "filtered"), ("off", "off")]
+RADAR_POINTS = [("detections (CFAR + tracking)", "detections"), ("raw (all range-azimuth cells)", "raw"),
+                ("off", "off")]
 
 STYLE = """
 QWidget { background: #15171c; color: #d4d7dd; font-size: 12px; }
@@ -420,12 +420,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         rflat.setToolTip("draw radar points at z = 0 in 3D: the radar elevation is not verified")
         row.addWidget(rflat)
         rctl.update(mode=rmode, thr=rthr, flat=rflat, moving=moving)
-        if srcs["radar"].cloud is None:
-            rmode.model().item(2).setEnabled(False)
-            rmode.setItemText(2, "filtered (team: run radar_cloud.py first)")
         want = getattr(args, "radar_points", "detections")
-        if want == "filtered" and srcs["radar"].cloud is None:
-            want = "detections"
         rmode.setCurrentIndex([v_ for _, v_ in RADAR_POINTS].index(want))
         moving.stateChanged.connect(lambda s_: setattr(srcs["radar"], "moving_only", bool(s_)))
     row = group("Detections")
@@ -671,7 +666,6 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 from perception.radar import C as RC
                 d = rad["det"]
                 real = d[:, RC["ghost"]] == 0 if len(d) else np.zeros(0, bool)
-                vmax = float(max(abs(srcs["radar"].proc.dop_axis[0]), 1.0))
                 if mode_pts == "detections" and len(d):
                     cols = cm.coolwarm(np.clip(0.5 + 0.5 * d[real, RC["v_r"]] / 2.0, 0, 1))
                     rb["dets"].setData(d[real, RC["y"]], d[real, RC["x"]],
@@ -693,15 +687,6 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     rb["pts"].setData(xyz[:, 1], xyz[:, 0], brush=pg.mkBrush(0, 230, 255, 200), size=3)
                     radar_pts = (xyz, cm.plasma(np.clip(val / 30.0, 0, 1)),
                                  f"raw: {len(xyz):,} cells > {rctl['thr'].value()} dB above floor")
-                elif mode_pts == "filtered":
-                    fp = srcs["radar"].filtered_points(rad["k"])
-                    if fp is not None:
-                        xyz, dop, pw = fp
-                        cols = cm.coolwarm(np.clip(0.5 + 0.5 * dop / vmax, 0, 1))
-                        rb["pts"].setData(xyz[:, 1], xyz[:, 0], size=8,
-                                          brush=[pg.mkBrush(*(255 * c[:3]).astype(int), 240) for c in cols],
-                                          pen=pg.mkPen((255, 255, 255), width=1))
-                        radar_pts = (xyz, cols, f"team filtered: {len(xyz)} detections")
                 trs = rad["tracks"] if dctl["tracks"].isChecked() else []
                 rb["trk"].setData([t_[2] for t_ in trs], [t_[1] for t_ in trs])
                 pool = text_pool("radar_bev", len(trs), (140, 190, 255))
@@ -818,9 +803,9 @@ def main() -> int:
     ap.add_argument("--maximise", choices=["camera", "lidar", "lidar3d", "radar_bev", "radar_rd", "objects"],
                     help="start with this panel maximised")
     ap.add_argument("--lidar-3d", action="store_true", help=argparse.SUPPRESS)   # 3D is a panel now: always shown
-    ap.add_argument("--radar-points", default="detections", choices=["detections", "raw", "filtered", "off"],
-                    help="detections = our CFAR detections + tracks (live, GPU); raw = every range-azimuth cell "
-                         "above a threshold; filtered = the team pipeline's detections (radar_cloud.py once)")
+    ap.add_argument("--radar-points", default="detections", choices=["detections", "raw", "off"],
+                    help="detections = CFAR detections + tracks (live, GPU); raw = every range-azimuth cell "
+                         "above a threshold")
     ap.add_argument("--no-rx-phase", action="store_true",
                     help="radar: without the in-situ RX phase correction (calibration/radar_rx_phase.json)")
     ap.add_argument("--no-detect", action="store_true", help="LiDAR: no object detection (display only)")

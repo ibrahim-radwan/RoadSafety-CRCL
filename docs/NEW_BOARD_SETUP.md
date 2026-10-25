@@ -76,18 +76,11 @@ pip install torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
 python -c "import torch; print(torch.cuda.is_available())"     # must print True
 ```
 
-**3a'. CuPy (optional; the team's `process_frame` GPU path, used by
-`radar_cloud.py`).** CuPy 12.3 is the last series for Python 3.8. Its
-`fastrlock` dependency must be pinned, because the newest sdist needs
-Python ≥ 3.9:
-
-```bash
-pip install "fastrlock==0.8.2" "cupy-cuda11x==12.3.0" -c /tmp/constraints.txt
-python -c "import cupy; print(cupy.arange(3).sum())"
-```
-
-The first `process_frame` call compiles kernels for ~25 s; they are cached in
-`~/.cupy/kernel_cache`.
+**3a'. CuPy: not needed.** It was used only by the old radar chain's GPU
+path, which was merged into the PyTorch library and deleted on 2026-10-25.
+If something ever needs it on Python 3.8, use CuPy 12.3 (the last series
+for 3.8) with `fastrlock==0.8.2`; the newest fastrlock sdist needs Python
+≥ 3.9.
 
 **3b. torchvision 0.16.0 (optional).** It was built from source against that
 torch on the original board, but **no code in this repository imports it**.

@@ -24,8 +24,10 @@ learning:
   frame with its camera frame and LiDAR sweep.
 - **Validation:** an automatic completeness check after each session, plus a
   self-contained **HTML report** per session.
-- **Replay:** GPU playback of all sensors, with bird's-eye views, a 3D LiDAR
-  view and radar point clouds (raw and filtered).
+- **Replay:** GPU playback of all sensors in one window, with bird's-eye
+  views, a 3D LiDAR view, and live radar and LiDAR detection and tracking.
+- **Processing:** one PyTorch library (`sync_capture_pipeline/perception/`)
+  for radar signal processing, detection and tracking on the GPU.
 
 ## Start here
 

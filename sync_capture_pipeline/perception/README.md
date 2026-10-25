@@ -1,13 +1,17 @@
-# Perception: our GPU detection and tracking (radar, LiDAR)
+# Perception: the processing, detection and tracking library (radar, LiDAR)
 
-The project's detection pipeline. It runs live in the replay and offline over
-a whole session. Frame: x forward, y **left**, z up. Times: `t_ref`.
+The project's one processing pipeline, in PyTorch on the GPU. It runs live in
+the replay and offline over a whole session. Frame: x forward, y **left**,
+z up. Times: `t_ref`.
 
-The early radar chain from the team's Windows work
-(`cascaded_radar_capture_pipeline/processing`) is still separate and
-unchanged. At the team's request (2026-10-25) it is being merged into this
-library, stage by stage, each port checked against the old output and the
-reference-session scores. See `docs/knowledge/09_working_practices.md`.
+At the team's request (2026-10-25), the early radar chain from their Windows
+work was merged into this library and deleted:
+
+- each general stage was ported and checked against the old output;
+- the single-person stages were retired;
+- the old chain's outputs stay as frozen references (see *Baseline* below).
+
+See `docs/knowledge/01_status_and_roadmap.md`.
 
 | File | What |
 |---|---|
@@ -21,12 +25,12 @@ reference-session scores. See `docs/knowledge/09_working_practices.md`.
 - the range-azimuth focus mask, the focused range-azimuth map;
 - Capon, MUSIC, Bartlett;
 - the elevation map. |
-| `radar_chain.py` | `RadarChain`: the old chain's front end (`process_frame` stages 1–7 and 9) composed from those stages. It reproduces the old chain's golden frames on both paths (`cfar="caso"` or `"os"`), at ~21 ms/frame against ~100 ms (old GPU path) and ~1 s (old CPU path). |
+| `radar_chain.py` | `RadarChain`: the old chain's front end (`process_frame` stages 1–7 and 9) composed from those stages. It reproduces the old chain's frozen golden frames on both of its paths (`cfar="caso"` or `"os"`), at ~21 ms/frame; the old chain took ~100 ms (GPU path) or ~1 s (CPU path). |
 | `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms, built on the `radar_dsp.py` stages. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
 | `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, oriented boxes, size class. ~20 ms. |
 | `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation. For radar, Doppler is an EKF measurement plus a consistency check. |
 | `estimate_rx_phase.py` | The in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. |
-| `baseline.py` | The frozen reference for the merge: golden per-frame outputs (old chain on both paths, ours) and the scores of every reference session (`baseline/scores.json`). |
+| `baseline.py` | The reference: golden per-frame outputs (the old chain's, frozen; ours) and the scores of every reference session (`baseline/scores.json`); `compare` is the regression check. |
 | `../run_perception.py` | A whole session → `sync/perception_{radar,lidar}.npz` and `sync/perception.json` (scores). |
 
 ### `core/`: one place for configuration, data access and conventions
@@ -40,10 +44,8 @@ reference-session scores. See `docs/knowledge/09_working_practices.md`.
 | `session.py` | `Session`: metadata, firmware variant and `.cfg`, offsets, radar/camera timelines, pairs, and the LiDAR walker track (`target_at`). |
 | `conventions.py` | The frame and sign conventions: world azimuth = − processing azimuth, v_r > 0 receding, the old chain's xyz to the pipeline frame. |
 
-The old chain's `processing/radar_config.py` and `processing/radar_reader.py`
-are shims that re-export these modules, so `process_frame` runs unchanged
-until it is ported. `tests/test_baseline.py` checks that it still reproduces
-its golden frames on both paths.
+`radar_config.py` and `radar_io.py` came from the old chain (git history
+follows them).
 
 ```bash
 conda activate rel_1_py_3_8
@@ -59,26 +61,27 @@ Every change of an algorithm is measured before it replaces the old one:
 ```bash
 python run_perception.py --session <s> ...            # current outputs
 python perception/baseline.py compare --session <s> ...   # scores vs perception/baseline/scores.json
-python -m pytest -q tests/test_baseline.py            # our detector still reproduces the golden frames
+python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden frames: ours and the old chain's
 ```
 
 - **`perception/baseline/scores.json`** (in git) holds the scores of every
   reference session for three outputs, against the LiDAR walker:
   - our radar and LiDAR;
   - the old chain's filtered clouds, on both its paths: `team_cpu` (OS-CFAR)
-    and `team_gpu` (CASO).
+    and `team_gpu` (CASO), from the clouds made before it was retired.
 
   The radar scores of `stage3_02`/`03` are in-sample, because the phase
   correction was measured on them.
 - **`<session>/sync/baseline/golden_*.npz`** (on the data drive, not in git)
-  holds the per-frame intermediate outputs on 20 fixed frames:
-  - for the old chain, on both paths: RD, RA, RE, CFAR masks and thresholds,
-    and xyz;
-  - for our detector: RD, RA and detections.
-
-  Ported stages are tested against them for equivalence. If a deliberate
-  change makes them obsolete, re-create them with
-  `baseline.py golden --session <s>`.
+  holds per-frame intermediate outputs on 20 fixed frames:
+  - **`golden_team_{cpu,gpu}.npz`:** the old chain on both its paths (RD,
+    RA, RE, CFAR masks and thresholds, xyz). These are frozen: they were made
+    before the old chain was deleted. `RadarChain` must keep reproducing
+    them.
+  - **`golden_stages.npz`** (`freewalk_ref_02`): the old CFAR variants and
+    beamformers, with their inputs.
+  - **`golden_ours.npz`:** our detector (RD, RA and detections). After a
+    deliberate change, re-create it with `baseline.py golden --session <s>`.
 
 ## Radar, per frame
 
@@ -144,7 +147,7 @@ a single-target reference.
 On `freewalk_ref_02` (10 min), which was not used to measure the radar phase
 correction:
 
-| | Ours | Team filtered (`process_frame`, CPU path) |
+| | Ours | The old chain (`process_frame`, CPU path) |
 |---|---|---|
 | Radar: walker detected (within 0.6 m, 10°) | **71.8%** | 49.5% |
 | Radar: azimuth spread (median \|err − bias\|) | **2.41°** | 4.93° |

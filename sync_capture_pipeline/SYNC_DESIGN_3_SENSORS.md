@@ -441,6 +441,9 @@ original window was 11.5–14 m because r075m's HPF suppressed returns inside
    - Open questions to the team: export or view only; what "raw" vs
      "filtered" means; whether their `process_frame` sign/coordinate
      conventions should change. See `NOTES_FOR_TEAM.md`.
+   - **Superseded 2026-10-25:** the "filtered" cloud and `radar_cloud.py`
+     were retired with the old chain. The radar point cloud is now the
+     multi-object detections of `perception/radar.py` (section 11.6).
 
 ## 11. Robustness and validation added 2026-10-11
 
@@ -544,6 +547,7 @@ first plate check on the free-walk session suggested −23 ms.
 `perception/` holds our GPU radar and LiDAR detectors and a shared tracker,
 live in the replay and offline in `run_perception.py`. Both use the aligned
 times (`t_ref`), so radar and LiDAR objects can be compared directly. The
-team's chain is unchanged. See `perception/README.md`.
+old chain has since been merged into `perception/` and deleted (2026-10-25;
+see `docs/knowledge/01_status_and_roadmap.md`). See `perception/README.md`.
 
 See `replay/README.md`.

@@ -23,8 +23,8 @@ Times are t_ref (CLOCK_MONOTONIC, Stage 3 offsets applied); frame x forward, y l
 Scores (when sync/timing_lidar_track.npz exists, from make_report.py): for each
 radar frame / LiDAR sweep with the single LiDAR target, whether a detection
 or confirmed track lies on it, and the azimuth bias and spread of the radar
-against it. The same radar score is computed for the team's filtered cloud
-(sync/radar_cloud_filtered.npz) when present. The LiDAR target is a
+against it. The old chain's filtered-cloud scores are kept in
+perception/baseline/scores.json. The LiDAR target is a
 single-target reference: with two people it follows one of them.
 """
 from __future__ import annotations
@@ -239,17 +239,6 @@ def main() -> int:
                 d = r["det"]
                 report["radar"]["score"] = score_radar_points(r["frame_t"], r["det_start"], d[:, C["range"]],
                                                               d[:, C["az_deg"]], track, r["trk"])
-                cp = S / "sync" / "radar_cloud_filtered.npz"
-                if cp.is_file():
-                    z = np.load(cp)
-                    if len(z["start"]) == len(r["frame_t"]) + 1:
-                        xyz = z["xyz"]
-                        report["team_filtered_score"] = score_radar_points(
-                            r["frame_t"], z["start"], np.hypot(xyz[:, 0], xyz[:, 1]),
-                            np.degrees(np.arctan2(xyz[:, 1], xyz[:, 0])), track)
-                        tm = S / "sync" / "radar_cloud_filtered.json"
-                        if tm.is_file():
-                            report["team_filtered_score"]["computed_with"] = json.loads(tm.read_text())
         if "lidar" in sensors and (S / "lidar" / "lidar.pcap").is_file():
             r = lidar_res = run_lidar(S, log=lambda m: print(m, flush=True))
             meta = r.pop("meta")

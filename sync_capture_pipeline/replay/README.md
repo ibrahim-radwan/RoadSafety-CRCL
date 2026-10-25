@@ -82,9 +82,9 @@ apply at once, even while paused.
 
 ## Detections and tracks (2026-10-24)
 
-Our own pipeline, on the GPU, live during replay. The team's processing chain
-is not used or changed here. See `../perception/` and `../run_perception.py`
-for the details and the measured scores.
+The processing library (`../perception/`), on the GPU, live during replay.
+See `../perception/README.md` and `../run_perception.py` for the details and
+the measured scores.
 
 **LiDAR** (`perception/lidar.py`, ~20 ms per sweep on its own, ~35–45 ms
 while all sensors replay):
@@ -124,7 +124,7 @@ be switched off. `--no-detect` turns off the LiDAR detector.
 
 ## Radar points
 
-Choose in the **Radar** group, or `--radar-points {detections,raw,filtered,off}`
+Choose in the **Radar** group, or `--radar-points {detections,raw,off}`
 at start. The points are drawn on the radar bird's-eye view and in the 3D
 panel. *z = 0* (on by default) draws them in the sensor plane, because the
 radar elevation is not verified (see the radar topic page).
@@ -133,17 +133,9 @@ radar elevation is not verified (see the radar topic page).
 - **Raw** (the team's definition: before any filtering). Every range–azimuth
   cell of the current frame above a *raw* threshold (dB above the frame's
   median, a display setting only). No CFAR, no clustering.
-- **Filtered:** the team's `processing/radar_processing.process_frame`
-  output, **unchanged**, coloured by radial velocity.
-  - It is too slow to run live, so it is computed once per session with
-    `radar_cloud.py --session <s>` (or
-    `make_report.py --session <s> --radar-cloud`).
-  - With CuPy (in `rel_1_py_3_8` since 2026-10-24), that is ~38 ms per frame
-    with 3 GPU workers, against ~1 s per frame on the CPU.
-  - The team's GPU and CPU paths use different range-Doppler CFARs. See
-    `radar_cloud.py` and `radar_cloud_filtered.json` (`rd_cfar`).
-  - Saved as `sync/radar_cloud_filtered.npz`, with the team's original values
-    plus the points converted to the pipeline frame (x forward, y left).
+- The former **filtered** option (the team's `process_frame`, pre-computed by
+  `radar_cloud.py`) was retired on 2026-10-25, when that chain was merged into
+  `perception/`. Its general stages live on in the detections.
 - The radar is assumed co-located with the LiDAR; there is no extrinsic
   calibration yet. The radar–LiDAR yaw differs between mountings by a few
   degrees (about −5° to +3° on the reference sessions); that is the team's
@@ -248,7 +240,7 @@ keyframe.
 
 - `perception/radar.RadarDetector` builds the products and detections in one
   pass on the GPU (PyTorch). It uses the repo's config, channel geometry and
-  antenna calibration (`cascaded_radar_capture_pipeline/processing/radar_config.py`).
+  antenna calibration (`perception/core/radar_config.py`).
 - A prefetch thread reads frames ahead of the clock.
 - `RadarProcessor` (the older, products-only processor) is kept unchanged for
   the session report.

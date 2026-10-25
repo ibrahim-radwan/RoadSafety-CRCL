@@ -6,6 +6,27 @@ processing. The reference session for all of them is
 `/mnt/sdcard/sessions/freewalk_ref_02`: a 10-minute scripted walk whose
 segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
 
+> **2026-10-25: one processing pipeline.** As you asked, your early processing
+> chain (`cascaded_radar_capture_pipeline/processing`, `process_frame`) has been
+> merged into this repository's PyTorch library,
+> `sync_capture_pipeline/perception/`, and deleted (it is in git history).
+>
+> - **Your general stages were ported and tested against your code.** They
+>   reproduce your chain's outputs on both of its paths: range/Doppler
+>   processing, all CFAR variants, the sidelobe and consistency filters, the
+>   focused range-azimuth map, Capon/MUSIC/Bartlett, and elevation.
+> - **The single-person "body-shape" stage was retired.** It removed a second
+>   road user at the same range. That covers the angle, cross-cluster and
+>   subject gates, the xyz step, and the single-subject accumulation and
+>   micro-Doppler.
+> - **The radar point cloud is now the multi-object detections** described
+>   at the end of this file. The "filtered" cloud (`radar_cloud_filtered.npz`)
+>   is no longer produced.
+> - **Accumulation and micro-Doppler are to be rebuilt per tracked object.**
+>
+> The findings below that mention `process_frame` describe your former code.
+> They were true of it, and they explain choices in the new pipeline.
+
 ## Radar
 
 1. **Azimuth: your processing is right; it is a convention difference
@@ -121,18 +142,17 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
 - **One command per session:** `make_report.py` aligns the session, writes
   `pairs.csv`, and produces `session_report.html`.
 
-## Radar point cloud (delivered 2026-10-13)
+## Radar point cloud (delivered 2026-10-13, changed 2026-10-25)
 
-- **Raw:** every range–azimuth cell above a display threshold, live, z = 0.
-- **Filtered:** your `process_frame` output, unchanged, pre-computed per
-  session into `sync/radar_cloud_filtered.npz`. It holds your original
-  `xyz_cloud` columns (`team_xyz`) and the same points in the pipeline frame
-  (`xyz`: x forward, y left, i.e. your x negated), indexed per radar frame
-  (`start`). See `replay/README.md`.
-- `process_frame` itself was not modified. Its azimuth sign and x/y
-  convention are converted at display time only.
+- **Raw:** every range–azimuth cell above a display threshold, live in the
+  replay, z = 0.
+- **Filtered:** this was your `process_frame` output, pre-computed into
+  `sync/radar_cloud_filtered.npz`. It was retired with the old chain on
+  2026-10-25: the radar point cloud is now the detections below. Files
+  already on disk are kept, and their scores are in
+  `perception/baseline/scores.json`.
 
-## Our detections (delivered 2026-10-24)
+## The pipeline's detections (delivered 2026-10-24)
 
 - `run_perception.py --session <s>` writes, in `sync/`:
   - `perception_radar.npz`: per frame, detections with a multipath flag,
@@ -142,8 +162,8 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
   - `perception.json`: scores against the LiDAR walker track.
 - The column layouts are in the script's docstring. The frame is x forward,
   y left; times are `t_ref`.
-- They are independent of your chain and do not change it. See
-  `perception/README.md` for the method and the measured scores. On
-  `freewalk_ref_02`, compared with `process_frame` on the same frames:
+- See `perception/README.md` for the method and the measured scores. On
+  `freewalk_ref_02`, compared with your former `process_frame` on the same
+  frames:
   - the walker is detected in 72% of radar frames against 50%;
   - the azimuth spread against the LiDAR is 2.4° against 4.9°.

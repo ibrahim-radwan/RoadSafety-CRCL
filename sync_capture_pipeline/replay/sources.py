@@ -131,8 +131,12 @@ class Source(threading.Thread):
         with self.lock:
             return self.latest
 
-    def stop(self):
+    def stop(self, timeout_s: float = 5.0):
+        """Stop and wait for the thread: a source that wraps a driver (the LiDAR) must have shut it down
+        before Python exits, or the driver's threads call back into a finalising interpreter."""
         self.stop_evt.set()
+        if self.is_alive() and threading.current_thread() is not self:
+            self.join(timeout_s)
 
 
 # ── camera ──────────────────────────────────────────────────────────────────
@@ -265,81 +269,46 @@ class CameraSource:
 
 
 # ── radar ───────────────────────────────────────────────────────────────────
+def bev_lookup(proc, bev_x, bev_y):
+    """Bird's-eye lookup for a radar processor: each (x forward, y left) cell of the grid -> its
+    (range bin, processing-azimuth bin) and whether it is inside the field of view (+-85 deg)."""
+    import torch
+    X, Y = np.meshgrid(bev_x, bev_y, indexing="ij")
+    az_world = np.degrees(np.arctan2(Y, X))
+    ri = np.round(np.hypot(X, Y) / proc.range_res).astype(int)
+    ai = np.clip(np.searchsorted(proc.az_axis, world_azimuth(az_world)), 0, proc.n_az - 1)
+    valid = (X > 0) & (ri < proc.n_range) & (np.abs(az_world) <= 85.0)
+    return (torch.as_tensor(np.where(valid, ri, 0), device=proc.dev),
+            torch.as_tensor(np.where(valid, ai, 0), device=proc.dev), torch.as_tensor(valid, device=proc.dev))
+
+
 class RadarProcessor:
-    """GPU (PyTorch) radar products for one raw frame, using the repo's own
-    configuration, channel geometry and antenna calibration."""
+    """Radar products for the session report (report/collect.py): range-Doppler and a bird's-eye
+    map per frame. It is perception.radar.RadarDetector without detections, without TDM Doppler
+    compensation and with the .cfg calibration only (no in-situ correction), as the report has
+    always computed them. The processing azimuth is positive to the right; the bird's-eye lookup
+    converts it (perception/core/conventions.py)."""
 
-    # Kept for the session report (report/collect.py); the replay uses
-    # perception/radar.py. The processing's azimuth is positive to the RIGHT (the
-    # team's convention: x lateral, positive = right of boresight); the pipeline
-    # frame is y LEFT, so the BEV lookup negates it. A frame conversion, not an
-    # error (verified against the LiDAR on freewalk_ref_02: 90% sign agreement
-    # off boresight, see docs/knowledge/03_radar_firmware_and_dca.md).
-    MIRROR_AZIMUTH = True
+    MIRROR_AZIMUTH = True                     # kept for the report's metadata: world az = - processing az
 
-    def __init__(self, bev_x, bev_y, cfg_path: Path, device="cuda", mirror_azimuth: bool = None):
-        import torch
-        from perception.core.calibration import load_radar_config
-        cfg, corr = load_radar_config(cfg_path)                # the .cfg calibration only (as before)
-        self.cfg, self.torch = cfg, torch
-        self.dev = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.n_tx, self.n_rx, self.n_loops, self.n_s = cfg.num_tx, cfg.num_rx, cfg.num_loops, cfg.num_samples
-        self.n_dev, self.rx_per_dev = cfg.num_devices, cfg.num_rx_per_dev
-        self.corr = torch.as_tensor(np.asarray(corr), dtype=torch.complex64, device=self.dev)
-        # Uniform azimuth array: virtual channels placed by their az position;
-        # overlapping positions are averaged.
-        ch_az, _, _ = cfg.build_channel_table()
-        n_pos = max(c["az"] for c in ch_az) + 1
-        self.n_pos = n_pos
-        self.ch_tx = torch.tensor([c["tx"] for c in ch_az], device=self.dev)
-        self.ch_rx = torch.tensor([c["rx"] for c in ch_az], device=self.dev)
-        self.ch_pos = torch.tensor([c["az"] for c in ch_az], device=self.dev)
-        counts = np.bincount([c["az"] for c in ch_az], minlength=n_pos).astype(np.float32)
-        self.pos_w = torch.as_tensor(1.0 / np.maximum(counts, 1), device=self.dev)
-        self.win_r = torch.hann_window(self.n_s, periodic=False, device=self.dev)
-        self.win_d = torch.hann_window(self.n_loops, periodic=False, device=self.dev)
-        self.win_a = torch.hann_window(n_pos, periodic=False, device=self.dev)
-        self.n_az = cfg.az_fft_size
-        self.range_axis = np.arange(cfg.n_range) * cfg.range_res_m
-        self.az_axis = np.asarray(cfg.az_axis_deg)              # deg, ascending
-        self.dop_axis = np.asarray(cfg.doppler_axis)
-        # BEV lookup: each (x forward, y left) cell -> (range bin, az bin).
-        X, Y = np.meshgrid(bev_x, bev_y, indexing="ij")
-        r = np.hypot(X, Y)
-        az = np.degrees(np.arctan2(Y, X))
-        self.mirror_azimuth = self.MIRROR_AZIMUTH if mirror_azimuth is None else mirror_azimuth
-        az_lookup = -az if self.mirror_azimuth else az
-        ri = np.round(r / cfg.range_res_m).astype(int)
-        ai = np.clip(np.searchsorted(self.az_axis, az_lookup), 0, self.n_az - 1)
-        valid = (X > 0) & (ri < cfg.n_range) & (np.abs(az) <= 85.0)
-        self.bev_ri = torch.as_tensor(np.where(valid, ri, 0), device=self.dev)
-        self.bev_ai = torch.as_tensor(np.where(valid, ai, 0), device=self.dev)
-        self.bev_valid = torch.as_tensor(valid, device=self.dev)
-        self.iq_swap = bool(cfg.iq_swap)
+    def __init__(self, bev_x, bev_y, cfg_path: Path, device="cuda"):
+        from perception.radar import RadarDetector
+        self.det = RadarDetector(cfg_path, device=device, rx_phase_deg=None, doppler_comp=False)
+        self.cfg, self.torch, self.dev = self.det.cfg, self.det.torch, self.det.dev
+        self.range_axis, self.az_axis, self.dop_axis = self.det.range_axis, self.det.az_axis, self.det.dop_axis
+        self.mirror_azimuth = self.MIRROR_AZIMUTH
+        self.bev_ri, self.bev_ai, self.bev_valid = bev_lookup(self.det, bev_x, bev_y)
 
     def process(self, raw: np.ndarray, moving_only: bool = True):
+        """(range-Doppler [doppler, range] dB, bird's-eye [x, y] dB, NaN outside the FOV); also
+        sets last_ra, the range-azimuth map [az, range] dB."""
         torch = self.torch
-        x = torch.as_tensor(raw, device=self.dev).view(self.n_tx * self.n_loops, self.n_dev * self.rx_per_dev,
-                                                      self.n_s, 2).float()
-        iq = torch.complex(x[..., 1], x[..., 0]) if self.iq_swap else torch.complex(x[..., 0], x[..., 1])
-        # TDM: chirp = loop * n_tx + tx  ->  [tx, loop, rx, sample]
-        cube = iq.view(self.n_loops, self.n_tx, self.n_rx, self.n_s).permute(1, 0, 2, 3)
-        cube = cube * self.corr[:, None, :, None]
-        rng = torch.fft.fft(cube * self.win_r, dim=-1)                       # range
-        virt = rng[self.ch_tx, :, self.ch_rx, :]                              # [ch, loop, range]
-        arr = torch.zeros((self.n_pos, self.n_loops, rng.shape[-1]), dtype=virt.dtype, device=self.dev)
-        arr.index_add_(0, self.ch_pos, virt)
-        arr = arr * self.pos_w[:, None, None]                                 # uniform array
-        if moving_only:
-            arr = arr - arr.mean(dim=1, keepdim=True)                         # remove static (zero-Doppler)
-        dop = torch.fft.fftshift(torch.fft.fft(arr * self.win_d[None, :, None], dim=1), dim=1)
-        rd = 10 * torch.log10((dop.abs() ** 2).sum(dim=0) + 1e-6)             # [doppler, range]
-        az = torch.fft.fftshift(torch.fft.fft(dop * self.win_a[:, None, None], n=self.n_az, dim=0), dim=0)
-        ra = 10 * torch.log10((az.abs() ** 2).sum(dim=1) + 1e-6)              # [az, range]
-        self.last_ra = ra.cpu().numpy()          # range-azimuth power, for the raw radar point cloud
+        out = self.det.process(raw, moving_only, detect=False)
+        ra = out["ra"]
+        self.last_ra = ra.cpu().numpy()
         bev = ra[self.bev_ai, self.bev_ri]
         bev = torch.where(self.bev_valid, bev, torch.full_like(bev, float("nan")))
-        return rd.cpu().numpy(), bev.cpu().numpy()
+        return out["rd"].cpu().numpy(), bev.cpu().numpy()
 
 
 class RadarSource(Source):
@@ -368,18 +337,7 @@ class RadarSource(Source):
         print(f"[radar] firmware {variant} ({how}); in-situ RX phase correction: "
               f"{'on' if rx is not None else 'off'}")
         self.proc = RadarDetector(sess.cfg_path, rx_phase_deg=rx)
-        torch = self.proc.torch
-        # BEV lookup: each (x forward, y left) cell -> (range bin, processing azimuth bin)
-        X, Y = np.meshgrid(bev_x, bev_y, indexing="ij")
-        r = np.hypot(X, Y)
-        az_world = np.degrees(np.arctan2(Y, X))
-        ri = np.round(r / self.proc.range_res).astype(int)
-        ai = np.clip(np.searchsorted(self.proc.az_axis, world_azimuth(az_world)), 0, self.proc.n_az - 1)
-        valid = (X > 0) & (ri < self.proc.n_range) & (np.abs(az_world) <= 85.0)
-        dev = self.proc.dev
-        self.bev_ri = torch.as_tensor(np.where(valid, ri, 0), device=dev)
-        self.bev_ai = torch.as_tensor(np.where(valid, ai, 0), device=dev)
-        self.bev_valid = torch.as_tensor(valid, device=dev)
+        self.bev_ri, self.bev_ai, self.bev_valid = bev_lookup(self.proc, bev_x, bev_y)
         self.timing_source = sess.alignment.get("radar", {}).get("timing_source", "")
         self.moving_only = moving_only
         self.ms_per_frame = 0.0
@@ -389,13 +347,6 @@ class RadarSource(Source):
         self.ra_x = (np.cos(az)[:, None] * rr[None, :]).astype(np.float32)     # [az, range]
         self.ra_y = (np.sin(az)[:, None] * rr[None, :]).astype(np.float32)
         self.ra_r = np.broadcast_to(rr[None, :], self.ra_x.shape)
-        # Filtered point cloud: the team's process_frame, pre-computed by radar_cloud.py
-        self.cloud = None
-        cp = session / "sync" / "radar_cloud_filtered.npz"
-        if cp.is_file():
-            d = np.load(cp)
-            if len(d["start"]) == len(self.files) + 1:
-                self.cloud = {k: d[k] for k in ("start", "xyz", "doppler", "power")}
         self.prefetch = FramePrefetcher(self.timeline, self.PREFETCH)
 
     def raw_points(self, ra, thr_db: float, max_range: float):
@@ -404,28 +355,21 @@ class RadarSource(Source):
         m = (rel > thr_db) & (self.ra_r <= max_range) & (self.ra_r > 0.5)
         return np.c_[self.ra_x[m], self.ra_y[m], np.zeros(int(m.sum()), np.float32)], rel[m]
 
-    def filtered_points(self, k: int):
-        """(xyz N x 3, doppler, power) of radar frame k from the team pipeline, or None if not computed."""
-        if self.cloud is None:
-            return None
-        a, b = int(self.cloud["start"][k]), int(self.cloud["start"][k + 1])
-        return self.cloud["xyz"][a:b], self.cloud["doppler"][a:b], self.cloud["power"][a:b]
-
     def span(self):
         return float(self.t[0]), float(self.t[-1])
 
-    def stop(self):
-        super().stop()
+    def stop(self, timeout_s: float = 5.0):
+        super().stop(timeout_s)
         self.prefetch.stop()
 
     def run(self):
         sys.path.insert(0, str(PIPELINE))
         from perception.radar import RADAR_TRACKER, cluster_detections
         from perception.tracking import Tracker
-        self.prefetch.start()
         tracker = Tracker(**RADAR_TRACKER)
         torch = self.proc.torch
-        try:
+        try:                                     # any failure, startup included, shows as self.error
+            self.prefetch.start()
             k_done, mode, gen = -1, None, None
             while not self.stop_evt.is_set():
                 k = int(np.searchsorted(self.t, self.clock.now(), side="right")) - 1
@@ -473,7 +417,7 @@ _LUTS = {}
 def _lut(name: str) -> np.ndarray:
     if name not in _LUTS:
         import matplotlib
-        cmap = matplotlib.cm.get_cmap(name)
+        cmap = matplotlib.colormaps[name]
         _LUTS[name] = (cmap(np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
     return _LUTS[name]
 

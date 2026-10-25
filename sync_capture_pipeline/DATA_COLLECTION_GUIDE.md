@@ -224,9 +224,10 @@ The report is **descriptive**, with no pass/fail. It contains:
 - camera: thumbnails, exposure, drops, IMU;
 - paired cross-sensor snapshots.
 
-Add `--radar-cloud` to also pre-compute the **filtered radar point cloud** with
-the team's processing chain, for the replay. It takes about 1.1× the recording
-time.
+For the radar and LiDAR detections and tracks of a session (for the research
+team, and to score them against the LiDAR walker), run
+`$PY sync_capture_pipeline/run_perception.py --session <s>`, which takes about
+4 minutes for 10 minutes of data. The replay computes them live.
 
 Tests: `$PY -m pytest sync_capture_pipeline/tests`.
 

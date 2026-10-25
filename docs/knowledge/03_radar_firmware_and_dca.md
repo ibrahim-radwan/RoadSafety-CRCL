@@ -68,9 +68,8 @@ This page is the background an agent needs before touching radar code.
     beyond ±8°.
   - The earlier "mirrored" finding came from the replay reading the
     processing azimuth as left-positive.
-  - `RadarProcessor.MIRROR_AZIMUTH` (report), `radar_cloud.py` (`y = −team_x`)
-    and `perception/radar.py` all apply this conversion. Nothing in the team's
-    code needs to change.
+  - The conversion lives in one place, `perception/core/conventions.py`,
+    which the detector, the replay and the report use.
 - **Doppler sign:** positive = receding. 99% sign agreement with the LiDAR
   range rate (corr +0.83 on freewalk_ref_02, +0.98 on stage3).
 - **Weak angular focusing: phase calibration errors, measured in situ**
@@ -95,7 +94,7 @@ This page is the background an agent needs before touching radar code.
   its beam-steering part so as not to absorb it.
 - **TDM-MIMO Doppler phase:** a moving target's phase advances between the 6
   TX slots of a loop. `perception/radar.py` compensates it per Doppler bin. The
-  team's `process_frame` does not.
+  old chain did not.
 - **Multipath ghosts:** a walker produces images at 2× range with 1.9×
   radial velocity (radar → person → rig → person → radar), and images behind
   the walker at the same radial velocity (via walls). `perception/radar.py`
@@ -106,11 +105,12 @@ This page is the background an agent needs before touching radar code.
   - The walker reads ~+13° on freewalk_ref_02.
   - Not corrected: that needs a vertical reference.
 - **Old `.cfg` files implied Q-first.** Corrected: `adcbufCfg -1 0 0 1 1`.
-- **The team's GPU and CPU paths differ.** `process_frame` requests CASO-CFAR
-  on range-Doppler (`force_caso=True`). Without CuPy, the fallback
-  `_cfar_2d_cpu(heat, cfg)` drops that flag and runs `cfg.cfar_method`, which
-  is OS. With CuPy (installed 2026-10-24), `radar_cloud.py` runs the GPU path
-  at ~0.1 s per frame. Clouds made before that used the CPU path.
+- **Processing is `sync_capture_pipeline/perception/`** (PyTorch, GPU).
+  The old radar chain (`process_frame`) was merged into it and deleted on
+  2026-10-25. `perception/radar_chain.py` reproduces the old front end on
+  either of its CFARs. Its GPU path asked for CASO-CFAR on range-Doppler;
+  its CPU fallback silently ran OS. Details in
+  [01](01_status_and_roadmap.md).
 
 ## Flashing (from the Jetson)
 

@@ -59,6 +59,6 @@ Example briefs: `sync_capture_pipeline/handover/`.
 
 | Environment | Used for |
 |---|---|
-| `rel_1_py_3_8` (conda, Python 3.8) | Camera (pyzed), LiDAR wrapper, replay (PyQt5, pyqtgraph, PyOpenGL), report, Stage 3, tests, flashing (pyserial, tqdm, xmodem), our detection (`perception/`, PyTorch), the team's `process_frame` GPU path (CuPy 12.3, added 2026-10-24 on `ibrahim-desktop`) |
+| `rel_1_py_3_8` (conda, Python 3.8) | Camera (pyzed), LiDAR wrapper, replay (PyQt5, pyqtgraph, PyOpenGL), report, Stage 3, tests, flashing (pyserial, tqdm, xmodem), processing and detection (`perception/`, PyTorch) |
 | `/usr/bin/python3` (3.8) | The capture launcher and radar receiver (stdlib only), the web server's launcher |
-| `cascaded-radar` (conda, Python 3.10, NumPy 2, **CuPy 13 for CUDA 11**) | The research team's tools. Not used by this pipeline. Their `process_frame` GPU path also runs in `rel_1_py_3_8` now (CuPy 12.3, the last series for Python 3.8). |
+| `cascaded-radar` (conda, Python 3.10, NumPy 2, CuPy 13) | The old radar chain's environment on the original board. Not needed since the chain was merged into `perception/` (2026-10-25). |

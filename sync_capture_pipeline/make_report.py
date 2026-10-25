@@ -30,9 +30,6 @@ def main() -> int:
     ap.add_argument("--session", type=Path, nargs="+", required=True)
     ap.add_argument("--reuse", action="store_true", help="use <session>/sync/report_data.pkl if present")
     ap.add_argument("--out", type=Path, help="output file (default <session>/session_report.html)")
-    ap.add_argument("--radar-cloud", action="store_true",
-                    help="also pre-compute the filtered radar point cloud (team pipeline) for the replay "
-                         "(radar_cloud.py; about 1.1x the recording time on 10 CPU cores)")
     a = ap.parse_args()
     from report import collect, render
     for S in a.session:
@@ -53,9 +50,6 @@ def main() -> int:
         out = a.out if (a.out and len(a.session) == 1) else S / "session_report.html"
         out.write_text(page, encoding="utf-8")
         print(f"  wrote {out}  ({out.stat().st_size / 1e6:.1f} MB, {time.monotonic() - t0:.0f} s)")
-        if a.radar_cloud:
-            print("  filtered radar point cloud (team pipeline) ...", flush=True)
-            subprocess.run([sys.executable, str(HERE / "radar_cloud.py"), "--session", str(S)], check=True)
     return 0
 
 

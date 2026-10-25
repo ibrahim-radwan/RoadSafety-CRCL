@@ -13,9 +13,9 @@ hardware:
 | Storage | 1 TB SD card (ext4), camera staged on the eMMC; 0.2% camera drops. See [04](04_storage_and_recording.md). |
 | Synchronisation | Offline alignment on CLOCK_MONOTONIC. **Stage 3 offsets measured**: radar +12.65 ± 1.45 ms, camera +23.34 ± 3.28 ms (LiDAR reference). Applied automatically. See [07](07_synchronisation_and_stage3.md). |
 | Validation | `check_session.py` (completeness, pass/fail) runs after every session. `make_report.py` produces a descriptive HTML report per session, with no verdict. |
-| Replay | One window, six panels (camera, LiDAR, LiDAR 3D, radar BEV, range-Doppler, objects), each can be maximised; bird's-eye views fill their panels; live GPU detection and tracking on radar and LiDAR; event strip; radar point cloud (detections, raw, team-filtered). See `sync_capture_pipeline/replay/README.md`. |
-| Detection (ours) | `sync_capture_pipeline/perception/` + `run_perception.py`: GPU radar CFAR (TDM Doppler compensation, in-situ phase correction, multipath-ghost flags), GPU LiDAR objects (local ground, overhead structures removed), Doppler-aware tracking. Scored against the LiDAR walker: see `perception/README.md`. The team's early chain is unchanged so far; it will be merged into this one (see [09](09_working_practices.md)). |
-| Tests | `sync_capture_pipeline/tests/`: 96 report tests, 6 radar-cloud tests and 8 perception tests. Session tests need the reference sessions and skip if absent. |
+| Replay | One window, six panels (camera, LiDAR, LiDAR 3D, radar BEV, range-Doppler, objects), each can be maximised; bird's-eye views fill their panels; live GPU detection and tracking on radar and LiDAR; event strip; radar point cloud (detections, raw). See `sync_capture_pipeline/replay/README.md`. |
+| Processing and detection | One PyTorch library, `sync_capture_pipeline/perception/`, plus `run_perception.py`: radar signal-processing stages (`radar_dsp.py`), GPU radar CFAR (TDM Doppler compensation, in-situ phase correction, multipath-ghost flags), GPU LiDAR objects (local ground, overhead structures removed), Doppler-aware tracking. Scored against the LiDAR walker: see `perception/README.md`. The old radar chain was merged in and deleted on 2026-10-25 (below). |
+| Tests | `sync_capture_pipeline/tests/`: report, perception, baseline (golden frames: ours, and the old chain's frozen outputs) and radar-stage tests. Session tests need the reference sessions and skip if absent. |
 
 ## Reference recordings (not in git)
 
@@ -87,7 +87,17 @@ The plan, agreed with the owner:
 - Our `RadarDetector` (`perception/radar.py`) runs on the same stages; its golden frames and scores are unchanged.
 - Tests: `tests/test_baseline.py`, `tests/test_radar_dsp.py`.
 - **Retired** (owner's decision, 2026-10-25): stage 8's single-person gates, the old xyz cloud, and the single-subject accumulation and micro-Doppler. The pipeline's radar point cloud is our multi-object detections. Accumulation and micro-Doppler are to be rebuilt per tracked object in the techniques phase. The old behaviour stays reproducible from git history and the golden files. |
-| 4. Remove duplicates | Next: delete the old chain (`processing/` except the shims' targets, `gpu_accel.py`, its GUI and CLI tools), `radar_cloud.py` and the replay's "filtered" option; move the report's `RadarProcessor` onto the library. |
+| 4. Remove duplicates | **Done 2026-10-25.**
+- Deleted: the old chain (`cascaded_radar_capture_pipeline/processing/`, including `gpu_accel.py`, its GUI `streaming.py`, `main.py`, `accumulate.py`, `microdoppler.py`); its tools (`live_capture.py`, `sync_replay.py`, `capture/`, the Windows workspace); `radar_cloud.py`, `make_report.py --radar-cloud`, the replay's "filtered" option; the old-chain scripts in `utils/benchmarking_and_frames_analysis/`. All are in git history.
+- The report's `RadarProcessor` is now a thin wrapper over `RadarDetector` (equal within 0.0002 dB).
+- The old chain's outputs stay as frozen references: `golden_team_{cpu,gpu}.npz` (test_baseline.py) and `golden_stages.npz` (test_radar_dsp.py).
+- `cascaded_radar_capture_pipeline/` now holds only the firmware.
+- Verified:
+  - 140 tests pass, including a new headless test of the replay sources;
+  - the report, rebuilt from raw data on `stage3_02`, passes;
+  - the radar scores are unchanged;
+  - the replay runs and exits cleanly.
+- The new test exposed a shutdown crash in the LiDAR source, now fixed: `Source.stop()` waits for the thread. |
 
 What porting the old chain showed (2026-10-25):
 
@@ -141,8 +151,9 @@ What the baseline showed:
   
   Our in-situ correction (`calibration/radar_rx_phase.json`) is provisional
   until their recalibration.
-- **The team's CuPy and CPU paths differ** (CASO vs OS CFAR on
-  range-Doppler). Reported to them. `radar_cloud.py` now uses the GPU path.
+- **The old chain's CuPy and CPU paths differed** (CASO vs OS CFAR on
+  range-Doppler). Reported to the team. The chain is retired;
+  `RadarChain(cfar=...)` reproduces either.
 - Next for detection:
   - a learned LiDAR classifier, or at least a static/moving split from
     tracks;
@@ -157,9 +168,9 @@ What the baseline showed:
   packet delay, which loses data at 8 fps.
 - Only `r075m_v2` and `r075m_v2_8fps` are hardware-proven. Run the acceptance
   check before using any other variant.
-- Done 2026-10-24: CuPy (12.3, CUDA 11) is in `rel_1_py_3_8`. The team's
-  `process_frame` runs its GPU path at ~0.1 s per frame, and `radar_cloud.py`
-  uses it (38 ms per frame with 3 workers).
+- CuPy (12.3) was installed in `rel_1_py_3_8` on `ibrahim-desktop`
+  (2026-10-24) for the old chain's GPU path. Nothing uses it since the
+  merge.
 - Possible later work: a CI subset that runs without hardware or data. The
   synthetic perception tests already do.
 - Possible later work: GPU LiDAR rendering in the replay. The numpy render

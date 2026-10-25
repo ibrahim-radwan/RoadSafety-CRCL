@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-baseline.py - the frozen reference for merging the old radar chain into this library.
+baseline.py - the frozen reference for the radar-chain merge (2026-10-25), and the regression
+check for every later change.
 
-Two kinds of reference:
-
-golden   per-frame outputs on a fixed set of frames, for equivalence tests while porting:
-           the old chain (cascaded_radar_capture_pipeline/processing.process_frame) on BOTH of
-           its paths - CPU (no CuPy: OS-CFAR on range-Doppler) and GPU (CuPy: CASO) - and our
-           detector (perception/radar.py). Saved in <session>/sync/baseline/ (not in git: tens
-           of MB per session):
-             golden_team_cpu.npz, golden_team_gpu.npz   RD_raw, RD_mti, RA, RE, rd_det, ra_det,
-                                                        rd_thresh, ra_thresh [frames, ...];
-                                                        xyz [N, 7] indexed by xyz_start [frames + 1]
-             golden_ours.npz                            rd, ra [frames, ...]; det [N, DET_COLS]
-                                                        indexed by det_start
-             golden.json                                frames, git commit, cfg, calibration hash
-scores   the LiDAR-referenced scores of every session (run_perception.py's metrics) for our
-         pipeline and for the old chain's filtered clouds, in perception/baseline/scores.json
-         (in git, stamped with the git commit).
+golden   per-frame outputs on a fixed set of frames, in <session>/sync/baseline/ (not in git):
+           golden_team_cpu.npz, golden_team_gpu.npz   the old chain (process_frame) on its CPU path
+                                                      (OS-CFAR) and its CuPy path (CASO): RD_raw,
+                                                      RD_mti, RA, RE, rd_det, ra_det, rd_thresh,
+                                                      ra_thresh [frames, ...]; xyz [N, 7] by
+                                                      xyz_start. FROZEN: made on 2026-10-25 before
+                                                      the old chain was deleted; radar_chain.py
+                                                      must keep reproducing them (test_baseline.py)
+           golden_stages.npz (freewalk_ref_02)        the old CFAR variants and beamformers, with
+                                                      their inputs (test_radar_dsp.py)
+           golden_ours.npz                            our detector: rd, ra [frames, ...]; det
+                                                      [N, DET_COLS] by det_start. `golden` re-makes
+                                                      this one after a deliberate change
+           golden.json                                frames, git commit, cfg, calibration hash
+scores   the LiDAR-referenced scores of every session (run_perception.py's metrics) for our pipeline
+         and, where their clouds are on disk, the old chain's (team_gpu / team_cpu), in
+         perception/baseline/scores.json (in git, stamped with the git commit).
 compare  scores the sessions again from their current outputs and prints the change against
          scores.json: the regression check before any algorithm replaces another.
 
@@ -26,15 +28,12 @@ compare  scores the sessions again from their current outputs and prints the cha
     python perception/baseline.py compare --session <s> [<s> ...]
 
 Inputs per session: sync/perception_{radar,lidar}.npz (run_perception.py),
-sync/radar_cloud_filtered.npz (radar_cloud.py; its .json says which path made it) and, when
-present, sync/radar_cloud_filtered_cpu.npz (the old CPU-path cloud kept for comparison),
-sync/timing_lidar_track.npz (make_report.py).
+sync/timing_lidar_track.npz (make_report.py); the old chain's clouds
+sync/radar_cloud_filtered{,_cpu}.npz where they were made before 2026-10-25.
 """
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import json
 import subprocess
 import sys
@@ -46,13 +45,11 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 PIPELINE = HERE.parent
 REPO = PIPELINE.parent
-TEAM = REPO / "cascaded_radar_capture_pipeline"
 SCORES = HERE / "baseline" / "scores.json"
 sys.path.insert(0, str(PIPELINE))
 from perception.core.calibration import file_md5 as file_hash                 # noqa: E402
 from perception.core.session import Session                                    # noqa: E402
 
-TEAM_FIELDS = ("RD_raw", "RD_mti", "RA", "RE", "rd_det", "ra_det", "rd_thresh", "ra_thresh")
 # sessions used to measure calibration/radar_rx_phase.json: their radar scores are in-sample
 CALIBRATION_SESSIONS = {"stage3_02", "stage3_03"}
 
@@ -84,49 +81,15 @@ def pick_frames(S: Path, n: int) -> list:
     return sorted(set(int(k) for k in pick))
 
 
-def _team_golden(S: Path, frames: list, path: str, out: Path):
-    """Runs in its own process: the CPU path needs CuPy hidden before the team code is imported."""
-    if path == "cpu":
-        sys.modules["cupy"] = None
-    sys.path.insert(0, str(TEAM))
-    from processing import gpu_accel
-    from processing.radar_processing import process_frame
-    from perception.core.calibration import load_radar_config
-    from perception.core.radar_io import read_frame
-    if (path == "gpu") != bool(gpu_accel.GPU_AVAILABLE):
-        raise SystemExit(f"team chain: asked for the {path} path but GPU_AVAILABLE={gpu_accel.GPU_AVAILABLE}")
-    sess = Session(S)
-    cfg, corr = load_radar_config(sess.cfg_path)
-    cfg.quiet_mode = True
-    acc = {k: [] for k in TEAM_FIELDS}
-    xyz, ms = [], []
-    for k in frames:
-        with contextlib.redirect_stdout(io.StringIO()):
-            cube = read_frame(str(sess.radar.path(k)), cfg, 0)
-            t0 = time.perf_counter()
-            res = process_frame(cube, cfg, corr, verbose=False)
-            ms.append(1e3 * (time.perf_counter() - t0))
-        for f in TEAM_FIELDS:
-            v = getattr(res, f)
-            acc[f].append(np.zeros(0, np.float32) if v is None else np.asarray(v))
-        x = res.xyz_cloud
-        xyz.append(np.zeros((0, 7), np.float32) if x is None else np.asarray(x, np.float32).reshape(-1, 7))
-    n = np.array([len(x) for x in xyz])
-    np.savez_compressed(out, frames=np.array(frames), xyz=np.concatenate(xyz), xyz_start=np.r_[0, np.cumsum(n)],
-                        ms=np.array(ms), **{f: np.stack(v) for f, v in acc.items()})
-    print(f"  team {path}: {len(frames)} frames, median {np.median(ms[1:] or ms):.0f} ms/frame -> {out.name}")
-
-
 def golden(S: Path, n: int):
     from perception.radar import RX_PHASE_FILE, RadarDetector, rx_phase_for
     d = S / "sync" / "baseline"
     d.mkdir(exist_ok=True)
     frames = pick_frames(S, n)
-    print(f"=== {S.name}: {len(frames)} golden frames")
-    for path in ("cpu", "gpu"):
-        subprocess.run([sys.executable, __file__, "_team", "--session", str(S), "--path", path,
-                        "--frames", ",".join(map(str, frames)), "--out", str(d / f"golden_team_{path}.npz")],
-                       check=True)
+    gj = d / "golden.json"
+    if gj.is_file():                       # keep the frames of the frozen old-chain files
+        frames = json.loads(gj.read_text())["frames"]
+    print(f"=== {S.name}: {len(frames)} golden frames (ours)")
     sess = Session(S)
     variant = sess.variant
     det = RadarDetector(sess.cfg_path, rx_phase_deg=rx_phase_for(variant))
@@ -141,7 +104,8 @@ def golden(S: Path, n: int):
     meta = {"session": S.name, "frames": frames, "git_commit": git_commit(), "created": time.strftime("%Y-%m-%d"),
             "cfg": sess.cfg_path.name, "firmware": variant,
             "rx_phase_file_md5": file_hash(RX_PHASE_FILE),
-            "note": "team_cpu: process_frame without CuPy (OS-CFAR on range-Doppler); team_gpu: with CuPy (CASO)"}
+            "note": "golden_team_cpu/gpu: the old chain's process_frame without / with CuPy (OS / CASO "
+                    "CFAR on range-Doppler), frozen 2026-10-25"}
     (d / "golden.json").write_text(json.dumps(meta, indent=2) + "\n")
 
 
@@ -229,15 +193,8 @@ def main() -> int:
             p.add_argument("--frames", type=int, default=20)
         if name == "scores":
             p.add_argument("--write", action="store_true", help=f"store in {SCORES.relative_to(PIPELINE)}")
-    p = sub.add_parser("_team")                                    # internal: one team-chain path per process
-    p.add_argument("--session", type=Path, required=True)
-    p.add_argument("--path", choices=["cpu", "gpu"], required=True)
-    p.add_argument("--frames", required=True)
-    p.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
-    if a.cmd == "_team":
-        _team_golden(a.session, [int(k) for k in a.frames.split(",")], a.path, a.out)
-    elif a.cmd == "golden":
+    if a.cmd == "golden":
         for S in a.session:
             golden(S, a.frames)
     else:

@@ -84,6 +84,17 @@ Each item cost real debugging time. Read before changing the related code.
   while holding the GIL. The replay froze, and even a screenshot timer could
   not fire. Use scipy's `csgraph` (C, releases quickly) for small clustering
   jobs.
+- **A replay source must join its thread in `stop()`.** The LiDAR source
+  wraps rs_driver, whose threads call back into Python. If the process
+  exits while that thread still runs, pybind11 aborts ("dec_ref() is being
+  called while the GIL is either not held or invalid") and the process
+  dumps core. Before 2026-10-25 a 0.3 s sleep in the replay hid this; the
+  new headless source test exposed it. `Source.stop()` now joins.
+- **Cutting a block of code by text range can take a neighbour with it.**
+  Removing the "filtered" cloud from `RadarSource.__init__` also removed the
+  read-ahead line just below it. Unit and score tests passed; only the
+  replay failed. `tests/test_replay_sources.py` now starts the replay's
+  sources headless.
 - **Profile GPU code with CUDA synchronised.** Without it, the time lands on
   the first sync point (`torch.nonzero`, `.cpu()`) and looks like CPU time.
 - **Sessions on NTFS through FUSE are slow.** On the external drive, a 3 MB
