@@ -81,8 +81,35 @@ The plan, agreed with the owner:
 |---|---|
 | 1. Baseline | **Done 2026-10-25.** `perception/baseline.py`. Scores of all 7 reference sessions in `perception/baseline/scores.json` (git), for ours and the old chain's clouds on both paths. Golden per-frame outputs of 20 frames on `freewalk_ref_02`, `stage3_02` and `run_20261014_1326` (`<session>/sync/baseline/`, not in git). Our detector's regression test: `tests/test_baseline.py`. |
 | 2. Shared core | **Done 2026-10-25.** `perception/core/`: `radar_config`, `radar_io` (both moved from the old chain, with history), `calibration`, `lidar_io`, `session`, `conventions`. The replay, `run_perception.py`, `radar_cloud.py`, `baseline.py`, `estimate_rx_phase.py` and the report's `RadarProcessor` use it. The old chain reads its config and frames through shims. Verified: no output changes (the old chain reproduces its golden frames exactly on both paths; our golden frames and scores are unchanged). |
-| 3. Port the old chain's stages | Capon/MUSIC, sidelobe/consistency filters, focus mask, elevation, accumulation, micro-Doppler. |
+| 3. Port the old chain's stages | **In progress.** Done 2026-10-25:
+- `perception/radar_dsp.py`: every general stage of `process_frame` in PyTorch.
+- `perception/radar_chain.py`: those stages composed as the old front end. It reproduces the golden frames of both old paths (all maps within 0.01 dB, identical range-Doppler detections) at ~21 ms/frame.
+- Tests: `tests/test_baseline.py` and `tests/test_radar_dsp.py`.
+
+Pending:
+- the single-subject "body-shape" gates of stage 8, and the xyz cloud (a decision);
+- multi-frame accumulation and micro-Doppler (`accumulate.py`, `microdoppler.py`). |
 | 4. Remove duplicates | `gpu_accel.py`, `RadarProcessor`; the report on the library. |
+
+What porting the old chain showed (2026-10-25):
+
+- **Its Bartlett beamformer could never run:** `_az_bartlett`'s `einsum`
+  reads the [azimuth, channel] steering matrix as [channel, azimuth] and
+  raises `ValueError` for any input. The port computes the intended aᴴRa.
+- **It processes only to 16 m** (`max_range_m`), though the firmware reaches
+  75 m. It also requires 10 dB above the CFAR threshold plus a 12 dB power
+  floor. These are parameters of `RadarChain`, not fixed.
+- **Its CPU and GPU paths differ in more than the CFAR:**
+  - In range bins without detections, the range-azimuth focus mask takes the
+    top 3 of nearly equal noise cells, and float differences pick different
+    ones.
+  - MUSIC is ill-conditioned where a range bin has no clear signal.
+
+  Neither matters for detection. The port agrees with the GPU path.
+- **Stage 8 is built for one person.** It keeps azimuth peaks only within
+  0.3 m of the peak nearest boresight, drops a second cluster at the same
+  range more than 0.3 m to the side, and gates everything to within 0.9–3 m
+  of the tracked subject. On a road that removes a second road user.
 
 What the baseline showed:
 

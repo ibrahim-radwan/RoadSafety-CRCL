@@ -70,3 +70,33 @@ def test_team_chain_reproduces_golden(S, path, tmp_path):
     n = np.load(out)
     for f in ("RD_raw", "RD_mti", "RA", "RE", "rd_det", "ra_det", "rd_thresh", "ra_thresh", "xyz", "xyz_start"):
         np.testing.assert_allclose(n[f], g[f], rtol=0, atol=1e-4, err_msg=f)
+
+
+@pytest.mark.parametrize("path", ["gpu", "cpu"])
+@pytest.mark.parametrize("S", SESSIONS, ids=[s.name for s in SESSIONS])
+def test_radar_chain_reproduces_team_golden(S, path):
+    """perception/radar_chain.py (the old chain's front end in PyTorch) must give the old chain's
+    golden maps and range-Doppler detections: path "gpu" = CASO-CFAR, "cpu" = OS-CFAR.
+
+    The CPU path's range-azimuth map is compared on the range bins with detections: in the others
+    the focus mask falls back to the top 3 of nearly equal noise bins, and a 1e-4 dB arithmetic
+    difference picks a different one (the old chain's own two paths differ there; the port agrees
+    with the GPU path everywhere)."""
+    from perception.core.calibration import load_radar_config
+    from perception.core.session import Session
+    from perception.radar_chain import RadarChain
+    gp = S / "sync" / "baseline" / f"golden_team_{path}.npz"
+    if not gp.is_file():
+        pytest.skip(f"no {gp.name}")
+    g = np.load(gp)
+    sess = Session(S)
+    cfg, corr = load_radar_config(sess.cfg_path)
+    chain = RadarChain(cfg, corr, cfar="caso" if path == "gpu" else "os")
+    for i, k in enumerate(g["frames"]):
+        o = {f: v.cpu().numpy() for f, v in chain.process(sess.radar.raw(int(k))).items()}
+        for f in ("RD_raw", "RD_mti", "rd_thresh", "RE"):
+            np.testing.assert_allclose(o[f], g[f][i], atol=0.01, err_msg=f"{f}, frame {k}")
+        rows = slice(None) if path == "gpu" else o["rd_det"].any(axis=0)
+        ra, ga = o["RA"][rows], g["RA"][i][rows]
+        np.testing.assert_allclose(ra, ga, atol=0.05, err_msg=f"RA, frame {k}")
+        assert (o["rd_det"] == g["rd_det"][i]).all(), f"rd_det, frame {k}"

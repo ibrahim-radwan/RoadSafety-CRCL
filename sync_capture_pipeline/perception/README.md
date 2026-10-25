@@ -12,6 +12,16 @@ reference-session scores. See `docs/knowledge/09_working_practices.md`.
 | File | What |
 |---|---|
 | `core/` | **The shared core** (merge step 2; numpy only, no torch, so the report and capture-side tools can import it). See the table below. |
+| `radar_dsp.py` | **Radar signal-processing stages in PyTorch** (merge step 3), ported from the old chain and tested against it:
+- range and Doppler FFT, MTI, DC notch;
+- non-coherent power;
+- Doppler-stripe suppression;
+- CFAR (CA, CASO, CAGO, OS);
+- range-Doppler sidelobe pruning, the cross-channel consistency check;
+- the range-azimuth focus mask, the focused range-azimuth map;
+- Capon, MUSIC, Bartlett;
+- the elevation map. |
+| `radar_chain.py` | `RadarChain`: the old chain's front end (`process_frame` stages 1–7 and 9) composed from those stages. It reproduces the old chain's golden frames on both paths (`cfar="caso"` or `"os"`), at ~21 ms/frame against ~100 ms (old GPU path) and ~1 s (old CPU path). |
 | `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
 | `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, oriented boxes, size class. ~20 ms. |
 | `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation. For radar, Doppler is an EKF measurement plus a consistency check. |
