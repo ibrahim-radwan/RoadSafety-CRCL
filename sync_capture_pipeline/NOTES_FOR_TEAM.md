@@ -156,7 +156,9 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
 
 - `run_perception.py --session <s>` writes, in `sync/`:
   - `perception_radar.npz`: per frame, detections with a multipath flag,
-    objects and tracks;
+    objects and tracks. Since 2026-10-26, each track row also carries its
+    micro-Doppler features: torso velocity, Doppler spread, and cadence. The
+    cadence is experimental.
   - `perception_lidar.npz`: per sweep, objects with boxes and size classes,
     and tracks;
   - `perception.json`: scores against the LiDAR walker track.

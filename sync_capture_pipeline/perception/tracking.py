@@ -30,7 +30,7 @@ H_POS = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], float)
 
 class Track:
     __slots__ = ("id", "x", "P", "hits", "misses", "age", "confirmed", "payload", "t", "history", "vr_innov",
-                 "meas")
+                 "meas", "meas_idx")
 
     def __init__(self, tid: int, xy, t: float, pos_var: float, vel_var: float, payload=None, vr=None):
         self.id = tid
@@ -43,6 +43,7 @@ class Track:
         self.payload, self.t = payload, t
         self.history = [(t, float(xy[0]), float(xy[1]))]
         self.vr_innov = 0.0
+        self.meas_idx = -1                              # index of the measurement assigned at the last step, -1 none
         self.meas = [(t, float(np.hypot(*xy)), np.nan if vr is None else float(vr))]   # (t, range, v_r) as measured
 
 
@@ -144,7 +145,7 @@ class Tracker:
                 tr.P = (np.eye(4) - K @ Hm) @ tr.P
                 tr.hits += 1
                 tr.misses = 0
-                tr.payload, tr.t = payloads[j], t
+                tr.payload, tr.t, tr.meas_idx = payloads[j], t, j
                 tr.history.append((t, float(tr.x[0]), float(tr.x[1])))
                 del tr.history[:-self.hist_len]
                 assigned.add(j)
@@ -152,6 +153,7 @@ class Tracker:
         live = []
         for tr in self.tracks:
             if tr.t != t:                                # not updated this step
+                tr.meas_idx = -1
                 tr.misses += 1
                 tr.age += 1
             consistent = radial is None or tr.vr_innov < self.max_vr_innov
@@ -178,6 +180,7 @@ class Tracker:
             if j not in assigned:
                 self.tracks.append(Track(self._next, meas[j], t, *self.init_P, payload=payloads[j],
                                          vr=None if radial is None else radial[j]))
+                self.tracks[-1].meas_idx = j
                 self._next += 1
         return self.tracks
 

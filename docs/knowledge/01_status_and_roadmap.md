@@ -155,10 +155,12 @@ What the baseline showed:
 - **The old chain's CuPy and CPU paths differed** (CASO vs OS CFAR on
   range-Doppler). Reported to the team. The chain is retired;
   `RadarChain(cfar=...)` reproduces either.
-- **Techniques phase (from 2026-10-26).** Done so far: LiDAR density-based
-  clustering; the tracker vectorised (3× faster with many tracks).
+- **Techniques phase (from 2026-10-26).** Done so far:
+  - LiDAR density-based clustering;
+  - the tracker vectorised (3× faster with many tracks);
+  - per-track radar accumulation and micro-Doppler (`perception/track_features.py`;
+    cadence experimental).
 - Next for detection:
-  - per-object accumulation and micro-Doppler (radar, per track);
   - a learned LiDAR classifier, or at least a static/moving split from
     tracks (walls now break into more pieces, ~37 objects per sweep);
   - camera detection (needs a model and the team's camera extrinsics for

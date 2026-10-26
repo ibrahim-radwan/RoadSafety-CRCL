@@ -14,7 +14,10 @@ reported while it is updated (radar: and while its Doppler agrees with its motio
 Writes, in <session>/sync/:
     perception_radar.npz   frame_t [F], det_start [F+1], det [N, 9] (radar.DET_COLS),
                            obj_start [F+1], obj [M, 8] (x, y, range, az_deg, v_r, power_db, n, extent),
-                           trk [T, 8] (frame, id, x, y, vx, vy, reported, hits), noise_db [F]
+                           trk [T, 11] (frame, id, x, y, vx, vy, reported, hits, v_torso, spread,
+                           cadence_hz): the last three are the track's micro-Doppler features
+                           (perception/track_features.py; NaN when not measured this frame;
+                           cadence is experimental), noise_db [F]
     perception_lidar.npz   sweep_t [S], obj_start [S+1], obj [M, 13] (lidar.OBJ_COLS),
                            trk [T, 9] (sweep, id, x, y, vx, vy, reported, hits, cls), ground_z [S]
     perception.json        parameters, timings, and the scores below
@@ -44,6 +47,7 @@ from perception.core.session import Session, target_at                         #
 from perception.lidar import CLASSES, LIDAR_TRACKER, O, LidarDetector          # noqa: E402
 from perception.radar import (C, DET_COLS, RADAR_TRACKER, RadarDetector, cluster_detections,  # noqa: E402
                               rx_phase_for)
+from perception.track_features import TrackFeatures                            # noqa: E402
 from perception.tracking import Tracker                                         # noqa: E402
 
 
@@ -61,15 +65,20 @@ def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
     det = RadarDetector(sess.cfg_path, rx_phase_deg=rx)
     tl = sess.radar
     tracker = Tracker(**RADAR_TRACKER)
+    feats = TrackFeatures(det.range_axis, det.az_axis, det.dop_axis)
     dets, objs, trks, noise = [], [], [], []
     t0 = time.monotonic()
     for k in range(len(tl)):
         out = det.process(tl.raw(k))
         d = out["detections"]
-        _, ob = cluster_detections(d)
+        lab, ob = cluster_detections(d)
         tracker.update(float(tl.t[k]), ob[:, :2], list(ob[:, 4]), radial=ob[:, 4])
+        f = feats.update(float(tl.t[k]), tracker.tracks, d, lab, out["p_az"])
         dets.append(d); objs.append(ob); noise.append(out["noise_db"])
-        trks += _trk_rows(k, tracker)
+        nan3 = {"v_torso": np.nan, "spread": np.nan, "cadence_hz": None}
+        trks += [row + [f.get(tr.id, nan3)["v_torso"], f.get(tr.id, nan3)["spread"],
+                        np.nan if f.get(tr.id, nan3)["cadence_hz"] is None else f[tr.id]["cadence_hz"]]
+                 for row, tr in zip(_trk_rows(k, tracker), tracker.tracks)]
         if k % 1000 == 0:
             log(f"  radar {k}/{len(tl)}  {time.monotonic() - t0:.0f} s")
     el = time.monotonic() - t0
@@ -78,7 +87,7 @@ def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
            "det_start": np.r_[0, np.cumsum(nd)], "det": np.concatenate(dets) if nd.sum() else
            np.zeros((0, len(DET_COLS)), np.float32), "obj_start": np.r_[0, np.cumsum(no)],
            "obj": np.concatenate(objs) if no.sum() else np.zeros((0, 8), np.float32),
-           "trk": np.asarray(trks, np.float32).reshape(-1, 8), "noise_db": np.array(noise)}
+           "trk": np.asarray(trks, np.float32).reshape(-1, 11), "noise_db": np.array(noise)}
     res["meta"] = {"variant": variant, "rx_phase_deg": rx, "frames": len(tl), "seconds": round(el, 1),
                    "ms_per_frame": round(1e3 * el / max(len(tl), 1), 1),
                    "detections_per_frame": round(float(nd.mean()), 2), "objects_per_frame": round(float(no.mean()), 2)}

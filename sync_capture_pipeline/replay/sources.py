@@ -319,7 +319,8 @@ class RadarSource(Source):
         bev             bird's-eye power on the (bev_x, bev_y) grid, NaN outside the FOV
         ra              range-azimuth map [az, range] dB (processing azimuth order)
         det             detections (perception.radar.DET_COLS), multipath ghosts flagged
-        tracks          [(id, x, y, vx, vy, v_r, age)] confirmed tracks
+        tracks          [(id, x, y, vx, vy, v_r, hits, micro-Doppler features or None,
+                         accumulated points [N, 5])] reported tracks
     """
     name_ = "radar"
     PREFETCH = 12                       # frames read ahead (slow disks: NTFS/FUSE, USB)
@@ -366,7 +367,9 @@ class RadarSource(Source):
         sys.path.insert(0, str(PIPELINE))
         from perception.radar import RADAR_TRACKER, cluster_detections
         from perception.tracking import Tracker
+        from perception.track_features import TrackFeatures
         tracker = Tracker(**RADAR_TRACKER)
+        feats = TrackFeatures(self.proc.range_axis, self.proc.az_axis, self.proc.dop_axis)
         torch = self.proc.torch
         try:                                     # any failure, startup included, shows as self.error
             self.prefetch.start()
@@ -385,6 +388,7 @@ class RadarSource(Source):
                     continue
                 if gen != self.clock.seek_gen or k < k_done or k > k_done + 8:
                     tracker.reset()                     # a jump: tracks start over
+                    feats.reset()
                 gen = self.clock.seek_gen
                 raw = self.prefetch.get(k)
                 t0 = time.perf_counter()
@@ -393,9 +397,12 @@ class RadarSource(Source):
                 bev = torch.where(self.bev_valid, bev, torch.full_like(bev, float("nan")))
                 rd, bev, ra = out["rd"].cpu().numpy(), bev.cpu().numpy(), out["ra"].cpu().numpy()
                 det = out["detections"]
-                _, ob = cluster_detections(det)
-                tracker.update(float(self.t[k]), ob[:, :2], list(ob[:, 4]), radial=ob[:, 4])
-                tracks = [(tr.id, tr.x[0], tr.x[1], tr.x[2], tr.x[3], float(tr.payload or 0.0), tr.hits)
+                lab, ob = cluster_detections(det)
+                tk = float(self.t[k])
+                tracker.update(tk, ob[:, :2], list(ob[:, 4]), radial=ob[:, 4])
+                fs = feats.update(tk, tracker.tracks, det, lab, out["p_az"])
+                tracks = [(tr.id, tr.x[0], tr.x[1], tr.x[2], tr.x[3], float(tr.payload or 0.0), tr.hits,
+                           fs.get(tr.id), feats.accumulated(tr.id, tk, tr.x[2:]))
                           for tr in tracker.reported()]
                 self.ms_per_frame = (time.perf_counter() - t0) * 1e3
                 k_done, mode = k, self.moving_only

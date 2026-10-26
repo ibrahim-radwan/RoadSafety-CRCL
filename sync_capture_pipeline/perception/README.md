@@ -29,6 +29,7 @@ See `docs/knowledge/01_status_and_roadmap.md`.
 | `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms, built on the `radar_dsp.py` stages. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
 | `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, density-based clustering, oriented boxes, size class. ~23 ms. |
 | `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation; prediction, gating and duplicate merging vectorised over all tracks (~2.5 ms with 45 LiDAR tracks). For radar, Doppler is an EKF measurement plus a consistency check. |
+| `track_features.py` | `TrackFeatures`: per radar track, motion-compensated **accumulation** of its detections (last 1 s) and a rolling **micro-Doppler** spectrogram at its cells → torso velocity, Doppler spread (limbs), cadence (experimental). Replaces the old single-subject `accumulate.py`/`microdoppler.py`. |
 | `estimate_rx_phase.py` | The in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. |
 | `baseline.py` | The reference: golden per-frame outputs (the old chain's, frozen; ours) and the scores of every reference session (`baseline/scores.json`); `compare` is the regression check. |
 | `../run_perception.py` | A whole session → `sync/perception_{radar,lidar}.npz` and `sync/perception.json` (scores). |
@@ -104,6 +105,15 @@ python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden fr
    weighted 1 m per 4 m/s, so a walker's limbs stay one object.
 8. Tracks: Doppler-aware. A track whose Doppler contradicts its motion is not
    reported.
+9. **Per-track features** (`track_features.py`, 2026-10-26):
+   - **Accumulation:** about 21 points per walker over 1 s, against a few per
+     frame (`freewalk_ref_02`).
+   - **Micro-Doppler** on the walker: the torso trace and the limb flashes
+     (to about ±2.5 m/s) are clear.
+   - **Cadence is experimental.** On the walker, 4 s windows give about
+     2.0 Hz (the step) in some windows and about 1.0 Hz (the stride) in
+     others, and often none. The waveform limits it: ~13 ms coherent dwell
+     per frame, 0.15 m/s Doppler bins, 8 frames/s.
 
 Conventions, verified against the LiDAR walker:
 

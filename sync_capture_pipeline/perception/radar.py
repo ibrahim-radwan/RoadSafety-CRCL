@@ -171,7 +171,7 @@ class RadarDetector:
         az = dsp.az_spectrum(dop, self.win_a, self.n_az)                        # [dop, range, az]
         p_az = az.real ** 2 + az.imag ** 2
         ra = 10 * torch.log10(p_az.sum(dim=0).T + 1e-6)                          # [az, range]
-        out = {"rd": rd, "ra": ra}
+        out = {"rd": rd, "ra": ra, "p_az": p_az}             # p_az: [doppler, range, az] linear power (GPU)
         if detect:
             dets, noise = self._detect(p_az, dop, el_dop, moving_only)
             out.update(detections=dets, noise_db=noise)

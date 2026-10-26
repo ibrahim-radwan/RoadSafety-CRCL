@@ -235,10 +235,12 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         trk = pg.ScatterPlotItem(size=14, symbol="d", pen=pg.mkPen((255, 255, 255), width=1.5),
                                  brush=pg.mkBrush(42, 120, 214, 200))
         trk.setZValue(15)
-        for it in (dets, ghosts, rpts, trk):
+        acc = pg.ScatterPlotItem(size=4, pen=None, brush=pg.mkBrush(150, 200, 255, 170))   # tracks' accumulated points
+        acc.setZValue(13)
+        for it in (dets, ghosts, rpts, acc, trk):
             p.addItem(it)
         items["radar_bev"] = dict(plot=p, img=img, fov=fov, tgt=tgt, dets=dets, ghosts=ghosts, pts=rpts, trk=trk,
-                                  labels=[], widget=w)
+                                  acc=acc, labels=[], widget=w)
         panels["radar_bev"] = Panel("radar_bev", "Radar BEV", w, toggle_max)
         bottom.addWidget(panels["radar_bev"].frame)
         w, p = _plot(pg, "radial velocity (m/s, + = receding)", "range (m)")
@@ -641,7 +643,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 rr["img"].setImage(np.zeros((2, 2), np.float32), autoLevels=False, levels=(0, 1))
                 rr["img"].setRect(rd_rect)
                 panels["radar_bev"].set("Radar BEV", "no data at this time (before the radar's first frame)")
-                for k_ in ("dets", "ghosts", "pts", "trk"):
+                for k_ in ("dets", "ghosts", "pts", "trk", "acc"):
                     rb[k_].setData([], [])
             mode_pts = rctl["mode"].currentData()
             if rad and changed("radar", (rad["k"], mode_pts, rctl["thr"].value(), dctl["tracks"].isChecked())):
@@ -687,6 +689,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                                  f"raw: {len(xyz):,} cells > {rctl['thr'].value()} dB above floor")
                 trs = rad["tracks"] if dctl["tracks"].isChecked() else []
                 rb["trk"].setData([t_[2] for t_ in trs], [t_[1] for t_ in trs])
+                accp = [t_[8] for t_ in trs if len(t_[8])]
+                accp = np.concatenate(accp) if accp else np.zeros((0, 5), np.float32)
+                rb["acc"].setData(accp[:, 1], accp[:, 0])
                 pool = text_pool("radar_bev", len(trs), (140, 190, 255))
                 for i_, t_ in enumerate(pool):
                     if i_ < len(trs):
@@ -699,8 +704,11 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
             radar_pts = state.get("radar_pts") if rad else None
             if rad:
                 for tr in rad["tracks"]:
-                    tid, x, y, vx, vy, vr, hits = tr
-                    rows.append(("radar", f"R{tid}", "moving", np.hypot(x, y), np.degrees(np.arctan2(y, x)),
+                    tid, x, y, vx, vy, vr, hits, fe, _acc = tr
+                    md = "moving"
+                    if fe is not None:                   # micro-Doppler: spread (limbs), cadence (experimental)
+                        md = f"\u00b5D \u00b1{fe['spread']:.1f}" + (f" {fe['cadence_hz']:.1f}Hz" if fe["cadence_hz"] else "")
+                    rows.append(("radar", f"R{tid}", md, np.hypot(x, y), np.degrees(np.arctan2(y, x)),
                                  np.hypot(vx, vy), vr, RADAR_C))
 
         # 3D
