@@ -22,6 +22,8 @@ import torch
 import torch.nn.functional as F
 
 _WIN = {}
+_APERTURE = {}
+_DFT = {}
 
 
 # ── basics ──────────────────────────────────────────────────────────────────
@@ -66,6 +68,19 @@ def doppler_fft(x: torch.Tensor, win: torch.Tensor, n: int, remove_clutter: bool
     if remove_clutter:
         x = x - x.mean(dim=0, keepdim=True)
     return torch.fft.fftshift(torch.fft.fft(x * win[:, None, None], n=n, dim=0), dim=0)
+
+
+def doppler_band(x: torch.Tensor, win: torch.Tensor, n: int, half: int) -> torch.Tensor:
+    """The 2 half + 1 Doppler bins around zero of doppler_fft(x, win, n) (no clutter removal),
+    [loop, range, channel] -> [2 half + 1, range, channel], as one small DFT matmul instead of
+    the full FFT."""
+    key = (int(n), int(half), x.shape[0], str(x.device))
+    if key not in _DFT:
+        k = np.arange(-half, half + 1)[:, None]                                  # fftshifted bins
+        e = np.exp(-2j * np.pi * k * np.arange(x.shape[0])[None, :] / n)
+        _DFT[key] = torch.as_tensor(e, dtype=torch.complex64, device=x.device) * win[None, :]
+    L, R, C = x.shape
+    return (_DFT[key] @ x.reshape(L, R * C)).reshape(-1, R, C)
 
 
 def zero_dc_notch(x: torch.Tensor, n_bins: int) -> torch.Tensor:
@@ -211,13 +226,16 @@ def focus_mask(rd_db: torch.Tensor, det: torch.Tensor, expand: int = 1) -> torch
 def unique_aperture(channels: torch.Tensor, positions: np.ndarray) -> tuple:
     """Average the channels that share an aperture position: [..., channel] -> [..., unique],
     with the unique positions (ascending)."""
-    uniq, inv = np.unique(np.asarray(positions, float), return_inverse=True)
+    key = (np.asarray(positions, float).tobytes(), str(channels.device))
+    if key not in _APERTURE:                      # once per array layout and device
+        uniq, inv = np.unique(np.asarray(positions, float), return_inverse=True)
+        _APERTURE[key] = (uniq, torch.as_tensor(inv, device=channels.device),
+                          torch.as_tensor(np.bincount(inv).astype(np.float32), device=channels.device))
+    uniq, inv_t, cnt = _APERTURE[key]
     if len(uniq) == len(positions):
         return channels, uniq
-    inv_t = torch.as_tensor(inv, device=channels.device)
     out = torch.zeros(channels.shape[:-1] + (len(uniq),), dtype=channels.dtype, device=channels.device)
     out.index_add_(-1, inv_t, channels)
-    cnt = torch.as_tensor(np.bincount(inv).astype(np.float32), device=channels.device)
     return out / cnt, uniq
 
 

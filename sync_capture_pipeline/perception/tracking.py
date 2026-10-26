@@ -197,9 +197,9 @@ class Tracker:
         h = [p_ for p_ in tr.history if t - p_[0] <= self.motion_window]
         if len(h) < 6 or h[-1][0] - h[0][0] < 0.65 * self.motion_window:
             return
-        a, b = np.mean([p_[1:] for p_ in h[:3]], axis=0), np.mean([p_[1:] for p_ in h[-3:]], axis=0)
-        dt = np.mean([p_[0] for p_ in h[-3:]]) - np.mean([p_[0] for p_ in h[:3]])
-        v = float(np.hypot(*(b - a)) / max(dt, 1e-3))
+        p, q = h[:3], h[-3:]                      # plain floats: numpy on 3-element lists was 60% of the tracker
+        m = [((q[0][i] + q[1][i] + q[2][i]) / 3.0) - ((p[0][i] + p[1][i] + p[2][i]) / 3.0) for i in range(3)]
+        v = float(np.hypot(m[1], m[2]) / max(m[0], 1e-3))
         if v >= self.moving_mps:
             tr.motion = "moving"
         elif v <= self.static_mps:

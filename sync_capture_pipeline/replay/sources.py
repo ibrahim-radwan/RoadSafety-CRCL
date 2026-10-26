@@ -431,27 +431,28 @@ def _lut(name: str) -> np.ndarray:
 
 
 def _paint(cells: np.ndarray, values: np.ndarray, n: int, keep: str, lut: np.ndarray, lo=None, hi=None):
-    """One value per cell (keep='max' or 'min'), coloured through lut; empty cells black."""
-    order = np.argsort(values if keep == "max" else -values, kind="stable")
-    img = np.full(n, np.nan, dtype=np.float32)
-    img[cells[order]] = values[order]             # later writes win -> max (or min)
-    have = np.isfinite(img)
+    """One value per cell (keep='max' or 'min'), coloured through lut; empty cells black.
+    Returns (rgb n x 3, occupied n uint8). Works on the points, not the whole image: the
+    colour index is monotone in the value, so the cell's max (min) value has its max (min)
+    index, and sorting the uint8 indices (a radix sort) replaces sorting the values."""
     if lo is None:
         lo, hi = np.percentile(values, [2, 98]) if len(values) else (0.0, 1.0)
-    idx = np.clip((img[have] - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
+    values = np.asarray(values, dtype=np.float32)
+    idx = np.clip((values - lo) / max(hi - lo, 1e-6) * 255, 0, 255).astype(np.uint8)
+    order = np.argsort(idx if keep == "max" else 255 - idx, kind="stable")
     rgb = np.zeros((n, 3), dtype=np.uint8)
-    rgb[have] = lut[idx]
-    return rgb
+    rgb[cells[order]] = lut[idx[order]]           # later writes win -> max (or min)
+    occ = np.zeros(n, dtype=np.uint8)
+    occ[cells] = 1
+    return rgb, occ
 
 
-def _fill_gaps(rgb: np.ndarray) -> np.ndarray:
+def _fill_gaps(rgb: np.ndarray, occ: np.ndarray) -> np.ndarray:
     """Fill empty (black) cells from their 3x3 neighbours so sparse returns
-    read as continuous surfaces; occupied cells keep their own colour."""
+    read as continuous surfaces; occupied cells (occ, H x W) keep their own colour."""
     import cv2
-    grown = cv2.dilate(rgb, np.ones((3, 3), np.uint8))
-    empty = ~rgb.any(axis=2)
-    out = rgb.copy()
-    out[empty] = grown[empty]
+    out = cv2.dilate(rgb, np.ones((3, 3), np.uint8))
+    cv2.copyTo(rgb, occ, out)
     return out
 
 
@@ -472,9 +473,9 @@ def render_lidar(pts: np.ndarray, view: dict, ground_z=None):
     panel (view["aspect"]) at about view["px"] cells across; colour by height
     runs from the ground (ground_z, when known) to 3 m above it."""
     x, y, z, r, inten = pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3], pts[:, 4]
-    keep = r >= view["near_m"]                    # drop the mount / vehicle body
-    x, y, z, r, inten = x[keep], y[keep], z[keep], r[keep], inten[keep]
+    near = r >= view["near_m"]                    # drop the mount / vehicle body
     if view["mode"] == "panorama":
+        x, y, z, r, inten = x[near], y[near], z[near], r[near], inten[near]
         az = np.degrees(np.arctan2(y, x))
         el = np.degrees(np.arcsin(np.clip(z / np.maximum(r, 1e-6), -1, 1)))
         res, a0, a1, e0, e1 = 0.5, -180.0, 180.0, -20.0, 70.0
@@ -483,30 +484,30 @@ def render_lidar(pts: np.ndarray, view: dict, ground_z=None):
         ok = (ia >= 0) & (ia < nw) & (ie >= 0) & (ie < nh)
         cells = ie[ok] * nw + ia[ok]
         if view["color"] == "intensity":
-            rgb = _paint(cells, inten[ok], nw * nh, "max", _lut("viridis"))
+            rgb, occ = _paint(cells, inten[ok], nw * nh, "max", _lut("viridis"))
         else:                                     # nearest return per cell, coloured by distance
             d = np.log(r[ok] + 0.1)
-            rgb = _paint(cells, d, nw * nh, "min", _lut("turbo_r"))
-        return _fill_gaps(rgb.reshape(nh, nw, 3)), (a0, e0, a1 - a0, e1 - e0), int(ok.sum())
+            rgb, occ = _paint(cells, d, nw * nh, "min", _lut("turbo_r"))
+        return _fill_gaps(rgb.reshape(nh, nw, 3), occ.reshape(nh, nw)), (a0, e0, a1 - a0, e1 - e0), int(ok.sum())
     x0, x1, y0, y1 = top_extent(view)
     res = max(x1 - x0, y1 - y0) / float(np.clip(view.get("px", 500), 250, 900))   # ~ one cell per pixel
     nx, ny = int(round((x1 - x0) / res)), int(round((y1 - y0) / res))
     ix, iy = ((x - x0) / res).astype(np.int64), ((y - y0) / res).astype(np.int64)
-    ok = (x >= x0) & (y >= y0) & (ix < nx) & (iy < ny)
+    ok = near & (x >= x0) & (y >= y0) & (ix < nx) & (iy < ny)    # one mask: fewer copies of the sweep
     cells = ix[ok] * ny + iy[ok]
     if view["color"] == "density":
         h = np.log1p(np.bincount(cells, minlength=nx * ny)).astype(np.float32)
         h[h == 0] = np.nan
         vals = h[np.isfinite(h)]
         hi = float(np.percentile(vals, 99)) if len(vals) else 1.0
-        rgb = _paint(np.flatnonzero(np.isfinite(h)), vals, nx * ny, "max", _lut("viridis"), 0.0, hi)
+        rgb, occ = _paint(np.flatnonzero(np.isfinite(h)), vals, nx * ny, "max", _lut("viridis"), 0.0, hi)
     elif view["color"] == "intensity":
-        rgb = _paint(cells, inten[ok], nx * ny, "max", _lut("viridis"))
+        rgb, occ = _paint(cells, inten[ok], nx * ny, "max", _lut("viridis"))
     elif ground_z is not None and np.isfinite(ground_z):  # highest point per cell, ground .. +3 m
-        rgb = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"), ground_z - 0.1, ground_z + 3.0)
+        rgb, occ = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"), ground_z - 0.1, ground_z + 3.0)
     else:
-        rgb = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"))
-    return _fill_gaps(rgb.reshape(nx, ny, 3)), (y0, x0, y1 - y0, x1 - x0), int(ok.sum())
+        rgb, occ = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"))
+    return _fill_gaps(rgb.reshape(nx, ny, 3), occ.reshape(nx, ny)), (y0, x0, y1 - y0, x1 - x0), int(ok.sum())
 
 
 class LidarSource(Source):

@@ -197,8 +197,8 @@ class RadarDetector:
         DET_COLS, v_r = 0, z = 0 (no elevation)."""
         torch = self.torch
         F = torch.nn.functional
-        mid, b = self.n_loops // 2, self.static_bins
-        d0 = dsp.doppler_fft(virt, self.win_d, self.n_loops, remove_clutter=False)[mid - b:mid + b + 1]
+        b = self.static_bins
+        d0 = dsp.doppler_band(virt, self.win_d, self.n_loops, b)    # = doppler_fft(...)[n/2 - b:n/2 + b + 1]
         cube, _ = dsp.unique_aperture(d0, self.ch_pos_np)                       # [band, range, pos]
         az = dsp.az_spectrum(cube, self.win_a, self.n_az)
         m = 10 * torch.log10((az.real ** 2 + az.imag ** 2).sum(dim=0)[:, self.fov_sl] + 1e-6)   # [range, az_fov]
