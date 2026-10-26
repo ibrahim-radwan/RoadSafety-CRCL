@@ -5,6 +5,12 @@
 - **NVIDIA Jetson AGX Orin dev kit:** L4T R35.4.1 (JetPack 5.1.2),
   Ubuntu 20.04, CUDA 11.4. Power mode MAXN.
   - `jetson_clocks` is **not** used in the field (heat).
+  - `ibrahim-desktop` (development board, 2026-10-26, owner's approval):
+    `sudo jetson_clocks --store` then `sudo jetson_clocks` (CPUs 2.2 GHz, GPU
+    1.3 GHz, fan at full speed; lost at reboot; undo with
+    `sudo jetson_clocks --restore`), and the `whoopsie` crash-report daemon
+    disabled (`sudo systemctl disable --now whoopsie`; it held one core at
+    ~94% when idle; undo with `enable --now`).
 - All USB-A ports share one internal hub; the USB-C ports are separate.
 - Wi-Fi `wlan0` is for the iPad web control
   (`http://jetson-desktop.local:8080`, mDNS). The sensor subnets must not use

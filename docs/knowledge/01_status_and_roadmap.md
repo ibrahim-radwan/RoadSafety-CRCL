@@ -195,7 +195,11 @@ What the baseline showed:
     353 s from the USB disk (radar frames read ahead; LiDAR decoded by
     several drivers on time chunks, alongside the radar).
   
+  - On `ibrahim-desktop` (owner's approval, 2026-10-26): `whoopsie` disabled
+    (it held one core at ~94% when idle) and `jetson_clocks` run (not
+    persistent across reboots; see [02](02_hardware_and_network.md)). The radar
+    detector went 16.9 → 13.3 ms at ~50% GPU load: launch-bound.
+
   Next candidates: the radar front end in CUDA graphs or batched frames
-  (launch-bound: ~300 small kernels per frame); pinned-memory uploads;
-  `jetson_clocks` (a system change: owner's approval). From the USB hard
+  (~300 small kernels per frame); pinned-memory uploads. From the USB hard
   disk, the radar is disk-bound: sessions on a fast disk gain most.

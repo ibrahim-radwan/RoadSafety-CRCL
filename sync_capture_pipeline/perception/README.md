@@ -231,6 +231,12 @@ full `freewalk_ref_02`).
 | Files cached in RAM | ~324 s (radar 103 s, then LiDAR 221 s) | **169 s** (both at once) |
 | Cold, from the USB hard disk | ~700 s (radar 480 s, then LiDAR 221 s) | **353 s** (radar 335 s, disk-bound; LiDAR 107 s alongside) |
 
+With `jetson_clocks` (clocks locked at their maximum) the benchmark gives:
+radar 13.3 ms, LiDAR 16.9 ms, render 6.1 ms, tracker 2.9 ms; both threads
+43–45 Hz radar and 28–29 Hz LiDAR. The radar gains most (16.9 → 13.3 ms) at
+~50% GPU load: it is limited by launching ~300 small kernels per frame,
+not by GPU compute.
+
 - The radar pass reads frames ahead in a thread (`iter_frames`). From the
   USB hard disk it is disk-bound: ~31 MB/s for 3 MB frame files (seeks),
   however many threads read.
