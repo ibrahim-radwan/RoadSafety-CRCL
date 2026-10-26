@@ -159,10 +159,15 @@ What the baseline showed:
   - LiDAR density-based clustering;
   - the tracker vectorised (3× faster with many tracks);
   - per-track radar accumulation and micro-Doppler (`perception/track_features.py`;
-    cadence experimental).
+    cadence experimental);
+  - **a moving / static state per track** (stationary rig): on `freewalk_ref_02`
+    the walker's tracks are moving 79% of the time (the rest is the standing
+    segment and turns), and the other tracks are static 85% of the time.
+    **Ego-motion compensation is still needed** for riding sessions; it needs
+    riding data to validate.
 - Next for detection:
-  - a learned LiDAR classifier, or at least a static/moving split from
-    tracks (walls now break into more pieces, ~37 objects per sweep);
+  - a learned LiDAR classifier (walls now break into more pieces, ~37 objects
+    per sweep; the moving/static flag helps tell road users from structure);
   - camera detection (needs a model and the team's camera extrinsics for
     overlays);
   - radar static-scene detection (zero Doppler, for parked vehicles on the

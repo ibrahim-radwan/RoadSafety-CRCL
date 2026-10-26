@@ -565,7 +565,7 @@ class LidarSource(Source):
         ob = res["objects"]
         mov = ob[ob[:, O["cls"]] != CLASSES.index("structure")]
         self._tracker.update(t, mov[:, [O["x"], O["y"]]], list(mov[:, O["cls"]]))
-        res["tracks"] = [(tr.id, tr.x[0], tr.x[1], tr.x[2], tr.x[3], int(tr.payload), tr.hits)
+        res["tracks"] = [(tr.id, tr.x[0], tr.x[1], tr.x[2], tr.x[3], int(tr.payload), tr.hits, tr.motion)
                          for tr in self._tracker.reported()]
         res["ms_total"] = 1e3 * (time.perf_counter() - tic)
         self._det_cache = (t, res)

@@ -160,7 +160,9 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
     micro-Doppler features: torso velocity, Doppler spread, and cadence. The
     cadence is experimental.
   - `perception_lidar.npz`: per sweep, objects with boxes and size classes,
-    and tracks;
+    and tracks. Since 2026-10-26, each track row also carries a moving /
+    static flag. It is computed in the sensor frame, so it is valid for a
+    stationary rig; a moving platform needs ego-motion compensation.
   - `perception.json`: scores against the LiDAR walker track.
 - The column layouts are in the script's docstring. The frame is x forward,
   y left; times are `t_ref`.

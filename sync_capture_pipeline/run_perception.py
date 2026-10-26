@@ -19,7 +19,8 @@ Writes, in <session>/sync/:
                            (perception/track_features.py; NaN when not measured this frame;
                            cadence is experimental), noise_db [F]
     perception_lidar.npz   sweep_t [S], obj_start [S+1], obj [M, 13] (lidar.OBJ_COLS),
-                           trk [T, 9] (sweep, id, x, y, vx, vy, reported, hits, cls), ground_z [S]
+                           trk [T, 10] (sweep, id, x, y, vx, vy, reported, hits, cls, moving: 1 moving,
+                           0 static, NaN not yet known; sensor frame, see tracking.py), ground_z [S]
     perception.json        parameters, timings, and the scores below
 Times are t_ref (CLOCK_MONOTONIC, Stage 3 offsets applied); frame x forward, y left, z up.
 
@@ -51,11 +52,14 @@ from perception.track_features import TrackFeatures                            #
 from perception.tracking import Tracker                                         # noqa: E402
 
 
+MOTION_CODE = {"moving": 1.0, "static": 0.0, "?": np.nan}
+
+
 def _trk_rows(step: int, tracker, extra=None) -> list:
     """Live tracks of this step; 'confirmed' = reported (confirmed and updated within 2 steps)."""
     rep = {t.id for t in tracker.reported()}
     return [[step, t.id, t.x[0], t.x[1], t.x[2], t.x[3], float(t.id in rep), t.hits]
-            + ([] if extra is None else [extra(t)]) for t in tracker.tracks]
+            + ([] if extra is None else list(extra(t))) for t in tracker.tracks]
 
 
 def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
@@ -111,14 +115,14 @@ def run_lidar(S: Path, log=print, rate: float = 3.0) -> dict:
         tracker.update(t, movable[:, [O["x"], O["y"]]], list(movable[:, O["cls"]]))
         k = len(out["t"])
         out["t"].append(t); out["obj"].append(ob); out["gz"].append(o["ground_z"])
-        out["trk"] += _trk_rows(k, tracker, extra=lambda tr: tr.payload)
+        out["trk"] += _trk_rows(k, tracker, extra=lambda tr: [tr.payload, MOTION_CODE[tr.motion]])
         if len(out["t"]) % 1000 == 0:
             log(f"  lidar {len(out['t'])} sweeps  {time.monotonic() - t0:.0f} s")
     el = time.monotonic() - t0
     n = np.array([len(x) for x in out["obj"]])
     res = {"sweep_t": np.array(out["t"]), "obj_start": np.r_[0, np.cumsum(n)],
            "obj": np.concatenate(out["obj"]) if n.sum() else np.zeros((0, len(O)), np.float32),
-           "trk": np.asarray(out["trk"], np.float32).reshape(-1, 9), "ground_z": np.array(out["gz"])}
+           "trk": np.asarray(out["trk"], np.float32).reshape(-1, 10), "ground_z": np.array(out["gz"])}
     res["meta"] = {"sweeps": len(n), "seconds": round(el, 1), "detector_ms_median": round(float(np.median(ms)), 1),
                    "detector_ms_p95": round(float(np.percentile(ms, 95)), 1),
                    "objects_per_sweep": round(float(n.mean()), 2)}

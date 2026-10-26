@@ -30,7 +30,7 @@ H_POS = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], float)
 
 class Track:
     __slots__ = ("id", "x", "P", "hits", "misses", "age", "confirmed", "payload", "t", "history", "vr_innov",
-                 "meas", "meas_idx")
+                 "meas", "meas_idx", "motion")
 
     def __init__(self, tid: int, xy, t: float, pos_var: float, vel_var: float, payload=None, vr=None):
         self.id = tid
@@ -44,6 +44,7 @@ class Track:
         self.history = [(t, float(xy[0]), float(xy[1]))]
         self.vr_innov = 0.0
         self.meas_idx = -1                              # index of the measurement assigned at the last step, -1 none
+        self.motion = "?"                               # "moving", "static" or "?" (not yet known)
         self.meas = [(t, float(np.hypot(*xy)), np.nan if vr is None else float(vr))]   # (t, range, v_r) as measured
 
 
@@ -52,10 +53,12 @@ class Tracker:
                  confirm_hits: int = 3, confirm_window: int = 5, max_misses: int = 3,
                  init_vel_std: float = 3.0, history: int = 40, vr_std: float = 0.25,
                  max_vr_innov: float = 0.6, vr_gate: float = 1.2, merge_m: float = 0.0, merge_dv: float = 1.0,
-                 consist_n: int = 8):
+                 consist_n: int = 8, motion_window_s: float = 1.5, moving_mps: float = 0.5,
+                 static_mps: float = 0.25):
         self.gate = gate_m
         self.merge_m, self.merge_dv = merge_m, merge_dv
         self.consist_n = consist_n
+        self.motion_window, self.moving_mps, self.static_mps = motion_window_s, moving_mps, static_mps
         self.R = np.eye(2) * meas_std_m ** 2
         self.q = accel_std ** 2
         self.confirm_hits, self.confirm_window, self.max_misses = confirm_hits, confirm_window, max_misses
@@ -175,6 +178,8 @@ class Tracker:
             for i in range(len(live)):                  # greedy, oldest first: drop a track duplicating a kept one
                 keep[i] = not dup[i, :i][keep[:i]].any()
             live = [tr for tr, k_ in zip(live, keep) if k_]
+        for tr in live:
+            self._update_motion(tr, t)
         self.tracks = live
         for j in range(len(meas)):
             if j not in assigned:
@@ -183,6 +188,22 @@ class Tracker:
                 self.tracks[-1].meas_idx = j
                 self._next += 1
         return self.tracks
+
+    def _update_motion(self, tr, t: float):
+        """Moving / static from the track's displacement over the last motion_window_s (mean of the
+        first and last three positions, so one noisy position cannot flip it), with hysteresis:
+        between static_mps and moving_mps the previous state holds. In the sensor frame: on a moving
+        platform static objects move too, so this needs ego-motion compensation there."""
+        h = [p_ for p_ in tr.history if t - p_[0] <= self.motion_window]
+        if len(h) < 6 or h[-1][0] - h[0][0] < 0.65 * self.motion_window:
+            return
+        a, b = np.mean([p_[1:] for p_ in h[:3]], axis=0), np.mean([p_[1:] for p_ in h[-3:]], axis=0)
+        dt = np.mean([p_[0] for p_ in h[-3:]]) - np.mean([p_[0] for p_ in h[:3]])
+        v = float(np.hypot(*(b - a)) / max(dt, 1e-3))
+        if v >= self.moving_mps:
+            tr.motion = "moving"
+        elif v <= self.static_mps:
+            tr.motion = "static"
 
     def reported(self, max_coast: int = 2):
         """Confirmed tracks updated within the last max_coast steps: the tracker's output. Longer

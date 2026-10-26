@@ -264,6 +264,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
     table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
     table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
     table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+    table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)   # class + motion
     table.setFocusPolicy(QtCore.Qt.NoFocus)
     panels["objects"] = Panel("objects", "Objects (confirmed tracks)", table, toggle_max)
     bottom.addWidget(panels["objects"].frame)
@@ -615,7 +616,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     trs = ld["tracks"] if (ld is not None and dctl["tracks"].isChecked() and mode != "panorama") else []
                     pool = text_pool("lidar", len(trs), (255, 255, 255))
                     for i_, t_ in enumerate(pool):
-                        if i_ < len(trs):
+                        if i_ < len(trs):                 # moving tracks bright, static ones grey
+                            t_.setColor((255, 230, 90) if trs[i_][7] == "moving" else
+                                        (120, 124, 132) if trs[i_][7] == "static" else (220, 220, 220))
                             t_.setText(f"L{trs[i_][0]}")
                             t_.setPos(trs[i_][2], trs[i_][1])
                             t_.show()
@@ -628,8 +631,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                         it["boxes"][c].setData([], [])
             if ld is not None:
                 for tr in ld["tracks"]:
-                    tid, x, y, vx, vy, cls, hits = tr
-                    rows.append(("LiDAR", f"L{tid}", CLASSES[cls], np.hypot(x, y), np.degrees(np.arctan2(y, x)),
+                    tid, x, y, vx, vy, cls, hits, motion = tr
+                    label = CLASSES[cls] + {"moving": " \u25b6", "static": " \u25a0", "?": ""}[motion]
+                    rows.append(("LiDAR", f"L{tid}", label, np.hypot(x, y), np.degrees(np.arctan2(y, x)),
                                  np.hypot(vx, vy), None, LIDAR_C))
 
         # radar

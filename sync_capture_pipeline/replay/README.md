@@ -115,7 +115,12 @@ while all sensors replay). Per frame:
 The BEV shows detections as dots coloured by radial velocity (blue
 approaching, red receding). Multipath ghosts are hollow grey dots.
 
-**Tracks** appear in the table and as labels. A track is confirmed after 3
+**Tracks** appear in the table and as labels. LiDAR tracks are marked
+**moving** (▶ in the table, bright label) or **static** (■, grey label), from
+their displacement over the last 1.5 s. This is in the sensor frame, so on a
+moving platform it needs ego-motion compensation (not yet built). Radar
+tracks show their micro-Doppler spread and cadence (experimental), and their
+accumulated points (the last 1 s) as light-blue dots. A track is confirmed after 3
 hits in 5 updates, and shown while it keeps being updated. A radar track must
 also keep its Doppler consistent with its motion. A seek starts the trackers
 over.
