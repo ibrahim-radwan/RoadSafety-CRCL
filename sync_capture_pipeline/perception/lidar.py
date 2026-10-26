@@ -39,6 +39,19 @@ CLASS_COLOURS = {"pedestrian": (255, 214, 10), "two-wheeler": (0, 200, 255), "ve
                  "other": (200, 200, 200), "structure": (110, 110, 120)}
 
 
+def box_corners(objects: np.ndarray) -> np.ndarray:
+    """Footprint corners [K, 4, 2] (x, y) of oriented boxes (OBJ_COLS rows), in order around the box:
+    the length runs along (cos yaw, sin yaw)."""
+    ob = np.asarray(objects, np.float32).reshape(-1, len(OBJ_COLS))
+    a = np.radians(ob[:, O["yaw_deg"]])
+    u = np.stack([np.cos(a), np.sin(a)], axis=1) * (ob[:, O["length"]] / 2)[:, None]
+    v = np.stack([-np.sin(a), np.cos(a)], axis=1) * (ob[:, O["width"]] / 2)[:, None]
+    c = ob[:, [O["x"], O["y"]]]
+    sl = np.array([1, 1, -1, -1], np.float32)[None, :, None]
+    sw = np.array([1, -1, -1, 1], np.float32)[None, :, None]
+    return c[:, None, :] + sl * u[:, None, :] + sw * v[:, None, :]
+
+
 def size_class(length: float, width: float, height: float) -> int:
     """Box-size heuristic: length >= width, height above ground (m)."""
     if length > 8.0 or height > 4.5:
@@ -56,7 +69,8 @@ class LidarDetector:
     def __init__(self, device: str = "cuda", near_m: float = 0.5, max_range_m: float = 60.0, cell_m: float = 0.2,
                  ground_cell_m: float = 1.0, ground_thr_m: float = 0.2, max_height_m: float = 3.0,
                  grounded_m: float = 1.0, min_points: int = 8, min_height_m: float = 0.3,
-                 max_step_m: float = 0.35):
+                 max_step_m: float = 0.35, cluster: str = "density", core_k: float = 200.0, core_max: int = 8,
+                 core_close: bool = False):
         import torch
         self.torch = torch
         self.dev = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -66,6 +80,14 @@ class LidarDetector:
         self.min_points, self.min_height = min_points, min_height_m
         self.n_grid = int(np.ceil(2 * max_range_m / cell_m))
         self.n_ggrid = int(np.ceil(2 * max_range_m / ground_cell_m))
+        self.cluster, self.core_close = cluster, core_close
+        if cluster == "density":
+            # core-cell threshold per grid cell: round(core_k / r^2) points, clamped to 1..core_max
+            # (LiDAR point density falls with range squared)
+            c = (np.arange(self.n_grid) + 0.5) * cell_m - max_range_m
+            r = np.hypot(c[:, None], c[None, :])
+            self.core_thr = torch.as_tensor(np.clip(np.round(core_k / np.maximum(r, 0.5) ** 2), 1, core_max),
+                                            dtype=torch.int32, device=self.dev).view(-1)
 
     def _ground_map(self, cmin):
         """Cell minima (inf = empty) -> ground height per cell. A cell keeps its own minimum when
@@ -127,8 +149,21 @@ class LidarDetector:
         occ = torch.zeros(self.n_grid * self.n_grid, dtype=torch.uint8, device=self.dev)
         occ[foc] = 1
         occ_np = occ.view(self.n_grid, self.n_grid).cpu().numpy()
-        closed = cv2.morphologyEx(occ_np, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-        n_lab, lab = cv2.connectedComponents(closed, connectivity=8)
+        if self.cluster == "density":
+            # Clusters grow through dense ("core") cells only; a sparse cell joins a neighbouring
+            # cluster but cannot connect two. A single stray point (a mixed pixel at a depth edge)
+            # no longer bridges a person and a wall.
+            cnt = torch.bincount(foc, minlength=self.n_grid * self.n_grid)
+            core_np = (cnt >= self.core_thr).to(torch.uint8).view(self.n_grid, self.n_grid).cpu().numpy() & occ_np
+            if self.core_close:                  # bridge a one-cell gap between dense cells only
+                core_np = cv2.morphologyEx(core_np, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+            n_lab, lab = cv2.connectedComponents(core_np, connectivity=8)
+            border = (occ_np > 0) & (core_np == 0)
+            grown = cv2.dilate(lab.astype(np.float32), np.ones((3, 3), np.uint8)).astype(np.int32)
+            lab = np.where(border, grown, lab).astype(np.int32)
+        else:
+            closed = cv2.morphologyEx(occ_np, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+            n_lab, lab = cv2.connectedComponents(closed, connectivity=8)
         t2 = time.perf_counter()
         K = int(n_lab)
         lab_t = torch.as_tensor(lab.astype(np.int32), device=self.dev).view(-1)

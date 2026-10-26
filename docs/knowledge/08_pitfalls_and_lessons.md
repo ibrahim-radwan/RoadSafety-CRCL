@@ -46,6 +46,15 @@ Each item cost real debugging time. Read before changing the related code.
   overhead structures (see [05](05_lidar.md)).
 - **`cv2.minAreaRect`'s angle is along its first side**, not the long side.
   Swap the sides, and the box turns by 90°.
+- **One stray point per cell can bridge two objects** in grid clustering.
+  Mixed pixels at depth edges lie between a person and a wall. Cluster
+  through dense cells only (`perception/lidar.py`, `cluster="density"`);
+  closing the grid brings the bridges back.
+- **More objects make the tracker slow if it loops in Python.** With ~45
+  LiDAR tracks, the per-track gating and the all-pairs duplicate check took
+  7.5 ms per sweep in the replay's LiDAR thread, which holds the GIL; the
+  LiDAR rate fell from ~10 to ~7 updates/s. Vectorised: 2.5 ms, identical
+  tracks.
 - **Decode pcaps at ≤ 3×** real time.
 - **`split_angle: 180`**, or the forward field of view splits across two
   sweeps.
@@ -97,6 +106,9 @@ Each item cost real debugging time. Read before changing the related code.
   sources headless.
 - **Profile GPU code with CUDA synchronised.** Without it, the time lands on
   the first sync point (`torch.nonzero`, `.cpu()`) and looks like CPU time.
+- **The first replay after a reboot is slow on the external drive.** The file
+  cache is empty, so every read is cold: camera 0, radar ~2 updates/s at
+  first. A second run of the same part is normal (camera ~29, radar ~8).
 - **Sessions on NTFS through FUSE are slow.** On the external drive, a 3 MB
   radar frame takes 78 ms median to read (up to 390 ms), and the replay got
   only 3 radar updates/s. The replay now reads ahead. For full speed, use

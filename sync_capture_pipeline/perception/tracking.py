@@ -72,9 +72,12 @@ class Tracker:
         Fm = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]], float)
         G = np.array([[dt * dt / 2, 0], [0, dt * dt / 2], [dt, 0], [0, dt]])
         Q = G @ G.T * self.q
-        for tr in self.tracks:
-            tr.x = Fm @ tr.x
-            tr.P = Fm @ tr.P @ Fm.T + Q
+        if not self.tracks:
+            return
+        X = np.stack([tr.x for tr in self.tracks]) @ Fm.T                 # batched over the tracks
+        P = Fm @ np.stack([tr.P for tr in self.tracks]) @ Fm.T + Q
+        for tr, x_, p_ in zip(self.tracks, X, P):
+            tr.x, tr.P = x_, p_
 
     @staticmethod
     def _vr_row(x):
@@ -100,19 +103,22 @@ class Tracker:
         self.t = t
         assigned = set()
         if self.tracks and len(meas):
-            cost = np.full((len(self.tracks), len(meas)), 1e6)
-            for i, tr in enumerate(self.tracks):
-                S = H_POS @ tr.P @ H_POS.T + self.R
-                d = meas - tr.x[:2]
-                m2 = np.einsum("ni,ij,nj->n", d, np.linalg.inv(S), d)          # Mahalanobis^2
-                eu = np.hypot(d[:, 0], d[:, 1])
-                ok = (m2 < 9.21) | (eu < self.gate)                             # chi2(2) 99% or metric gate
-                c = eu.copy()
-                if radial is not None and tr.hits >= 2:                         # velocity known: use Doppler too
-                    dvr = np.abs(radial - self._vr_row(tr.x)[0])
-                    ok &= dvr < self.vr_gate
-                    c = c + 0.5 * dvr
-                cost[i, ok] = c[ok]
+            # gating and costs for every (track, measurement) pair at once
+            X = np.stack([tr.x for tr in self.tracks])                          # [T, 4]
+            S = np.stack([tr.P[:2, :2] for tr in self.tracks]) + self.R         # H P H^T + R, [T, 2, 2]
+            d = meas[None, :, :] - X[:, None, :2]                               # [T, N, 2]
+            m2 = np.einsum("tni,tij,tnj->tn", d, np.linalg.inv(S), d)           # Mahalanobis^2
+            eu = np.hypot(d[..., 0], d[..., 1])
+            ok = (m2 < 9.21) | (eu < self.gate)                                 # chi2(2) 99% or metric gate
+            c = eu.copy()
+            if radial is not None:                                               # velocity known: use Doppler too
+                r = np.maximum(np.hypot(X[:, 0], X[:, 1]), 1e-3)
+                vr_pred = (X[:, 0] * X[:, 2] + X[:, 1] * X[:, 3]) / r
+                dvr = np.abs(radial[None, :] - vr_pred[:, None])
+                known = np.array([tr.hits >= 2 for tr in self.tracks])[:, None]
+                ok &= ~known | (dvr < self.vr_gate)
+                c = np.where(known, c + 0.5 * dvr, c)
+            cost = np.where(ok, c, 1e6)
             ri, ci = linear_sum_assignment(cost)
             for i, j in zip(ri, ci):
                 if cost[i, j] >= 1e6:
@@ -160,13 +166,13 @@ class Tracker:
                 live.append(tr)
         if self.merge_m > 0 and len(live) > 1:          # duplicates: one object, two tracks -> keep the older
             live.sort(key=lambda tr_: -tr_.hits)
-            kept = []
-            for tr in live:
-                if any(np.hypot(*(tr.x[:2] - k_.x[:2])) < self.merge_m
-                       and np.hypot(*(tr.x[2:] - k_.x[2:])) < self.merge_dv for k_ in kept):
-                    continue
-                kept.append(tr)
-            live = kept
+            X = np.stack([tr.x for tr in live])
+            dup = ((np.hypot(*(X[:, None, :2] - X[None, :, :2]).transpose(2, 0, 1)) < self.merge_m)
+                   & (np.hypot(*(X[:, None, 2:] - X[None, :, 2:]).transpose(2, 0, 1)) < self.merge_dv))
+            keep = np.zeros(len(live), bool)
+            for i in range(len(live)):                  # greedy, oldest first: drop a track duplicating a kept one
+                keep[i] = not dup[i, :i][keep[:i]].any()
+            live = [tr for tr, k_ in zip(live, keep) if k_]
         self.tracks = live
         for j in range(len(meas)):
             if j not in assigned:

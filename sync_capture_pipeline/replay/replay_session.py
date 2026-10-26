@@ -516,16 +516,14 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
 
     def box_lines(objs):
         """Per class: NaN-separated outline polylines of the objects' boxes, in plot coords (y, x)."""
-        out = {c: ([], []) for c in CLASSES}
-        for ob in objs:
-            a = np.radians(ob[O["yaw_deg"]])
-            u, v_ = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
-            hl, hw = ob[O["length"]] / 2, ob[O["width"]] / 2
-            c0 = np.array([ob[O["x"]], ob[O["y"]]])
-            cs = [c0 + sl * hl * u + sw * hw * v_ for sl, sw in ((1, 1), (1, -1), (-1, -1), (-1, 1), (1, 1))]
-            xs, ys = out[CLASSES[int(ob[O["cls"]])]]
-            xs += [c[1] for c in cs] + [np.nan]
-            ys += [c[0] for c in cs] + [np.nan]
+        from perception.lidar import box_corners
+        out = {}
+        corners = box_corners(objs)                                     # [K, 4, 2]
+        loop = np.concatenate([corners, corners[:, :1], np.full((len(corners), 1, 2), np.nan)], axis=1)
+        cls = objs[:, O["cls"]].astype(int) if len(objs) else np.zeros(0, int)
+        for i, c in enumerate(CLASSES):
+            pts = loop[cls == i].reshape(-1, 2)
+            out[c] = (pts[:, 1], pts[:, 0])
         return out
 
     def update():

@@ -86,14 +86,15 @@ The processing library (`../perception/`), on the GPU, live during replay.
 See `../perception/README.md` and `../run_perception.py` for the details and
 the measured scores.
 
-**LiDAR** (`perception/lidar.py`, ~20 ms per sweep on its own, ~35–45 ms
+**LiDAR** (`perception/lidar.py`, ~23 ms per sweep on its own, ~35–45 ms
 while all sensors replay):
 
 - The ground is local, not one plane, so slopes, kerbs and driveways stay
   ground.
 - Overhead structures with free space below (carport roofs, canopies, signs,
   branches) are not obstacles.
-- Obstacles are grouped into objects with oriented boxes, coloured by a
+- Obstacles are grouped into objects (density-based clustering: a stray point
+  cannot merge two objects) with oriented boxes, coloured by a
   **size heuristic**: pedestrian, two-wheeler, vehicle, other, or structure.
   This is a heuristic, not a learned classifier. A wall segment with a bike
   against it can be boxed as a "vehicle". Use the track's speed to tell

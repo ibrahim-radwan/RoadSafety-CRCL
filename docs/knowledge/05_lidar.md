@@ -69,10 +69,19 @@
 - **Overhead structures removed:** a 0.2 m column is an obstacle only if
   something in it reaches down to within 1 m of the ground. This drops roofs,
   canopies and branches.
+- **Density-based clustering (2026-10-26).** Objects grow through dense
+  cells only; a sparse cell cannot connect two objects.
+  - Before, single stray points bridged objects. In a cluttered office
+    (`run_20261014_1325`/`1326`), a chain of one-point cells at a depth edge
+    (mixed pixels) merged the walker into a 7 m object with the walls and
+    desks. The walker was found in only 27–47% of sweeps there, against
+    84–94% now.
+  - The core threshold scales with range⁻², because point density falls with
+    distance.
 - On `freewalk_ref_02`:
-  - the walker is detected in 95% of sweeps and tracked in 95%;
-  - it is classed `pedestrian` in 84% (`other` in most of the rest);
-  - about 27 objects per sweep (walls, bins, bikes, the parked car);
-  - ~20 ms per sweep on the GPU.
+  - the walker is detected in 99% of sweeps and tracked in 99%;
+  - it is classed `pedestrian` in 85.5% (`other` in most of the rest);
+  - about 37 objects per sweep (walls, bins, bikes, the parked car);
+  - ~23 ms per sweep on the GPU.
 - Size classes are heuristics. Walls with things against them can be boxed as
   "vehicle".

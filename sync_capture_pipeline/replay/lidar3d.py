@@ -138,21 +138,16 @@ class Lidar3DView:
         if objects is None or not len(objects):
             self.boxes.setData(pos=np.zeros((0, 3), np.float32))
         else:
-            segs, cols = [], []
-            edges = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
-            for ob, c in zip(objects, colours):
-                a = np.radians(ob[O["yaw_deg"]])
-                hl, hw = ob[O["length"]] / 2, ob[O["width"]] / 2
-                # minAreaRect angle is measured on the (x, y) grid: length along (cos a, sin a)
-                u, v = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
-                base = [np.r_[ob[O["x"]], ob[O["y"]]] + sl * hl * u + sw * hw * v
-                        for sl, sw in ((1, 1), (1, -1), (-1, -1), (-1, 1))]
-                z0, z1 = ob[O["z_min"]], ob[O["z_max"]]
-                corners = [np.r_[b, z0] for b in base] + [np.r_[b, z1] for b in base]
-                for i, j in edges:
-                    segs += [corners[i], corners[j]]
-                    cols += [c, c]
-            self.boxes.setData(pos=np.asarray(segs, np.float32), color=np.asarray(cols, np.float32))
+            from perception.lidar import box_corners
+            base = box_corners(objects)                                 # [K, 4, 2]
+            z0, z1 = objects[:, O["z_min"]], objects[:, O["z_max"]]
+            corners = np.concatenate([np.concatenate([base, np.repeat(z0[:, None, None], 4, 1)], axis=2),
+                                      np.concatenate([base, np.repeat(z1[:, None, None], 4, 1)], axis=2)], axis=1)
+            edges = np.array([(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
+                              (0, 4), (1, 5), (2, 6), (3, 7)])
+            segs = corners[:, edges.reshape(-1)].reshape(-1, 3)        # 24 vertices per box
+            cols = np.repeat(np.asarray(colours, np.float32), 24, axis=0)
+            self.boxes.setData(pos=np.ascontiguousarray(segs, np.float32), color=np.ascontiguousarray(cols))
         tracks = tracks or []
         while len(self._texts) < len(tracks):
             t = self.gl.GLTextItem(color=(255, 255, 255, 230))

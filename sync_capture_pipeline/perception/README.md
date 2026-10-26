@@ -27,8 +27,8 @@ See `docs/knowledge/01_status_and_roadmap.md`.
 - the elevation map. |
 | `radar_chain.py` | `RadarChain`: the old chain's front end (`process_frame` stages 1–7 and 9) composed from those stages. It reproduces the old chain's frozen golden frames on both of its paths (`cfar="caso"` or `"os"`), at ~21 ms/frame; the old chain took ~100 ms (GPU path) or ~1 s (CPU path). |
 | `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms, built on the `radar_dsp.py` stages. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
-| `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, oriented boxes, size class. ~20 ms. |
-| `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation. For radar, Doppler is an EKF measurement plus a consistency check. |
+| `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, density-based clustering, oriented boxes, size class. ~23 ms. |
+| `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation; prediction, gating and duplicate merging vectorised over all tracks (~2.5 ms with 45 LiDAR tracks). For radar, Doppler is an EKF measurement plus a consistency check. |
 | `estimate_rx_phase.py` | The in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. |
 | `baseline.py` | The reference: golden per-frame outputs (the old chain's, frozen; ours) and the scores of every reference session (`baseline/scores.json`); `compare` is the regression check. |
 | `../run_perception.py` | A whole session → `sync/perception_{radar,lidar}.npz` and `sync/perception.json` (scores). |
@@ -122,8 +122,17 @@ Conventions, verified against the LiDAR walker:
 3. Obstacles: points 0.2–3 m above the ground, in 0.2 m columns that reach
    down to within 1 m of the ground. Overhead roofs, canopies and branches
    drop out; posts, walls, people and vehicles stay.
-4. An occupancy grid, closed by one cell, then 8-connected components give
-   the objects.
+4. **Density-based clustering on a bird's-eye grid** (0.2 m; since
+   2026-10-26). Objects grow through *core* cells only: cells with at least
+   `round(200 / r²)` points, clamped to 1–8, which is 8 at 5 m, 2 at 10 m
+   and 1 beyond 14 m, since density falls with range squared. A sparse cell
+   joins a neighbouring object but cannot connect two.
+   - The old method (`cluster="grid"`: any occupied cell, closed by one cell,
+     8-connected) let single stray points bridge objects. In a cluttered
+     office (`run_20261014_1325`/`1326`), a chain of one-point cells at the
+     depth edge merged the walker into a 7 m object with the walls and desks.
+     Such cells are mixed pixels, which average a near and a far surface.
+   - Closing the core cells brings the merging back, so it is not used.
 5. Per object: a minimum-area box (from the grid cells), height above ground,
    point count, and a **size class**:
 
@@ -139,7 +148,7 @@ Conventions, verified against the LiDAR walker:
    as a "vehicle".
 6. Tracks: every class except structure.
 
-## Measured (2026-10-24)
+## Measured (2026-10-24; LiDAR 2026-10-26)
 
 All scores are against the LiDAR walker track (`sync/timing_lidar_track.npz`),
 a single-target reference.
@@ -154,8 +163,8 @@ correction:
 | Radar: within 3° of the bias | **54%** | 31% |
 | Radar: walker has a reported track | 73.5% (within 2 m) | — |
 | Radar: tracks not supported by a LiDAR object | 0.66 per frame, 58% supported (at the start of tuning: 1.75 here, 4.55 on stage3_02) | — |
-| LiDAR: walker detected / track | **95.0% / 94.9%** | — |
-| LiDAR: walker classed pedestrian | 83.5% (18.9 ms per sweep) | — |
+| LiDAR: walker detected / track | **99.0% / 99.1%** (grid clustering: 95.0% / 94.9%) | — |
+| LiDAR: walker classed pedestrian | 85.5% (~23 ms per sweep) | — |
 
 - **The radar azimuth bias** (−5.0° on this session) is the radar–LiDAR yaw
   of that mounting (extrinsic).
@@ -163,6 +172,17 @@ correction:
   truth.
 - On the plate sessions (`stage3_02`/`03`), the phase correction cuts the
   held-out azimuth spread from 5.2° to 1.3°.
+- **LiDAR density clustering, all sessions**, walker detected / confirmed
+  track, grid → density:
+  - `run_20261014_1326`: 27% → 94% / 24% → 95%;
+  - `run_20261014_1325`: 47% → 84% / 43% → 83%;
+  - `freewalk_ref_01`: 92% → 99.8%;
+  - `stage3_01..03`: 97% → 99.7–99.9%.
+
+  The walker is split into two objects in 0–8% of sweeps (the tracker's
+  duplicate merge absorbs most of that). There are ~37–42 objects per sweep
+  instead of ~27, as walls break into pieces. Radar tracks without LiDAR
+  support fell as a side effect (`1326`: 1.24 → 0.72 per frame).
 
 ## Limitations
 

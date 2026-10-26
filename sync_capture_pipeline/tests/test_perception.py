@@ -6,7 +6,8 @@ Synthetic tests (always run, GPU if available):
   - the tracker confirms a steady mover, never a one-frame false alarm, and does not
     report a track whose motion its Doppler contradicts;
   - the LiDAR detector finds a person on flat and on sloped ground, ignores a roof
-    with free space below, and classes the person as a pedestrian.
+    with free space below, classes the person as a pedestrian, and does not let a
+    trail of stray points merge the person into a wall.
 
 Session tests (skip when the reference sessions are absent; $REPORT_TEST_SESSIONS):
   - radar azimuth sign (world = - processing) and Doppler sign (+ = receding) agree
@@ -125,6 +126,26 @@ def test_lidar_person_on_ground(slope):
     assert abs(near[0, O["height"]] - 1.75) < 0.25
     others = ob[np.hypot(ob[:, O["x"]] - 8.0, ob[:, O["y"]] - 1.0) >= 0.6]
     assert len(others) == 0                                                 # the (sloped) ground makes no objects
+
+
+def test_lidar_stray_points_do_not_merge_person_and_wall():
+    """A person 1.1 m from a wall, with a trail of single stray points between them (mixed pixels at
+    the depth edge): density clustering keeps the person a separate pedestrian; the old grid
+    clustering (cluster="grid") merges them into one object."""
+    rng = np.random.default_rng(2)
+    base = _scene(person=True)                                          # person at (8, 1), 0.5 x 0.4 m
+    wall = rng.uniform([6.0, 2.4, -1.0], [10.0, 2.5, 1.0], size=(6000, 3))      # wall 1.2 m to the person's left
+    trail = np.c_[np.full(6, 8.0), np.linspace(1.3, 2.3, 6), np.full(6, -0.5)]  # one point every 0.2 m, 0.5 m up
+    extra = np.r_[wall, trail].astype(np.float32)
+    extra = np.c_[extra, np.linalg.norm(extra, axis=1), np.full(len(extra), 50.0), np.zeros(len(extra))]
+    pts = np.r_[base, extra.astype(np.float32)]
+    for cluster, separate in (("density", True), ("grid", False)):
+        ob = LidarDetector(cluster=cluster).detect(pts)["objects"]
+        near = ob[np.hypot(ob[:, O["x"]] - 8.0, ob[:, O["y"]] - 1.0) < 0.6]
+        if separate:
+            assert len(near) == 1 and CLASSES[int(near[0, O["cls"]])] == "pedestrian"
+        else:
+            assert len(near) == 0                                       # merged into the wall object
 
 
 def test_lidar_ignores_overhead_roof():

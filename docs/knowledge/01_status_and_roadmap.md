@@ -128,7 +128,8 @@ What the baseline showed:
 - **Our LiDAR detection drops to 47% / 27% on `run_20261014_1325` / `1326`**
   (92–97% elsewhere). There the walker stays within 2.7–6.6 m, close to other
   structures, and our grid clustering merges them into one 6–7 m object.
-  This under-segmentation is the first LiDAR technique to fix.
+  **Fixed 2026-10-26** with density-based clustering (84% / 94% now; 99–99.9%
+  on the other sessions). See [05](05_lidar.md).
 - **The radar azimuth spread on `freewalk_ref_01`** (11.7°) reflects its
   nominal radar times after the DCA throttle fault. The radar–LiDAR yaw of
   the Oct 14 mounting is about +2.4° to +7.7°.
@@ -154,9 +155,12 @@ What the baseline showed:
 - **The old chain's CuPy and CPU paths differed** (CASO vs OS CFAR on
   range-Doppler). Reported to the team. The chain is retired;
   `RadarChain(cfar=...)` reproduces either.
+- **Techniques phase (from 2026-10-26).** Done so far: LiDAR density-based
+  clustering; the tracker vectorised (3× faster with many tracks).
 - Next for detection:
+  - per-object accumulation and micro-Doppler (radar, per track);
   - a learned LiDAR classifier, or at least a static/moving split from
-    tracks;
+    tracks (walls now break into more pieces, ~37 objects per sweep);
   - camera detection (needs a model and the team's camera extrinsics for
     overlays);
   - radar static-scene detection (zero Doppler, for parked vehicles on the
