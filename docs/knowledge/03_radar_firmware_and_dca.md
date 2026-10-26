@@ -95,6 +95,18 @@ This page is the background an agent needs before touching radar code.
 - **TDM-MIMO Doppler phase:** a moving target's phase advances between the 6
   TX slots of a loop. `perception/radar.py` compensates it per Doppler bin. The
   old chain did not.
+- **Stationary reflectors (2026-10-26, experimental):** `perception/radar.py`
+  `process(..., static=True)` detects at zero Doppler, without clutter
+  removal.
+  - Within 6–10 m, 82–100% of these detections have a LiDAR object at the
+    same place.
+  - Farther out, many are images: azimuth sidelobes of a strong reflector at
+    the same range (in `freewalk_ref_02`: 12.0 m at 0°, 12°, 18° and 32° in
+    almost every frame), and multipath at 2–3× range. In the 5 m-deep office,
+    detections appear at 10–20 m.
+  - Beyond ~60 m the static map shows artifacts even indoors, so the static
+    path stops at 60 m.
+  - Better antenna calibration (lower sidelobes) is the real fix.
 - **Multipath ghosts:** a walker produces images at 2× range with 1.9×
   radial velocity (radar → person → rig → person → radar), and images behind
   the walker at the same radial velocity (via walls). `perception/radar.py`

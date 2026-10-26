@@ -341,6 +341,7 @@ class RadarSource(Source):
         self.bev_ri, self.bev_ai, self.bev_valid = bev_lookup(self.proc, bev_x, bev_y)
         self.timing_source = sess.alignment.get("radar", {}).get("timing_source", "")
         self.moving_only = moving_only
+        self.show_static = False             # stationary-reflector detections (experimental), on request
         self.ms_per_frame = 0.0
         # Raw point cloud: one point per range-azimuth cell (world azimuth = - processing azimuth), z = 0
         az = np.radians(world_azimuth(self.proc.az_axis))
@@ -392,7 +393,7 @@ class RadarSource(Source):
                 gen = self.clock.seek_gen
                 raw = self.prefetch.get(k)
                 t0 = time.perf_counter()
-                out = self.proc.process(raw, self.moving_only)
+                out = self.proc.process(raw, self.moving_only, static=self.show_static)
                 bev = out["ra"][self.bev_ai, self.bev_ri]
                 bev = torch.where(self.bev_valid, bev, torch.full_like(bev, float("nan")))
                 rd, bev, ra = out["rd"].cpu().numpy(), bev.cpu().numpy(), out["ra"].cpu().numpy()
@@ -407,7 +408,7 @@ class RadarSource(Source):
                 self.ms_per_frame = (time.perf_counter() - t0) * 1e3
                 k_done, mode = k, self.moving_only
                 self.publish({"t": float(self.t[k]), "k": k, "rd": rd, "bev": bev, "ra": ra, "det": det,
-                              "tracks": tracks})
+                              "tracks": tracks, "static": out.get("static_detections")})
         except Exception as exc:
             import traceback
             traceback.print_exc()

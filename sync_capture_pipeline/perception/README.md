@@ -105,7 +105,19 @@ python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden fr
    weighted 1 m per 4 m/s, so a walker's limbs stay one object.
 8. Tracks: Doppler-aware. A track whose Doppler contradicts its motion is not
    reported.
-9. **Per-track features** (`track_features.py`, 2026-10-26):
+9. **Stationary reflectors** (`process(..., static=True)`, experimental,
+   2026-10-26). The moving path removes everything static, so parked cars,
+   poles, stopped people and the whole scene at a red light are missed.
+   - The static path: the zero-Doppler band without clutter removal; an
+     azimuth FFT; a 2D CFAR over range × azimuth; local peaks; a 10 dB
+     sidelobe prune per range row; up to 60 m; multipath images flagged.
+   - LiDAR support is 82–100% within 6–10 m. Overall it is 80% indoors and
+     55% outdoors (`freewalk_ref_02`). Beyond ~10 m many detections are
+     sidelobe images of strong reflectors, since this array's sidelobes are
+     only 5–10 dB down, until the antenna recalibration.
+   - A higher threshold makes it worse: real nearby objects have ~17 dB SNR,
+     the artifacts more.
+10. **Per-track features** (`track_features.py`, 2026-10-26):
    - **Accumulation:** about 21 points per walker over 1 s, against a few per
      frame (`freewalk_ref_02`).
    - **Micro-Doppler** on the walker: the torso trace and the limb flashes

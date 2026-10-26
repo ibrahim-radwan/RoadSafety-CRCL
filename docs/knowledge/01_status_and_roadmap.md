@@ -164,14 +164,16 @@ What the baseline showed:
     the walker's tracks are moving 79% of the time (the rest is the standing
     segment and turns), and the other tracks are static 85% of the time.
     **Ego-motion compensation is still needed** for riding sessions; it needs
-    riding data to validate.
+    riding data to validate;
+  - **radar stationary reflectors** (zero Doppler; experimental, opt-in in
+    the replay). LiDAR support is 82–100% within 6–10 m, and 55% overall
+    outdoors: beyond that, sidelobe and multipath images dominate until the
+    antenna recalibration.
 - Next for detection:
   - a learned LiDAR classifier (walls now break into more pieces, ~37 objects
     per sweep; the moving/static flag helps tell road users from structure);
   - camera detection (needs a model and the team's camera extrinsics for
     overlays);
-  - radar static-scene detection (zero Doppler, for parked vehicles on the
-    road);
   - a per-session radar yaw estimate, if the team wants one before their
     extrinsics.
 - The DCA1000 throttle fault has an unknown cause (power cycle clears it).

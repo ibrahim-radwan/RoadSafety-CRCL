@@ -125,6 +125,12 @@ hits in 5 updates, and shown while it keeps being updated. A radar track must
 also keep its Doppler consistent with its motion. A seek starts the trackers
 over.
 
+**Static radar reflectors** (experimental, off by default): the *static*
+check box in the Radar group, or `--radar-static`. These are zero-Doppler
+detections, drawn as grey squares. They are reliable within ~6–10 m; farther
+out many are sidelobe or multipath images until the antenna recalibration.
+See `perception/README.md`.
+
 **Detections group:** the boxes, the track IDs and the LiDAR target can each
 be switched off. `--no-detect` turns off the LiDAR detector.
 

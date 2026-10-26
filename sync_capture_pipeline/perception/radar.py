@@ -79,7 +79,9 @@ class RadarDetector:
     def __init__(self, cfg_path, device: str = "cuda", *, cfar_guard=(2, 2), cfar_train=(4, 8),
                  threshold_db: float = 14.0, min_range_m: float = 1.0, max_range_m: float = None,
                  fov_deg: float = 70.0, peak_db: float = 6.0, max_peaks: int = 1, zero_doppler_bins: int = 1,
-                 max_detections: int = 512, rx_phase_deg=None, doppler_comp: bool = True):
+                 max_detections: int = 512, rx_phase_deg=None, doppler_comp: bool = True,
+                 static_guard=(2, 2), static_train=(4, 8), static_db: float = 15.0, static_sidelobe_db: float = 10.0,
+                 static_bins: int = 1, static_max_range_m: float = 60.0):
         import torch
         self.torch = torch
         cfg, corr = load_radar_config(cfg_path)
@@ -140,6 +142,9 @@ class RadarDetector:
         self.dop_ok = torch.as_tensor(dmask, device=self.dev)
         self.sin_t = torch.as_tensor(self.sin_axis, dtype=torch.float32, device=self.dev)
         self.fov_ok = self.sin_t.abs() <= self.fov_sin
+        self.static_guard, self.static_train = tuple(static_guard), tuple(static_train)
+        self.static_db, self.static_sidelobe_db, self.static_bins = float(static_db), float(static_sidelobe_db), int(static_bins)
+        self.static_range_ok = self.range_ok & torch.as_tensor(self.range_axis <= static_max_range_m, device=self.dev)
         fov_i = np.flatnonzero(np.abs(self.sin_axis) <= self.fov_sin)
         self.fov_sl = slice(int(fov_i[0]), int(fov_i[-1]) + 1)                 # contiguous azimuth FOV bins
         self.last = {}
@@ -153,10 +158,11 @@ class RadarDetector:
         cube = iq.permute(1, 0, 2, 3) * self.corr[:, None, :, None]       # TDM: chirp = loop * n_tx + tx
         return dsp.range_fft(cube, self.win_r, self.n_s)[..., :self.n_range]
 
-    def process(self, raw: np.ndarray, moving_only: bool = True, detect: bool = True):
+    def process(self, raw: np.ndarray, moving_only: bool = True, detect: bool = True, static: bool = False):
         """Returns dict: rd [doppler, range] dB, ra [az, range] dB (processing azimuth order),
         and, if detect, detections (N x len(DET_COLS)) and noise_db (frame median of the
-        detection map)."""
+        detection map); if static, static_detections (N x len(DET_COLS), v_r = 0): see
+        _detect_static."""
         torch = self.torch
         rng = self.range_cube(raw)
         virt = dsp.virtual_array(rng, self.ch_tx, self.ch_rx)                   # [loop, range, ch]
@@ -175,8 +181,53 @@ class RadarDetector:
         if detect:
             dets, noise = self._detect(p_az, dop, el_dop, moving_only)
             out.update(detections=dets, noise_db=noise)
+        if static:
+            out["static_detections"] = self._detect_static(virt)
         self.last = out
         return out
+
+    def _detect_static(self, virt):
+        """Stationary reflectors, which the moving-target path removes: the zero-Doppler band
+        (+-static_bins) of the cube WITHOUT static-clutter removal, beamformed in azimuth into a
+        static range-azimuth map (within the FOV), then a 2D CA-CFAR in dB over range x azimuth,
+        3x3 local maxima, and a sidelobe prune per range row (within static_sidelobe_db of the row's
+        strongest cell: this array's sidelobes are only 5-10 dB down), within static_max_range_m
+        (beyond ~60 m the static map shows artifacts even indoors). Multipath images (n x the range
+        of a stronger detection at the same azimuth) are flagged in the "ghost" column. Columns as
+        DET_COLS, v_r = 0, z = 0 (no elevation)."""
+        torch = self.torch
+        F = torch.nn.functional
+        mid, b = self.n_loops // 2, self.static_bins
+        d0 = dsp.doppler_fft(virt, self.win_d, self.n_loops, remove_clutter=False)[mid - b:mid + b + 1]
+        cube, _ = dsp.unique_aperture(d0, self.ch_pos_np)                       # [band, range, pos]
+        az = dsp.az_spectrum(cube, self.win_a, self.n_az)
+        m = 10 * torch.log10((az.real ** 2 + az.imag ** 2).sum(dim=0)[:, self.fov_sl] + 1e-6)   # [range, az_fov]
+        gr, ga = self.static_guard
+        tr_, ta = gr + self.static_train[0], ga + self.static_train[1]
+        k = torch.ones((2 * tr_ + 1, 2 * ta + 1), device=self.dev)
+        k[tr_ - gr:tr_ + gr + 1, ta - ga:ta + ga + 1] = 0
+        x = m[None, None]
+        noise = F.conv2d(F.pad(x, (ta, ta, tr_, tr_), mode="replicate"), (k / k.sum())[None, None])[0, 0]
+        snr = m - noise
+        hit = (snr > self.static_db) & self.static_range_ok[:, None]
+        hit &= m >= F.max_pool2d(F.pad(x, (1, 1, 1, 1), mode="replicate"), 3, stride=1)[0, 0]
+        hit &= m >= m.max(dim=1, keepdim=True).values - self.static_sidelobe_db
+        ri, ai = torch.nonzero(hit, as_tuple=True)
+        if ri.numel() > self.max_det:
+            keep = torch.topk(snr[ri, ai], self.max_det).indices
+            ri, ai = ri[keep], ai[keep]
+        if ri.numel() == 0:
+            return np.zeros((0, len(DET_COLS)), np.float32)
+        sin_proc = self.sin_t[self.fov_sl][ai]
+        az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(sin_proc))
+        r = ri.float() * self.range_res
+        zero = torch.zeros_like(r)
+        cols = torch.stack([r * torch.cos(torch.deg2rad(az_w)), r * torch.sin(torch.deg2rad(az_w)), zero, r, az_w,
+                            zero, zero, m[ri, ai], snr[ri, ai], zero], dim=1)
+        det = cols.float().cpu().numpy()
+        det[:, C["ghost"]] = flag_multipath(det, float(self.dop_axis[-1] - self.dop_axis[0] + self.dop_axis[1]
+                                                       - self.dop_axis[0]))     # n-bounce images (v = 0)
+        return det
 
     def _detect(self, p_az, dop, el_dop, moving_only):
         torch = self.torch

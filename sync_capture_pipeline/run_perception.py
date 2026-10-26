@@ -17,7 +17,9 @@ Writes, in <session>/sync/:
                            trk [T, 11] (frame, id, x, y, vx, vy, reported, hits, v_torso, spread,
                            cadence_hz): the last three are the track's micro-Doppler features
                            (perception/track_features.py; NaN when not measured this frame;
-                           cadence is experimental), noise_db [F]
+                           cadence is experimental), noise_db [F],
+                           static_start [F+1], static_det [M, DET_COLS]: stationary reflectors
+                           (v_r = 0; experimental, see perception/radar.py _detect_static)
     perception_lidar.npz   sweep_t [S], obj_start [S+1], obj [M, 13] (lidar.OBJ_COLS),
                            trk [T, 10] (sweep, id, x, y, vx, vy, reported, hits, cls, moving: 1 moving,
                            0 static, NaN not yet known; sensor frame, see tracking.py), ground_z [S]
@@ -70,11 +72,12 @@ def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
     tl = sess.radar
     tracker = Tracker(**RADAR_TRACKER)
     feats = TrackFeatures(det.range_axis, det.az_axis, det.dop_axis)
-    dets, objs, trks, noise = [], [], [], []
+    dets, objs, trks, noise, stat = [], [], [], [], []
     t0 = time.monotonic()
     for k in range(len(tl)):
-        out = det.process(tl.raw(k))
+        out = det.process(tl.raw(k), static=True)
         d = out["detections"]
+        stat.append(out["static_detections"])
         lab, ob = cluster_detections(d)
         tracker.update(float(tl.t[k]), ob[:, :2], list(ob[:, 4]), radial=ob[:, 4])
         f = feats.update(float(tl.t[k]), tracker.tracks, d, lab, out["p_az"])
@@ -92,6 +95,9 @@ def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
            np.zeros((0, len(DET_COLS)), np.float32), "obj_start": np.r_[0, np.cumsum(no)],
            "obj": np.concatenate(objs) if no.sum() else np.zeros((0, 8), np.float32),
            "trk": np.asarray(trks, np.float32).reshape(-1, 11), "noise_db": np.array(noise)}
+    ns = np.array([len(x) for x in stat])
+    res.update(static_start=np.r_[0, np.cumsum(ns)],
+               static_det=np.concatenate(stat) if ns.sum() else np.zeros((0, len(DET_COLS)), np.float32))
     res["meta"] = {"variant": variant, "rx_phase_deg": rx, "frames": len(tl), "seconds": round(el, 1),
                    "ms_per_frame": round(1e3 * el / max(len(tl), 1), 1),
                    "detections_per_frame": round(float(nd.mean()), 2), "objects_per_frame": round(float(no.mean()), 2)}

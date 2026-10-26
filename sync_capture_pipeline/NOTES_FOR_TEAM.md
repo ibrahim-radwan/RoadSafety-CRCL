@@ -158,7 +158,9 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
   - `perception_radar.npz`: per frame, detections with a multipath flag,
     objects and tracks. Since 2026-10-26, each track row also carries its
     micro-Doppler features: torso velocity, Doppler spread, and cadence. The
-    cadence is experimental.
+    cadence is experimental. `static_det` / `static_start` hold stationary
+    reflectors (zero Doppler; experimental). They are reliable within about
+    10 m; farther out many are sidelobe or multipath images.
   - `perception_lidar.npz`: per sweep, objects with boxes and size classes,
     and tracks. Since 2026-10-26, each track row also carries a moving /
     static flag. It is computed in the sensor frame, so it is valid for a

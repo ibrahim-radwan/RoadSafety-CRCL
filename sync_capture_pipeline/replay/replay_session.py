@@ -236,11 +236,13 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                                  brush=pg.mkBrush(42, 120, 214, 200))
         trk.setZValue(15)
         acc = pg.ScatterPlotItem(size=4, pen=None, brush=pg.mkBrush(150, 200, 255, 170))   # tracks' accumulated points
+        stat = pg.ScatterPlotItem(size=7, symbol="s", pen=pg.mkPen((210, 210, 210), width=1), brush=None)
+        stat.setZValue(12)                                                                  # static reflectors
         acc.setZValue(13)
-        for it in (dets, ghosts, rpts, acc, trk):
+        for it in (dets, ghosts, rpts, acc, stat, trk):
             p.addItem(it)
         items["radar_bev"] = dict(plot=p, img=img, fov=fov, tgt=tgt, dets=dets, ghosts=ghosts, pts=rpts, trk=trk,
-                                  acc=acc, labels=[], widget=w)
+                                  acc=acc, static=stat, labels=[], widget=w)
         panels["radar_bev"] = Panel("radar_bev", "Radar BEV", w, toggle_max)
         bottom.addWidget(panels["radar_bev"].frame)
         w, p = _plot(pg, "radial velocity (m/s, + = receding)", "range (m)")
@@ -418,11 +420,17 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         rthr.setSuffix(" dB")
         rthr.setToolTip("raw cells: dB above the frame's median (display only)")
         row.addWidget(rthr)
+        rstat = QtWidgets.QCheckBox("static")
+        rstat.setToolTip("stationary reflectors (zero Doppler; experimental): grey squares. Reliable within "
+                         "~6-10 m; farther out many are sidelobe or multipath images until the antenna recalibration")
+        rstat.stateChanged.connect(lambda s_: setattr(srcs["radar"], "show_static", bool(s_)))
+        rstat.setChecked(bool(getattr(args, "radar_static", False)))
+        row.addWidget(rstat)
         rflat = QtWidgets.QCheckBox("z = 0")
         rflat.setChecked(True)
         rflat.setToolTip("draw radar points at z = 0 in 3D: the radar elevation is not verified")
         row.addWidget(rflat)
-        rctl.update(mode=rmode, thr=rthr, flat=rflat, moving=moving)
+        rctl.update(mode=rmode, thr=rthr, flat=rflat, moving=moving, static=rstat)
         want = getattr(args, "radar_points", "detections")
         rmode.setCurrentIndex([v_ for _, v_ in RADAR_POINTS].index(want))
         moving.stateChanged.connect(lambda s_: setattr(srcs["radar"], "moving_only", bool(s_)))
@@ -647,10 +655,14 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 rr["img"].setImage(np.zeros((2, 2), np.float32), autoLevels=False, levels=(0, 1))
                 rr["img"].setRect(rd_rect)
                 panels["radar_bev"].set("Radar BEV", "no data at this time (before the radar's first frame)")
-                for k_ in ("dets", "ghosts", "pts", "trk", "acc"):
+                for k_ in ("dets", "ghosts", "pts", "trk", "acc", "static"):
                     rb[k_].setData([], [])
             mode_pts = rctl["mode"].currentData()
-            if rad and changed("radar", (rad["k"], mode_pts, rctl["thr"].value(), dctl["tracks"].isChecked())):
+            if rad and changed("radar", (rad["k"], mode_pts, rctl["thr"].value(), dctl["tracks"].isChecked(),
+                                         rctl["static"].isChecked())):
+                sd = rad.get("static")
+                sd = sd[sd[:, 9] == 0] if sd is not None and len(sd) else np.zeros((0, 10), np.float32)   # no ghosts
+                rb["static"].setData(sd[:, 1], sd[:, 0])
                 bev = rad["bev"]
                 fin = np.isfinite(bev)
                 # colour from 3 dB above the noise floor, but at most 30 dB below the frame's peak: a near,
@@ -816,6 +828,8 @@ def main() -> int:
     ap.add_argument("--radar-points", default="detections", choices=["detections", "raw", "off"],
                     help="detections = CFAR detections + tracks (live, GPU); raw = every range-azimuth cell "
                          "above a threshold")
+    ap.add_argument("--radar-static", action="store_true",
+                    help="radar: also show stationary reflectors (zero Doppler; experimental)")
     ap.add_argument("--no-rx-phase", action="store_true",
                     help="radar: without the in-situ RX phase correction (calibration/radar_rx_phase.json)")
     ap.add_argument("--no-detect", action="store_true", help="LiDAR: no object detection (display only)")
