@@ -60,6 +60,7 @@ import numpy as np
 from . import radar_dsp as dsp
 from .core.calibration import RX_PHASE_FILE, apply_phase, load_radar_config, rx_phase_for  # noqa: F401
 from .core.conventions import AZIMUTH_SIGN
+from .core.gpu import GPU_LOCK
 
 HERE = Path(__file__).resolve().parent
 
@@ -81,7 +82,7 @@ class RadarDetector:
                  fov_deg: float = 70.0, peak_db: float = 6.0, max_peaks: int = 1, zero_doppler_bins: int = 1,
                  max_detections: int = 512, rx_phase_deg=None, doppler_comp: bool = True,
                  static_guard=(2, 2), static_train=(4, 8), static_db: float = 15.0, static_sidelobe_db: float = 10.0,
-                 static_bins: int = 1, static_max_range_m: float = 60.0):
+                 static_bins: int = 1, static_max_range_m: float = 60.0, cuda_graph: bool = True):
         import torch
         self.torch = torch
         cfg, corr = load_radar_config(cfg_path)
@@ -147,24 +148,40 @@ class RadarDetector:
         self.static_range_ok = self.range_ok & torch.as_tensor(self.range_axis <= static_max_range_m, device=self.dev)
         fov_i = np.flatnonzero(np.abs(self.sin_axis) <= self.fov_sin)
         self.fov_sl = slice(int(fov_i[0]), int(fov_i[-1]) + 1)                 # contiguous azimuth FOV bins
+        gr, ga = self.static_guard
+        tr_, ta = gr + self.static_train[0], ga + self.static_train[1]
+        k = torch.ones((2 * tr_ + 1, 2 * ta + 1), device=self.dev)
+        k[tr_ - gr:tr_ + gr + 1, ta - ga:ta + ga + 1] = 0
+        self.static_kernel, self.static_pad = (k / k.sum())[None, None], (tr_, ta)
+        ri = torch.arange(self.n_range, device=self.dev)
+        self.r_idx_f, self.r_prev, self.r_next = ri.float(), (ri - 1).clamp(0, self.n_range - 1), \
+            (ri + 1).clamp(0, self.n_range - 1)
+        self.range_m_t = ri.float() * self.range_res
+        self.st_az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(self.sin_t[self.fov_sl]))
         self.last = {}
+        # CUDA graph of the fixed-shape front end (_front), one per (moving_only, detect, static)
+        self.cuda_graph = bool(cuda_graph) and self.dev.type == "cuda"
+        self._graphs, self._x, self._pin, self._copied = {}, None, None, None
 
     # ── stages ─────────────────────────────────────────────────────────────
     def range_cube(self, raw: np.ndarray):
         """[tx, loop, rx, range] complex, calibrated, range-FFT'd."""
+        return self._range_cube(self.torch.as_tensor(raw, device=self.dev))
+
+    def _range_cube(self, x):
         torch = self.torch
-        x = torch.as_tensor(raw, device=self.dev).view(self.n_loops, self.n_tx, self.n_rx, self.n_s, 2).float()
+        x = x.view(self.n_loops, self.n_tx, self.n_rx, self.n_s, 2).float()
         iq = torch.complex(x[..., 1], x[..., 0]) if self.iq_swap else torch.complex(x[..., 0], x[..., 1])
         cube = iq.permute(1, 0, 2, 3) * self.corr[:, None, :, None]       # TDM: chirp = loop * n_tx + tx
         return dsp.range_fft(cube, self.win_r, self.n_s)[..., :self.n_range]
 
-    def process(self, raw: np.ndarray, moving_only: bool = True, detect: bool = True, static: bool = False):
-        """Returns dict: rd [doppler, range] dB, ra [az, range] dB (processing azimuth order),
-        and, if detect, detections (N x len(DET_COLS)) and noise_db (frame median of the
-        detection map); if static, static_detections (N x len(DET_COLS), v_r = 0): see
-        _detect_static."""
+    def _front(self, x, moving_only: bool, detect: bool, static: bool) -> dict:
+        """Everything of one frame with fixed shapes, from the raw frame x (int16, on the device)
+        up to the CFAR noise maps: no host sync, so it can be a CUDA graph. Thresholds and the
+        variable-size steps (nonzero onwards) stay in _detect / _detect_static."""
         torch = self.torch
-        rng = self.range_cube(raw)
+        F = torch.nn.functional
+        rng = self._range_cube(x)
         virt = dsp.virtual_array(rng, self.ch_tx, self.ch_rx)                   # [loop, range, ch]
         el = dsp.virtual_array(rng, self.el_tx, self.el_rx)                     # [loop, range, 8]
         dch = dsp.doppler_fft(virt, self.win_d, self.n_loops, remove_clutter=moving_only)    # [dop, range, ch]
@@ -177,16 +194,142 @@ class RadarDetector:
         az = dsp.az_spectrum(dop, self.win_a, self.n_az)                        # [dop, range, az]
         p_az = az.real ** 2 + az.imag ** 2
         ra = 10 * torch.log10(p_az.sum(dim=0).T + 1e-6)                          # [az, range]
-        out = {"rd": rd, "ra": ra, "p_az": p_az}             # p_az: [doppler, range, az] linear power (GPU)
+        f = {"rd": rd, "ra": ra, "p_az": p_az}               # p_az: [doppler, range, az] linear power (GPU)
         if detect:
-            dets, noise = self._detect(p_az, dop, el_dop, moving_only)
+            det_map = 10 * torch.log10(p_az[..., self.fov_sl].max(dim=-1).values + 1e-6)   # [dop, range]
+            pd, pr = self.cfar_pad
+            xm = det_map[None, None]
+            xp = F.pad(F.pad(xm, (0, 0, pd, pd), mode="circular"), (pr, pr, 0, 0), mode="replicate")
+            f.update(dop=dop, el_dop=el_dop, det_map=det_map, det_noise=F.conv2d(xp, self.cfar_kernel)[0, 0],
+                     # 3x3 local maxima of the detection map (circular in Doppler)
+                     det_max=F.max_pool2d(F.pad(xm, (0, 0, 1, 1), mode="circular"), 3, stride=1, padding=(0, 1))[0, 0],
+                     det_median=det_map.median())
+            f.update(self._cell_rows(p_az, dop, el_dop, det_map, f["det_noise"]))
+        if static:
+            b = self.static_bins
+            d0 = dsp.doppler_band(virt, self.win_d, self.n_loops, b)    # = doppler_fft(...)[n/2 - b:n/2 + b + 1]
+            cube, _ = dsp.unique_aperture(d0, self.ch_pos_np)                   # [band, range, pos]
+            az0 = dsp.az_spectrum(cube, self.win_a, self.n_az)
+            m = 10 * torch.log10((az0.real ** 2 + az0.imag ** 2).sum(dim=0)[:, self.fov_sl] + 1e-6)   # [range, az_fov]
+            tr_, ta = self.static_pad
+            xs = m[None, None]
+            f.update(st_map=m, st_noise=F.conv2d(F.pad(xs, (ta, ta, tr_, tr_), mode="replicate"), self.static_kernel)[0, 0],
+                     st_max=F.max_pool2d(F.pad(xs, (1, 1, 1, 1), mode="replicate"), 3, stride=1)[0, 0],
+                     st_rowmax=m.max(dim=1, keepdim=True).values)
+            snr = m - f["st_noise"]
+            r = self.range_m_t[:, None]
+            az_w = self.st_az_w[None, :]
+            zero = torch.zeros_like(m)
+            f.update(st_snr=snr, st_rows=torch.stack(       # one DET_COLS row per range-azimuth cell
+                [r * torch.cos(torch.deg2rad(az_w)) + zero, r * torch.sin(torch.deg2rad(az_w)) + zero, zero,
+                 r + zero, az_w + zero, zero, zero, m, snr, zero], dim=-1))
+        return f
+
+    def _cell_rows(self, p_az, dop, el_dop, det_map, noise) -> dict:
+        """The moving-target detection row (DET_COLS) of EVERY range-Doppler cell and azimuth peak,
+        [dop, range, max_peaks, cols], with det_ok [dop, range, max_peaks] (a real peak): elementwise,
+        so a detected cell's row is what computing it for that cell alone gives, but as a few large
+        kernels in the graph instead of ~100 small ones per frame. _detect gathers the hit cells."""
+        torch = self.torch
+        A, R = self.n_az, self.n_range
+        # azimuth peaks per cell
+        if self.max_peaks == 1:
+            # the strongest bin within the FOV is always a peak (its neighbours are <= it, or outside the
+            # FOV), and its level is the detection map: only its two neighbours are needed
+            _, im = p_az[..., self.fov_sl].max(dim=-1)
+            top_i = (im + self.fov_sl.start)[..., None]                          # [dop, range, 1]
+            top_v = det_map[..., None]
+
+            def spec_at(idx):                                                    # dB, -1e9 outside the FOV
+                v = 10 * torch.log10(torch.gather(p_az, -1, idx) + 1e-6)
+                return torch.where(self.fov_ok[idx], v, torch.full_like(v, -1e9))
+            y0, y2 = spec_at((top_i - 1).clamp(0, A - 1)), spec_at((top_i + 1).clamp(0, A - 1))
+        else:
+            spec = 10 * torch.log10(p_az + 1e-6)                                # [dop, range, az]
+            spec = torch.where(self.fov_ok, spec, torch.full_like(spec, -1e9))
+            left, right = torch.roll(spec, 1, dims=-1), torch.roll(spec, -1, dims=-1)
+            is_pk = (spec >= left) & (spec >= right) & (spec >= spec.max(dim=-1, keepdim=True).values - self.peak_db)
+            val = torch.where(is_pk, spec, torch.full_like(spec, -1e9))
+            top_v, top_i = torch.topk(val, self.max_peaks, dim=-1)              # [dop, range, max_peaks]
+            y0 = torch.gather(spec, -1, (top_i - 1).clamp(0, A - 1))
+            y2 = torch.gather(spec, -1, (top_i + 1).clamp(0, A - 1))
+        den = (y0 - 2 * top_v + y2)
+        delta = torch.where(den.abs() > 1e-6, 0.5 * (y0 - y2) / den, torch.zeros_like(den)).clamp(-0.5, 0.5)
+        sin_proc = (self.sin_t[top_i] + delta * (2.0 / A)).clamp(-1, 1)
+        # range interpolation on the detection map
+        r0 = det_map[:, self.r_prev]
+        r2 = det_map[:, self.r_next]
+        rden = r0 - 2 * det_map + r2
+        rdel = torch.where(rden.abs() > 1e-6, 0.5 * (r0 - r2) / rden, torch.zeros_like(rden)).clamp(-0.5, 0.5)
+        rng_m = (self.r_idx_f[None, :] + rdel) * self.range_res                # [dop, range]
+        # elevation: phase of top x conj(bottom) over the pairs, at each range-Doppler cell (unverified)
+        phase = torch.angle((el_dop * dop[..., self.el_pos].conj()).sum(dim=-1))
+        sin_el = (phase / (2 * np.pi * self.d_el)).clamp(-1, 1)
+        # assemble: one row per (cell, azimuth peak)
+        az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(sin_proc))              # world azimuth, + = left
+        el_d = torch.rad2deg(torch.asin(sin_el))[..., None].expand_as(az_w)
+        r = rng_m[..., None].expand_as(az_w)
+        ca, ce = torch.cos(torch.deg2rad(az_w)), torch.cos(torch.deg2rad(el_d))
+        rows = torch.stack([r * ce * ca, r * ce * torch.sin(torch.deg2rad(az_w)), r * torch.sin(torch.deg2rad(el_d)),
+                            r, az_w, el_d, self.dop_axis_t[:, None, None].expand_as(az_w), top_v,
+                            top_v - noise[..., None], torch.zeros_like(r)], dim=-1)
+        return {"det_rows": rows, "det_ok": top_v > -1e8}
+
+    def _graphed(self, raw: np.ndarray, key: tuple) -> dict:
+        """_front(raw, *key) as a CUDA graph replay: the frame goes through a pinned staging
+        buffer into the graph's fixed input; returned maps are copies (the graph's own outputs
+        are overwritten by the next frame)."""
+        torch = self.torch
+        raw = np.asarray(raw).reshape(-1)
+        if self._x is None or self._x.numel() != raw.size:
+            self._graphs = {}
+            self._x = torch.zeros(raw.size, dtype=torch.int16, device=self.dev)
+            self._pin = torch.empty(raw.size, dtype=torch.int16).pin_memory()
+            self._copied = torch.cuda.Event()
+        self._copied.synchronize()                      # the previous frame's upload has left the buffer
+        self._pin.numpy()[:] = raw
+        self._x.copy_(self._pin, non_blocking=True)
+        self._copied.record()
+        if key not in self._graphs:
+            self._graphs[key] = self._capture(key)
+        g, f = self._graphs[key]
+        g.replay()
+        return {k: (v.clone() if k in ("rd", "ra", "p_az") else v) for k, v in f.items()}
+
+    def _capture(self, key: tuple):
+        """Warm up (cuFFT plans, cached tables) on a side stream, then capture _front, holding
+        GPU_LOCK so that no other thread's CUDA work breaks the capture."""
+        torch = self.torch
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(2):
+                self._front(self._x, *key)
+        torch.cuda.current_stream().wait_stream(s)
+        g = torch.cuda.CUDAGraph()
+        with GPU_LOCK:
+            with torch.cuda.graph(g):
+                f = self._front(self._x, *key)
+        return g, f
+
+    def process(self, raw: np.ndarray, moving_only: bool = True, detect: bool = True, static: bool = False):
+        """Returns dict: rd [doppler, range] dB, ra [az, range] dB (processing azimuth order),
+        p_az [doppler, range, az] linear power, and, if detect, detections (N x len(DET_COLS)) and
+        noise_db (frame median of the detection map); if static, static_detections
+        (N x len(DET_COLS), v_r = 0): see _detect_static."""
+        key = (bool(moving_only), bool(detect), bool(static))
+        f = self._graphed(raw, key) if self.cuda_graph else \
+            self._front(self.torch.as_tensor(raw, device=self.dev), *key)
+        out = {"rd": f["rd"], "ra": f["ra"], "p_az": f["p_az"]}
+        if detect:
+            dets, noise = self._detect(f, moving_only)
             out.update(detections=dets, noise_db=noise)
         if static:
-            out["static_detections"] = self._detect_static(virt)
+            out["static_detections"] = self._detect_static(f)
         self.last = out
         return out
 
-    def _detect_static(self, virt):
+    def _detect_static(self, f):
         """Stationary reflectors, which the moving-target path removes: the zero-Doppler band
         (+-static_bins) of the cube WITHOUT static-clutter removal, beamformed in azimuth into a
         static range-azimuth map (within the FOV), then a 2D CA-CFAR in dB over range x azimuth,
@@ -194,100 +337,42 @@ class RadarDetector:
         strongest cell: this array's sidelobes are only 5-10 dB down), within static_max_range_m
         (beyond ~60 m the static map shows artifacts even indoors). Multipath images (n x the range
         of a stronger detection at the same azimuth) are flagged in the "ghost" column. Columns as
-        DET_COLS, v_r = 0, z = 0 (no elevation)."""
+        DET_COLS, v_r = 0, z = 0 (no elevation). The maps come from _front."""
         torch = self.torch
-        F = torch.nn.functional
-        b = self.static_bins
-        d0 = dsp.doppler_band(virt, self.win_d, self.n_loops, b)    # = doppler_fft(...)[n/2 - b:n/2 + b + 1]
-        cube, _ = dsp.unique_aperture(d0, self.ch_pos_np)                       # [band, range, pos]
-        az = dsp.az_spectrum(cube, self.win_a, self.n_az)
-        m = 10 * torch.log10((az.real ** 2 + az.imag ** 2).sum(dim=0)[:, self.fov_sl] + 1e-6)   # [range, az_fov]
-        gr, ga = self.static_guard
-        tr_, ta = gr + self.static_train[0], ga + self.static_train[1]
-        k = torch.ones((2 * tr_ + 1, 2 * ta + 1), device=self.dev)
-        k[tr_ - gr:tr_ + gr + 1, ta - ga:ta + ga + 1] = 0
-        x = m[None, None]
-        noise = F.conv2d(F.pad(x, (ta, ta, tr_, tr_), mode="replicate"), (k / k.sum())[None, None])[0, 0]
-        snr = m - noise
+        m, snr = f["st_map"], f["st_snr"]
         hit = (snr > self.static_db) & self.static_range_ok[:, None]
-        hit &= m >= F.max_pool2d(F.pad(x, (1, 1, 1, 1), mode="replicate"), 3, stride=1)[0, 0]
-        hit &= m >= m.max(dim=1, keepdim=True).values - self.static_sidelobe_db
+        hit &= m >= f["st_max"]
+        hit &= m >= f["st_rowmax"] - self.static_sidelobe_db
         ri, ai = torch.nonzero(hit, as_tuple=True)
         if ri.numel() > self.max_det:
             keep = torch.topk(snr[ri, ai], self.max_det).indices
             ri, ai = ri[keep], ai[keep]
         if ri.numel() == 0:
             return np.zeros((0, len(DET_COLS)), np.float32)
-        sin_proc = self.sin_t[self.fov_sl][ai]
-        az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(sin_proc))
-        r = ri.float() * self.range_res
-        zero = torch.zeros_like(r)
-        cols = torch.stack([r * torch.cos(torch.deg2rad(az_w)), r * torch.sin(torch.deg2rad(az_w)), zero, r, az_w,
-                            zero, zero, m[ri, ai], snr[ri, ai], zero], dim=1)
+        cols = f["st_rows"][ri, ai]
         det = cols.float().cpu().numpy()
         det[:, C["ghost"]] = flag_multipath(det, float(self.dop_axis[-1] - self.dop_axis[0] + self.dop_axis[1]
                                                        - self.dop_axis[0]))     # n-bounce images (v = 0)
         return det
 
-    def _detect(self, p_az, dop, el_dop, moving_only):
+    def _detect(self, f, moving_only):
         torch = self.torch
-        F = torch.nn.functional
-        det_map = 10 * torch.log10(p_az[..., self.fov_sl].max(dim=-1).values + 1e-6)   # [dop, range]
-        pd, pr = self.cfar_pad
-        x = det_map[None, None]
-        xp = F.pad(F.pad(x, (0, 0, pd, pd), mode="circular"), (pr, pr, 0, 0), mode="replicate")
-        noise = F.conv2d(xp, self.cfar_kernel)[0, 0]
-        snr = det_map - noise
+        det_map = f["det_map"]
+        snr = det_map - f["det_noise"]
         hit = snr > self.threshold_db
         hit &= self.range_ok[None, :]
         if moving_only:
             hit &= self.dop_ok[:, None]
-        # keep 3x3 local maxima of the detection map (circular in Doppler)
-        mp = F.max_pool2d(F.pad(x, (0, 0, 1, 1), mode="circular"), 3, stride=1, padding=(0, 1))[0, 0]
-        hit &= det_map >= mp
+        hit &= det_map >= f["det_max"]
         di, ri = torch.nonzero(hit, as_tuple=True)
         if di.numel() > self.max_det:
             keep = torch.topk(snr[di, ri], self.max_det).indices
             di, ri = di[keep], ri[keep]
-        noise_db = float(det_map.median())
+        noise_db = float(f["det_median"])
         if di.numel() == 0:
             return np.zeros((0, len(DET_COLS)), np.float32), noise_db
-        # azimuth peaks per detection cell
-        spec = 10 * torch.log10(p_az[di, ri] + 1e-6)                             # [N, az]
-        spec = torch.where(self.fov_ok[None, :], spec, torch.full_like(spec, -1e9))
-        left, right = torch.roll(spec, 1, dims=1), torch.roll(spec, -1, dims=1)
-        is_pk = (spec >= left) & (spec >= right) & (spec >= spec.max(dim=1, keepdim=True).values - self.peak_db)
-        val = torch.where(is_pk, spec, torch.full_like(spec, -1e9))
-        top_v, top_i = torch.topk(val, self.max_peaks, dim=1)                   # [N, max_peaks]
-        ok = top_v > -1e8
-        n_idx = torch.arange(spec.shape[0], device=self.dev)[:, None].expand_as(top_i)
-        y0 = spec[n_idx, (top_i - 1).clamp(0, self.n_az - 1)]
-        y2 = spec[n_idx, (top_i + 1).clamp(0, self.n_az - 1)]
-        den = (y0 - 2 * top_v + y2)
-        delta = torch.where(den.abs() > 1e-6, 0.5 * (y0 - y2) / den, torch.zeros_like(den)).clamp(-0.5, 0.5)
-        sin_proc = (self.sin_t[top_i] + delta * (2.0 / self.n_az)).clamp(-1, 1)
-        # range interpolation on the detection map
-        r0 = det_map[di, (ri - 1).clamp(0, self.n_range - 1)]
-        r1 = det_map[di, ri]
-        r2 = det_map[di, (ri + 1).clamp(0, self.n_range - 1)]
-        rden = r0 - 2 * r1 + r2
-        rdel = torch.where(rden.abs() > 1e-6, 0.5 * (r0 - r2) / rden, torch.zeros_like(rden)).clamp(-0.5, 0.5)
-        rng_m = (ri.float() + rdel) * self.range_res
-        # elevation: phase of top x conj(bottom) over the pairs, at this range-Doppler cell (unverified)
-        top = el_dop[di, ri]                                                     # [N, 8]
-        bot = dop[di, ri][:, self.el_pos]
-        phase = torch.angle((top * bot.conj()).sum(dim=1))
-        sin_el = (phase / (2 * np.pi * self.d_el)).clamp(-1, 1)
-        # assemble: one row per (cell, azimuth peak)
-        sel = ok.flatten()
-        k = n_idx.flatten()[sel]
-        az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(sin_proc.flatten()[sel]))   # world azimuth, + = left
-        el_d = torch.rad2deg(torch.asin(sin_el))[k]
-        r = rng_m[k]
-        ca, ce = torch.cos(torch.deg2rad(az_w)), torch.cos(torch.deg2rad(el_d))
-        cols = torch.stack([r * ce * ca, r * ce * torch.sin(torch.deg2rad(az_w)), r * torch.sin(torch.deg2rad(el_d)),
-                            r, az_w, el_d, self.dop_axis_t[di[k]], top_v.flatten()[sel],
-                            top_v.flatten()[sel] - noise[di[k], ri[k]], torch.zeros_like(r)], dim=1)
+        rows, ok = f["det_rows"][di, ri], f["det_ok"][di, ri]                   # [N, max_peaks, cols], [N, max_peaks]
+        cols = rows[ok]                                                          # one row per (cell, azimuth peak)
         det = cols.float().cpu().numpy()
         det[:, C["ghost"]] = flag_multipath(det, float(self.dop_axis[-1] - self.dop_axis[0] + self.dop_axis[1]
                                                        - self.dop_axis[0]))

@@ -200,6 +200,11 @@ What the baseline showed:
     persistent across reboots; see [02](02_hardware_and_network.md)). The radar
     detector went 16.9 → 13.3 ms at ~50% GPU load: launch-bound.
 
-  Next candidates: the radar front end in CUDA graphs or batched frames
-  (~300 small kernels per frame); pinned-memory uploads. From the USB hard
-  disk, the radar is disk-bound: sessions on a fast disk gain most.
+  - The radar as a CUDA graph with per-cell detection rows: 13.3 → 8.3 ms per
+    frame, identical outputs; `run_perception` radar pass 92 → 59 s cached.
+
+  Next candidates: the radar front end's GPU work (the 64 × 256 × 256
+  azimuth cube; not bit-exact rewrites, so they need the baseline/score
+  check); batched frames for `run_perception`; LiDAR detector (~17 ms). From
+  the USB hard disk, the radar is disk-bound: sessions on a fast disk gain
+  most.

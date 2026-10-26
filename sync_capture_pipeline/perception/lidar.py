@@ -29,6 +29,8 @@ import time
 
 import numpy as np
 
+from .core.gpu import GPU_LOCK
+
 OBJ_COLS = ("x", "y", "z", "length", "width", "height", "yaw_deg", "n_points", "cls", "range", "az_deg",
             "z_min", "z_max")
 O = {k: i for i, k in enumerate(OBJ_COLS)}
@@ -115,7 +117,12 @@ class LidarDetector:
         """pts: N x >=5 (x, y, z, range, intensity, ...). Returns dict:
         objects (K x len(OBJ_COLS)), point_label (if labels; per input point: -2 invalid/near/far,
         -1 ground, 0 other non-ground (overhead, high, not in an object), k > 0 object k), ground_z (median
-        ground height near the sensor), ms (timings)."""
+        ground height near the sensor), ms (timings). Holds GPU_LOCK (a radar CUDA graph capture in
+        another thread must not see this work)."""
+        with GPU_LOCK:
+            return self._detect(pts, labels)
+
+    def _detect(self, pts: np.ndarray, labels: bool):
         import cv2
         torch = self.torch
         t0 = time.perf_counter()

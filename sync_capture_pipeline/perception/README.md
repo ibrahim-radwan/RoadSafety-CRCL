@@ -102,6 +102,12 @@ python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden fr
    - images at n× range with n× radial velocity (n = 2, 3; radar → target →
      rig → target → radar);
    - images behind a stronger target at its radial velocity (via a wall).
+   Steps 1–5 run as a **CUDA graph** (`RadarDetector(cuda_graph=True)`, the
+   default on CUDA): one graph per (moving_only, detect, static), captured on
+   first use. Step 5 is computed for every cell inside the graph (for one
+   peak, the FOV maximum is the peak, so it costs two gathers); after the
+   graph only the thresholds, `nonzero` and a gather of the hit cells run.
+   Identical to the eager path (tests/test_speed_paths.py).
 7. Objects: single-linkage clusters of the non-ghost detections. Doppler is
    weighted 1 m per 4 m/s, so a walker's limbs stay one object.
 8. Tracks: Doppler-aware. A track whose Doppler contradicts its motion is not
@@ -234,8 +240,33 @@ full `freewalk_ref_02`).
 With `jetson_clocks` (clocks locked at their maximum) the benchmark gives:
 radar 13.3 ms, LiDAR 16.9 ms, render 6.1 ms, tracker 2.9 ms; both threads
 43–45 Hz radar and 28–29 Hz LiDAR. The radar gains most (16.9 → 13.3 ms) at
-~50% GPU load: it is limited by launching ~300 small kernels per frame,
-not by GPU compute.
+~50% GPU load.
+
+**Radar as a CUDA graph (2026-10-26): 13.3 → 8.3 ms per frame** (GPU load
+~78%), identical outputs (all 4805 frames of `freewalk_ref_02`). Measured
+with graphs on and off:
+
+| | Eager | Graph |
+|---|---|---|
+| Front end (range FFT .. CFAR noise maps) | 6.3 ms | 5.1 ms replay + 0.8 ms upload |
+| Per-detection steps after `nonzero` | 5.0 ms (~100 small ops) | 1.0 ms (rows precomputed per cell in the graph) |
+| Static path after `nonzero` | 1.5 ms | 0.9 ms |
+
+- The front end itself is GPU-bound (the 64 × 256 × 256 azimuth cube: FFT,
+  power, shifts), so the graph saves ~1 ms there; most of the gain is moving
+  the per-detection work into large per-cell kernels.
+- Computing the full azimuth spectrum in dB for every cell (the general
+  multi-peak path) costs ~6 ms in the graph; with `max_peaks=1` (the
+  default) the peak is the FOV maximum, which the detection map already has.
+- `run_perception.py`'s radar pass on `freewalk_ref_02`, cached: 92 → 59 s.
+- In the benchmark's unpaced two-thread test the radar runs at ~99 Hz and
+  takes GPU time from the LiDAR thread (16.5 Hz); the replay paces the radar
+  at 8 Hz.
+- **Capture and threads:** this torch (2.1) only has the global capture mode,
+  in which any other thread's CUDA work breaks a capture. The radar captures
+  under `perception/core/gpu.py` `GPU_LOCK`, which the LiDAR detector holds
+  while it works. Tested with configurations switching mid-run beside a
+  LiDAR thread.
 
 - The radar pass reads frames ahead in a thread (`iter_frames`). From the
   USB hard disk it is disk-bound: ~31 MB/s for 3 MB frame files (seeks),

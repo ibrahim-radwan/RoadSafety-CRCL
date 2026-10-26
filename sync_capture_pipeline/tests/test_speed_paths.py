@@ -4,6 +4,7 @@
   radar_dsp.unique_aperture     cached layout = the per-position mean
   replay render (_paint)        = the plain sort-by-value version
   radar_io.iter_frames          = the frames in order
+  RadarDetector (CUDA graph)    = RadarDetector(cuda_graph=False), every configuration (session test)
   lidar_io.decode_parallel      = decode_sweeps (one driver), sweep for sweep, with detection
                                   (session test; the shortest session in $REPORT_TEST_SESSIONS)
 """
@@ -112,3 +113,29 @@ def test_decode_parallel_equals_one_driver():
         assert ta == tb
         assert ga == gb or (np.isnan(ga) and np.isnan(gb))
         assert oa.shape == ob.shape and np.array_equal(oa, ob)
+
+
+RADAR = [s for s in SESSIONS if (s / "sync" / "radar_timeline.csv").is_file()]
+
+
+@pytest.mark.skipif(not RADAR or DEV != "cuda", reason="needs a session with radar frames and CUDA")
+def test_radar_cuda_graph_equals_eager():
+    """The CUDA-graph front end (RadarDetector default) and the eager one give identical products and
+    detections, in every configuration and when configurations alternate (each is its own graph)."""
+    from perception.core.session import Session
+    from perception.radar import RadarDetector, rx_phase_for
+    S = Session(RADAR[0])
+    rx = rx_phase_for(S.variant)
+    gr, eg = RadarDetector(S.cfg_path, rx_phase_deg=rx), RadarDetector(S.cfg_path, rx_phase_deg=rx, cuda_graph=False)
+    assert gr.cuda_graph and not eg.cuda_graph
+    k0 = len(S.radar) // 3
+    for i, k in enumerate(range(k0, k0 + 12)):
+        raw = S.radar.raw(k)
+        kw = dict(moving_only=i % 3 != 2, detect=i % 4 != 3, static=i % 2 == 1)
+        a, b = gr.process(raw, **kw), eg.process(raw, **kw)
+        for key in ("rd", "ra", "p_az"):
+            assert torch.equal(a[key], b[key]), key
+        for key in ("detections", "static_detections", "noise_db"):
+            if key in b:
+                assert np.array_equal(a[key], b[key]), key
+    assert len(gr._graphs) >= 4

@@ -53,7 +53,7 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   measure_sync_offset.py        Stage 3 offset measurement (plate routine)
   make_report.py, report/       descriptive HTML session report (no verdicts) + data collection
   perception/                   THE processing library: core/ (config, readers, calibration, session,
-                                conventions; numpy only), radar_dsp.py (signal-processing stages, PyTorch),
+                                conventions, GPU lock; numpy only), radar_dsp.py (signal-processing stages, PyTorch),
                                 radar_chain.py (the old chain's front end on them), radar.py (detector:
                                 CFAR, TDM comp, multipath flags), lidar.py (local ground, objects),
                                 tracking.py, estimate_rx_phase.py, baseline.py (reference); README.md

@@ -131,6 +131,14 @@ Each item cost real debugging time. Read before changing the related code.
 - **Boolean-mask indexing over a whole image is slow.** The LiDAR render
   spent 21 of its 30 ms in `img[mask] = ...` over ~300 k pixels; working on
   the ~40 k points and `cv2.copyTo` with a mask: 7 ms, identical.
+- **CUDA graph capture in torch 2.1 is global.** Any CUDA call from another
+  thread during a capture breaks it (there is no `capture_error_mode` here).
+  Capture under `perception/core/gpu.py` `GPU_LOCK`, and hold it in every
+  other GPU user that can run in a parallel thread.
+- **A CUDA graph only helps launch-bound work.** The radar front end saved
+  ~1 ms of 6; the big gain was the ~100 tiny ops per frame after `nonzero`,
+  moved into per-cell kernels inside the graph. Time graph and eager parts
+  separately before deciding.
 - **Several processes on the GPU time-slice it.** Four LiDAR worker
   processes and the radar together were slower (242 s) than two workers and
   the radar (169 s). Measure before adding GPU processes.
