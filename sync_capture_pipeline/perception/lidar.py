@@ -210,3 +210,17 @@ class LidarDetector:
         t3 = time.perf_counter()
         return {"objects": objects, "point_label": point_label, "ground_z": ground_z,
                 "ms": {"ground": 1e3 * (t1 - t0), "grid": 1e3 * (t2 - t1), "objects": 1e3 * (t3 - t2)}}
+
+
+_DETECTOR = {}
+
+
+def detect_sweep(pts: np.ndarray):
+    """(objects, ground_z, ms) for one sweep with a default LidarDetector, one per process: the
+    per-sweep function for perception.core.lidar_io.decode_parallel's worker processes."""
+    import time
+    if "d" not in _DETECTOR:
+        _DETECTOR["d"] = LidarDetector()
+    t0 = time.perf_counter()
+    o = _DETECTOR["d"].detect(pts, labels=False)
+    return o["objects"], o["ground_z"], 1e3 * (time.perf_counter() - t0)

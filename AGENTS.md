@@ -58,6 +58,7 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
                                 CFAR, TDM comp, multipath flags), lidar.py (local ground, objects),
                                 tracking.py, estimate_rx_phase.py, baseline.py (reference); README.md
   run_perception.py             our detection + tracking over a session -> sync/perception_*.npz, scores
+  bench_gpu.py                  processing speed and GPU load per part (frames in RAM), for optimisation work
   timing_consistency.py         range-based timing check per window (geometry-biased; see 07)
   radar_firmware.py             which firmware recorded a session -> which .cfg
   board_health.py               Jetson temperatures

@@ -3,11 +3,14 @@
 run_perception.py - our GPU detection + tracking over a whole session, saved
 for the research team and scored against the LiDAR walker track.
 
-    python run_perception.py --session /mnt/sdcard/sessions/<name> [--sensors radar,lidar]
+    python run_perception.py --session /mnt/sdcard/sessions/<name> [--sensors radar,lidar] [--lidar-workers N]
 
-Radar (perception/radar.py): every frame, in order -> detections, DBSCAN
-objects, tracks. LiDAR (perception/lidar.py): the pcap is decoded at 3x real
-time (the rs_driver limit) -> objects per sweep, tracks. Tracks are the
+Radar (perception/radar.py): every frame, in order (read ahead in a thread, so
+the disk and the GPU overlap) -> detections, clustered objects, tracks. LiDAR
+(perception/lidar.py), at the same time: the pcap is decoded in time chunks by
+--lidar-workers drivers at once (worker processes, each at 3x real time, the
+rs_driver limit; detection runs there too) -> objects per sweep, then tracks in
+order (identical to one driver over the whole pcap). Tracks are the
 reliable output: a track is confirmed after 3 hits in its first 5 updates and
 reported while it is updated (radar: and while its Doppler agrees with its motion).
 
@@ -38,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -45,9 +49,10 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from perception.core.lidar_io import decode_sweeps                             # noqa: E402
+from perception.core.lidar_io import decode_parallel, decode_sweeps            # noqa: E402
+from perception.core.radar_io import iter_frames                               # noqa: E402
 from perception.core.session import Session, target_at                         # noqa: E402
-from perception.lidar import CLASSES, LIDAR_TRACKER, O, LidarDetector          # noqa: E402
+from perception.lidar import CLASSES, LIDAR_TRACKER, O, detect_sweep           # noqa: E402
 from perception.radar import (C, DET_COLS, RADAR_TRACKER, RadarDetector, cluster_detections,  # noqa: E402
                               rx_phase_for)
 from perception.track_features import TrackFeatures                            # noqa: E402
@@ -74,8 +79,8 @@ def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
     feats = TrackFeatures(det.range_axis, det.az_axis, det.dop_axis)
     dets, objs, trks, noise, stat = [], [], [], [], []
     t0 = time.monotonic()
-    for k in range(len(tl)):
-        out = det.process(tl.raw(k), static=True)
+    for k, raw in iter_frames(tl):                    # frames read ahead: disk and GPU overlap
+        out = det.process(raw, static=True)
         d = out["detections"]
         stat.append(out["static_detections"])
         lab, ob = cluster_detections(d)
@@ -106,21 +111,23 @@ def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
     return res
 
 
-def run_lidar(S: Path, log=print, rate: float = 3.0) -> dict:
-    det = LidarDetector()
+def run_lidar(S: Path, log=print, rate: float = 3.0, workers: int = 4) -> dict:
+    """workers > 1: decode_parallel (that many drivers on time chunks, detection in the worker
+    processes; identical results); 1: one driver, decode_sweeps."""
     tracker = Tracker(**LIDAR_TRACKER)
     out = {"t": [], "obj": [], "trk": [], "gz": []}
     ms = []
     t0 = time.monotonic()
-    for t, p in decode_sweeps(S, rate):
-        tic = time.perf_counter()
-        o = det.detect(p, labels=False)
-        ms.append(1e3 * (time.perf_counter() - tic))
-        ob = o["objects"]
+    if workers > 1:
+        sweeps = decode_parallel(S, detect_sweep, workers=workers, rate=rate)
+    else:
+        sweeps = ((t, detect_sweep(p)) for t, p in decode_sweeps(S, rate))
+    for t, (ob, gz, dt_ms) in sweeps:
+        ms.append(dt_ms)
         movable = ob[ob[:, O["cls"]] != CLASSES.index("structure")]
         tracker.update(t, movable[:, [O["x"], O["y"]]], list(movable[:, O["cls"]]))
         k = len(out["t"])
-        out["t"].append(t); out["obj"].append(ob); out["gz"].append(o["ground_z"])
+        out["t"].append(t); out["obj"].append(ob); out["gz"].append(gz)
         out["trk"] += _trk_rows(k, tracker, extra=lambda tr: [tr.payload, MOTION_CODE[tr.motion]])
         if len(out["t"]) % 1000 == 0:
             log(f"  lidar {len(out['t'])} sweeps  {time.monotonic() - t0:.0f} s")
@@ -129,7 +136,8 @@ def run_lidar(S: Path, log=print, rate: float = 3.0) -> dict:
     res = {"sweep_t": np.array(out["t"]), "obj_start": np.r_[0, np.cumsum(n)],
            "obj": np.concatenate(out["obj"]) if n.sum() else np.zeros((0, len(O)), np.float32),
            "trk": np.asarray(out["trk"], np.float32).reshape(-1, 10), "ground_z": np.array(out["gz"])}
-    res["meta"] = {"sweeps": len(n), "seconds": round(el, 1), "detector_ms_median": round(float(np.median(ms)), 1),
+    res["meta"] = {"sweeps": len(n), "seconds": round(el, 1), "decoders": workers,
+                   "detector_ms_median": round(float(np.median(ms)), 1),
                    "detector_ms_p95": round(float(np.percentile(ms, 95)), 1),
                    "objects_per_sweep": round(float(n.mean()), 2)}
     log(f"  lidar: {len(n)} sweeps in {el:.0f} s, detector {np.median(ms):.1f} ms median, "
@@ -241,6 +249,9 @@ def main() -> int:
     ap.add_argument("--session", type=Path, nargs="+", required=True)
     ap.add_argument("--sensors", default="radar,lidar")
     ap.add_argument("--no-rx-phase", action="store_true", help="radar: without the in-situ RX phase correction")
+    ap.add_argument("--lidar-workers", type=int, default=None,
+                    help="LiDAR decoders running at once on time chunks (each ~3x real time; 1 = one driver). "
+                         "Default 2 while the radar runs too (they share the GPU), else 4")
     a = ap.parse_args()
     sensors = [s.strip() for s in a.sensors.split(",")]
     for S in a.session:
@@ -249,8 +260,19 @@ def main() -> int:
         report = json.loads(jp.read_text()) if jp.is_file() else {}       # a partial run keeps the other sensor
         report.update(session=S.name, created=time.strftime("%Y-%m-%dT%H:%M:%S"))
         track, radar_res, lidar_res = Session(S).target, None, None
+        log = lambda m: print(m, flush=True)                              # noqa: E731
+        lidar_run = {}
+        workers = a.lidar_workers or (2 if "radar" in sensors else 4)
+        if "lidar" in sensors and (S / "lidar" / "lidar.pcap").is_file():  # concurrently with the radar
+            def _lidar():                                                 # (decoding + detection run in
+                try:                                                      # worker processes; this thread tracks)
+                    lidar_run["res"] = run_lidar(S, log=log, workers=workers)
+                except Exception as e:                                    # noqa: BLE001
+                    lidar_run["err"] = e
+            lidar_thread = threading.Thread(target=_lidar, name="lidar")
+            lidar_thread.start()
         if "radar" in sensors and (S / "sync" / "radar_timeline.csv").is_file():
-            r = radar_res = run_radar(S, not a.no_rx_phase, log=lambda m: print(m, flush=True))
+            r = radar_res = run_radar(S, not a.no_rx_phase, log=log)
             meta = r.pop("meta")
             np.savez_compressed(S / "sync" / "perception_radar.npz", **r)
             report["radar"] = meta
@@ -259,7 +281,10 @@ def main() -> int:
                 report["radar"]["score"] = score_radar_points(r["frame_t"], r["det_start"], d[:, C["range"]],
                                                               d[:, C["az_deg"]], track, r["trk"])
         if "lidar" in sensors and (S / "lidar" / "lidar.pcap").is_file():
-            r = lidar_res = run_lidar(S, log=lambda m: print(m, flush=True))
+            lidar_thread.join()
+            if "err" in lidar_run:
+                raise lidar_run["err"]
+            r = lidar_res = lidar_run["res"]
             meta = r.pop("meta")
             np.savez_compressed(S / "sync" / "perception_lidar.npz", **r)
             report["lidar"] = meta

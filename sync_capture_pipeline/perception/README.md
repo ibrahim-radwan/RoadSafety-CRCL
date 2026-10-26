@@ -39,9 +39,9 @@ See `docs/knowledge/01_status_and_roadmap.md`.
 | Module | What |
 |---|---|
 | `radar_config.py` | The radar `.cfg` parser, array geometry, axes and the processing defaults (`RadarConfig`). Moved from the old chain. |
-| `radar_io.py` | Raw radar frames: the old `read_frame` (moved here), plus `RadarTimeline` (t_ref and file per frame) and `FramePrefetcher` (reads ahead on slow disks). |
+| `radar_io.py` | Raw radar frames: the old `read_frame` (moved here), plus `RadarTimeline` (t_ref and file per frame), `FramePrefetcher` (the replay's random-access read-ahead on slow disks) and `iter_frames` (in-order read-ahead for batch runs). |
 | `calibration.py` | The `.cfg` antenna calibration combined with the in-situ correction: `load_radar_config`, `radar_correction`, `rx_phase_for`. |
-| `lidar_io.py` | `lidar.pcap`: packet index, LiDAR-to-monotonic clock, sweep timing, `decode_sweeps` (a whole session, in order). |
+| `lidar_io.py` | `lidar.pcap`: packet index, LiDAR-to-monotonic clock, sweep timing, `decode_sweeps` (a whole session, in order, one driver) and `decode_parallel` (the same, several drivers on time chunks in worker processes; identical sweeps). |
 | `session.py` | `Session`: metadata, firmware variant and `.cfg`, offsets, radar/camera timelines, pairs, and the LiDAR walker track (`target_at`). |
 | `conventions.py` | The frame and sign conventions: world azimuth = − processing azimuth, v_r > 0 receding, the old chain's xyz to the pipeline frame. |
 
@@ -50,7 +50,8 @@ follows them).
 
 ```bash
 conda activate rel_1_py_3_8
-python run_perception.py --session /mnt/sdcard/sessions/<name>          # ~4 min for 10 min of data
+python run_perception.py --session /mnt/sdcard/sessions/<name>          # ~3 min for 10 min of data (cached; ~6 min from a USB hard disk)
+python bench_gpu.py --session <s> [--json out.json]                    # per-part speed and GPU load (see Speed below)
 python perception/estimate_rx_phase.py --session <s1> [<s2> ...] [--write]
 python -m pytest -q tests/test_perception.py
 ```
@@ -205,6 +206,45 @@ correction:
   duplicate merge absorbs most of that). There are ~37–42 objects per sweep
   instead of ~27, as walls break into pieces. Radar tracks without LiDAR
   support fell as a side effect (`1326`: 1.24 → 0.72 per frame).
+
+## Speed (2026-10-26, `ibrahim-desktop`, MAXN)
+
+`bench_gpu.py` times each part on frames held in RAM, and both sensors
+together in two threads as the replay runs them. On `freewalk_ref_02`:
+
+| Part | Before | Now | How |
+|---|---|---|---|
+| Radar detector (moving + static) | 18.5 ms | 16.9 ms | the static path computes its 3 zero-Doppler bins as a DFT matmul, not a second full Doppler FFT; aperture maps cached |
+| LiDAR detector | 17–19 ms | same | |
+| LiDAR bird's-eye render (replay) | 29.7 ms | 6.8 ms | numpy on the ~40 k points, not boolean masks over the ~300 k-pixel image; sort the uint8 colour index (radix), not the values |
+| LiDAR tracker update | 6.3 ms | 3.0 ms | the moving/static check in plain floats (numpy on 3-element lists was 60% of it) |
+| Both sensors in two threads | radar 37 Hz, LiDAR 15 Hz | radar 36 Hz, LiDAR 24 Hz | (sensors: 8 / 10 Hz) |
+
+All of these give identical outputs (tests/test_speed_paths.py, and
+`run_perception.py` outputs compared array by array on `stage3_02` and the
+full `freewalk_ref_02`).
+
+`run_perception.py` on `freewalk_ref_02` (10 min of data):
+
+| | Before | Now |
+|---|---|---|
+| Files cached in RAM | ~324 s (radar 103 s, then LiDAR 221 s) | **169 s** (both at once) |
+| Cold, from the USB hard disk | ~700 s (radar 480 s, then LiDAR 221 s) | **353 s** (radar 335 s, disk-bound; LiDAR 107 s alongside) |
+
+- The radar pass reads frames ahead in a thread (`iter_frames`). From the
+  USB hard disk it is disk-bound: ~31 MB/s for 3 MB frame files (seeks),
+  however many threads read.
+- One rs_driver decodes at most ~3× real time (faster, it drops packets), so
+  the LiDAR pass runs several drivers on time chunks in worker processes
+  (`decode_parallel`, detection in the workers), then tracks in order.
+  Chunks overlap by 1.5 s before (the driver needs a DIFOP packet first) and
+  0.3 s after; each drops its possibly partial first and last sweep.
+- **The GPU is shared by time-slicing between processes**, so more is not
+  faster: with the radar running, 2 LiDAR workers (169 s) beat 4 (242 s),
+  and 4 workers alone take 101 s for the LiDAR. Hence the default: 2 with
+  the radar, 4 for the LiDAR alone (`--lidar-workers`).
+- LiDAR detection on the CPU (torch, 2 threads, 23 ms) differs from the GPU
+  in ~1 sweep in 100, so the workers stay on the GPU.
 
 ## Limitations
 

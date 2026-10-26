@@ -227,7 +227,7 @@ The report is **descriptive**, with no pass/fail. It contains:
 For the radar and LiDAR detections and tracks of a session (for the research
 team, and to score them against the LiDAR walker), run
 `$PY sync_capture_pipeline/run_perception.py --session <s>`, which takes about
-4 minutes for 10 minutes of data. The replay computes them live.
+3 minutes for 10 minutes of data (about 6 from a USB hard disk). The replay computes them live.
 
 Tests: `$PY -m pytest sync_capture_pipeline/tests`.
 

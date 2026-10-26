@@ -186,5 +186,16 @@ What the baseline showed:
   merge.
 - Possible later work: a CI subset that runs without hardware or data. The
   synthetic perception tests already do.
-- Possible later work: GPU LiDAR rendering in the replay. The numpy render
-  takes ~10 ms per sweep and holds the GIL.
+- **Speed and the Orin's resources (from 2026-10-26, owner's top priority).**
+  Done (all outputs identical; `perception/README.md` "Speed",
+  `bench_gpu.py`):
+  - LiDAR render 29.7 → 6.8 ms, tracker 6.3 → 3.0 ms, radar 18.5 → 16.9 ms;
+    the replay's LiDAR loop 15 → 24 Hz (sensor: 10);
+  - `run_perception.py` on 10 min of data: ~324 s → 169 s cached, ~700 s →
+    353 s from the USB disk (radar frames read ahead; LiDAR decoded by
+    several drivers on time chunks, alongside the radar).
+  
+  Next candidates: the radar front end in CUDA graphs or batched frames
+  (launch-bound: ~300 small kernels per frame); pinned-memory uploads;
+  `jetson_clocks` (a system change: owner's approval). From the USB hard
+  disk, the radar is disk-bound: sessions on a fast disk gain most.

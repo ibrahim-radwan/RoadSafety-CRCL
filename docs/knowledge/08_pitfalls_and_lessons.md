@@ -55,7 +55,9 @@ Each item cost real debugging time. Read before changing the related code.
   7.5 ms per sweep in the replay's LiDAR thread, which holds the GIL; the
   LiDAR rate fell from ~10 to ~7 updates/s. Vectorised: 2.5 ms, identical
   tracks.
-- **Decode pcaps at ≤ 3×** real time.
+- **Decode pcaps at ≤ 3×** real time per driver. Run several drivers on time
+  chunks for more (`decode_parallel`); each chunk needs a DIFOP packet
+  (once a second) before its first sweep, so chunks start 1.5 s early.
 - **`split_angle: 180`**, or the forward field of view splits across two
   sweeps.
 
@@ -113,6 +115,28 @@ Each item cost real debugging time. Read before changing the related code.
   radar frame takes 78 ms median to read (up to 390 ms), and the replay got
   only 3 radar updates/s. The replay now reads ahead. For full speed, use
   ext4.
+  - The drive is a 2.5" USB hard disk (WD10JMVW). Frame files come at
+    ~31 MB/s with 1 to 8 reading threads alike (seeks), so batch radar runs
+    from it are disk-bound (~70 ms/frame).
+- **A read from the external drive once returned different bytes**
+  (2026-10-26): `freewalk_ref_02/radar/frame_003308.bin` gave a slightly
+  different frame in one cold run (noise level 75.74 instead of 75.83 dB, 32
+  static detections moved) and stayed wrong in the page cache until evicted.
+  Six later cold reads all agree. Re-run a result that looks odd before
+  trusting it, and check copies against the SD card originals (checksums)
+  before relying on this drive.
+- **numpy on tiny arrays is slow.** `np.mean` of a 3-element list costs
+  ~25 µs; the tracker's moving/static check did that 3× per track per sweep
+  (60% of the tracker). Plain float arithmetic: identical, 3× faster.
+- **Boolean-mask indexing over a whole image is slow.** The LiDAR render
+  spent 21 of its 30 ms in `img[mask] = ...` over ~300 k pixels; working on
+  the ~40 k points and `cv2.copyTo` with a mask: 7 ms, identical.
+- **Several processes on the GPU time-slice it.** Four LiDAR worker
+  processes and the radar together were slower (242 s) than two workers and
+  the radar (169 s). Measure before adding GPU processes.
+- **Evict files from the page cache without root** to time cold reads
+  repeatably: `os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)` per file;
+  `fincore` shows what is cached.
 
 ## Environment (any new board)
 - **`pip install ultralytics` replaces the CUDA torch with a CPU one** (via

@@ -1,7 +1,8 @@
 """
 radar_io.py - raw radar frames: the original .bin reader (read_frame, from the old chain's
 radar_reader.py, moved here in merge step 2) and the session layer (RadarTimeline,
-FramePrefetcher) used by the replay and the batch tools.
+FramePrefetcher for the replay's random access, iter_frames for in-order batch reads) used by the
+replay and the batch tools.
 
 Read raw .bin frames from the DCA1000 captured for the AWR2243-2X cascade.
 
@@ -198,3 +199,37 @@ class FramePrefetcher:
             for old in [j for j in list(self._cache) if j < self._want - 2 or j > self._want + 2 * self.ahead]:
                 self._cache.pop(old, None)
             self._cache[todo[0]] = raw
+
+
+def iter_frames(timeline: RadarTimeline, ahead: int = 8):
+    """Yields (k, raw) for every frame in order, reading `ahead` frames in a background thread so
+    a slow disk and the processing overlap (the batch tools: run_perception)."""
+    import queue
+    import threading
+    q: queue.Queue = queue.Queue(maxsize=max(int(ahead), 1))
+    stop = threading.Event()
+
+    def reader():
+        for k in range(len(timeline)):
+            raw = timeline.raw(k)
+            while not stop.is_set():
+                try:
+                    q.put((k, raw), timeout=0.2)
+                    break
+                except queue.Full:
+                    continue
+            if stop.is_set():
+                return
+        q.put(None)
+
+    th = threading.Thread(target=reader, daemon=True, name="radar-read-ahead")
+    th.start()
+    try:
+        while True:
+            item = q.get()
+            if item is None:
+                return
+            yield item
+    finally:
+        stop.set()
+        th.join(timeout=2)

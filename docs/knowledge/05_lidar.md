@@ -43,7 +43,9 @@
     view is never cut in two;
   - `ts_first_point: true`.
 - **Decoding speed:** decode pcaps at **≤ 3×** real time. Faster than 4×, the
-  driver drops data.
+  driver drops data. For more, run several drivers on time chunks:
+  `perception/core/lidar_io.py` `decode_parallel` (worker processes; gives
+  the same sweeps as one driver). `run_perception.py` uses it.
 - **Build:** see `docs/NEW_BOARD_SETUP.md`. The end user's original prebuilt
   `.so` is kept as `.so.bak`.
 

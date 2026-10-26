@@ -7,6 +7,7 @@ decoding by our rs_driver wrapper (lidar_standalone_capture/rs_driver/python_wra
     sweep_time         the time a sweep's radar-boresight points were scanned
     decode_config      the session's driver config with split_angle 180 (sweeps split behind)
     decode_sweeps      the whole session decoded, sweep by sweep, in order
+    decode_parallel    the same, several drivers on time chunks at once (processes), fn applied there
 
 Decode at <= 3x real time: faster, the driver drops data. Points are N x 6: x, y, z (x forward,
 y left, z up), range, intensity, time offset from the sweep timestamp. Directions with no return
@@ -102,9 +103,10 @@ def lidar_offset_s(session: Path) -> float:
     return json.loads(al.read_text()).get("offsets", {}).get("lidar_ms", 0.0) / 1e3 if al.is_file() else 0.0
 
 
-def decode_sweeps(session: Path, rate: float = 3.0, cfg_path: Path = None):
-    """Decode the whole lidar.pcap; yields (t_ref of the boresight points, points N x 6 float32)
-    in time order. The driver runs at `rate` x real time (<= 3)."""
+def decode_sweeps(session: Path, rate: float = 3.0, cfg_path: Path = None, pcap_path: Path = None):
+    """Decode the whole lidar.pcap (or pcap_path: a part of it, see decode_parallel); yields
+    (t_ref of the boresight points, points N x 6 float32) in time order. The driver runs at
+    `rate` x real time (<= 3)."""
     session = Path(session)
     to_mono = lidar_to_mono(lidar_pcap_index(session), lidar_offset_s(session))
     cfg_path = decode_config(session, cfg_path or session / "sync" / "perception_lidar_decode.yaml")
@@ -118,7 +120,7 @@ def decode_sweeps(session: Path, rate: float = 3.0, cfg_path: Path = None):
     lid = load_wrapper()(str(cfg_path))
     lid.on_pointcloud(on_cloud)
     with contextlib.redirect_stdout(io.StringIO()):
-        lid.start(pcap_path=str(session / "lidar" / "lidar.pcap"), pcap_rate=rate)
+        lid.start(pcap_path=str(pcap_path or session / "lidar" / "lidar.pcap"), pcap_rate=rate)
     pending = []                      # sweeps arrive in order; keep a small reorder buffer anyway
     try:
         while not (lid.input_finished() and q.empty()):
@@ -137,3 +139,72 @@ def decode_sweeps(session: Path, rate: float = 3.0, cfg_path: Path = None):
     finally:
         with contextlib.redirect_stdout(io.StringIO()):
             lid.stop()
+
+
+def _decode_chunk(session: Path, fn, lo: int, hi: int, first: bool, last: bool, rate: float, tmp_dir: Path):
+    """One chunk of decode_parallel, in a worker process: packets lo..hi-1 of lidar.pcap copied
+    into a temporary pcap and decoded; [(t, fn(points))] without the chunk's first and last sweep
+    (possibly partial), unless the chunk starts or ends the session."""
+    import os
+    import tempfile
+    idx = lidar_pcap_index(session)
+    src = session / "lidar" / "lidar.pcap"
+    a, b = int(idx["off"][lo]), int(idx["off"][hi - 1] + idx["ln"][hi - 1])
+    fd, tmp = tempfile.mkstemp(suffix=".pcap", dir=str(tmp_dir))
+    try:
+        with open(src, "rb") as f, os.fdopen(fd, "wb") as g:
+            g.write(f.read(24))                               # pcap global header
+            f.seek(a)
+            left = b - a
+            while left > 0:
+                buf = f.read(min(left, 1 << 24))
+                if not buf:
+                    break
+                g.write(buf)
+                left -= len(buf)
+        cfg = Path(tmp).with_suffix(".yaml")
+        out = [(t, fn(p)) for t, p in decode_sweeps(session, rate, cfg_path=cfg, pcap_path=Path(tmp))]
+    finally:
+        for q in (Path(tmp), Path(tmp).with_suffix(".yaml")):
+            if q.exists():
+                q.unlink()
+    return out[(0 if first else 1):(len(out) if last else max(len(out) - 1, 0))]
+
+
+def decode_parallel(session: Path, fn, workers: int = 4, chunk_s: float = None, rate: float = 3.0,
+                    pad_s=(1.5, 0.3), tmp_dir: Path = Path("/dev/shm"), max_chunk_s: float = 300.0):
+    """Like ((t, fn(points)) for t, p in decode_sweeps(session)), but several drivers decode time
+    chunks of the pcap at once, in `workers` processes (one driver is limited to ~3x real time).
+    fn runs in the workers (a module-level function, picklable; e.g. a detector), so only its
+    results come back. Chunks overlap by pad_s (before: >= 1 DIFOP packet, which the driver needs
+    first; after: the chunk's last sweep), each drops its possibly partial first and last sweep,
+    and sweeps decoded twice are dropped by time. Yields in time order as the chunks finish.
+    chunk_s None: the session split evenly over the workers (one round; a chunk costs ~2 s of driver
+    start/stop), at most max_chunk_s each (a chunk's copy sits in tmp_dir, RAM, while it decodes)."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    session = Path(session)
+    idx = lidar_pcap_index(session)
+    ht = idx["ht"] / 1e9
+    span = float(ht[-1] - ht[0])
+    if chunk_s is None:
+        n = max(int(workers), 1)
+        while span / n > max_chunk_s:
+            n += max(int(workers), 1)
+        chunk_s = span / n + 1e-3
+    edges = np.arange(ht[0], ht[-1], chunk_s)[1:]
+    cuts = np.r_[0, np.searchsorted(ht, edges), len(ht)]
+    jobs = []
+    for i in range(len(cuts) - 1):
+        lo = int(np.searchsorted(ht, ht[cuts[i]] - pad_s[0])) if i > 0 else 0
+        hi = int(np.searchsorted(ht, ht[cuts[i + 1] - 1] + pad_s[1], side="right")) if i < len(cuts) - 2 else len(ht)
+        jobs.append((lo, hi, i == 0, i == len(cuts) - 2))
+    last_t = -np.inf
+    with ProcessPoolExecutor(max(int(workers), 1), mp_context=multiprocessing.get_context("spawn")) as ex:
+        futs = [ex.submit(_decode_chunk, session, fn, lo, hi, first, last, rate, tmp_dir)
+                for lo, hi, first, last in jobs]
+        for fu in futs:                                       # in chunk order
+            for t, r in fu.result():
+                if t > last_t + 1e-6:                         # a sweep the previous chunk already gave
+                    last_t = t
+                    yield t, r
