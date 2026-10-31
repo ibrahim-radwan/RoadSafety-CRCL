@@ -142,6 +142,11 @@ Each item cost real debugging time. Read before changing the related code.
 - **Several processes on the GPU time-slice it.** Four LiDAR worker
   processes and the radar together were slower (242 s) than two workers and
   the radar (169 s). Measure before adding GPU processes.
+- **A binary protocol on stdout needs fd 1 moved first.** rs_driver
+  ("Starting RoboSense LiDAR...") and the ZED SDK print to stdout from C++,
+  where reassigning `sys.stdout` does not reach. The live-view workers
+  `dup` fd 1 for their messages and point fd 1 at stderr
+  (`live/common.py`).
 - **Evict files from the page cache without root** to time cold reads
   repeatably: `os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)` per file;
   `fincore` shows what is cached.

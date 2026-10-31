@@ -173,3 +173,26 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
   frames:
   - the walker is detected in 72% of radar frames against 50%;
   - the azimuth spread against the LiDAR is 2.4° against 4.9°.
+
+## Live view for the extrinsic alignment (2026-10-31)
+
+The iPad page has a **Live view** card, built for your radar–LiDAR–camera
+alignment.
+
+- **What it shows:**
+  - the camera's left image;
+  - the LiDAR top view, with the radar detections drawn on it if you want;
+  - the radar range–azimuth map: the stationary map shows a corner
+    reflector, and a moving-target map can be chosen instead;
+  - per sensor, the strongest reflector (range, azimuth + left) inside a
+    range window you set, and the radar − LiDAR difference.
+- **It needs no calibration data.** The radar is drawn as if it sat at the
+  LiDAR's origin, so the difference you see is the extrinsic offset (plus
+  the radar's azimuth error; see "Radar" above).
+- **Nothing is saved, and it never runs during a recording.**
+- **It switches itself off after 10 minutes.**
+- LiDAR points over the camera image will follow once your camera
+  calibration is available.
+- Details: `sync_capture_pipeline/live/README.md`.
+- **Status:** tested on a recorded session only. The first use on the rig
+  is also its first test with the sensors live.

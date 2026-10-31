@@ -158,6 +158,7 @@ class RadarDetector:
             (ri + 1).clamp(0, self.n_range - 1)
         self.range_m_t = ri.float() * self.range_res
         self.st_az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(self.sin_t[self.fov_sl]))
+        self.static_az_deg = self.st_az_w.cpu().numpy()          # world azimuth of static_map's columns
         self.last = {}
         # CUDA graph of the fixed-shape front end (_front), one per (moving_only, detect, static)
         self.cuda_graph = bool(cuda_graph) and self.dev.type == "cuda"
@@ -294,7 +295,7 @@ class RadarDetector:
             self._graphs[key] = self._capture(key)
         g, f = self._graphs[key]
         g.replay()
-        return {k: (v.clone() if k in ("rd", "ra", "p_az") else v) for k, v in f.items()}
+        return {k: (v.clone() if k in ("rd", "ra", "p_az", "st_map") else v) for k, v in f.items()}
 
     def _capture(self, key: tuple):
         """Warm up (cuFFT plans, cached tables) on a side stream, then capture _front, holding
@@ -316,7 +317,9 @@ class RadarDetector:
         """Returns dict: rd [doppler, range] dB, ra [az, range] dB (processing azimuth order),
         p_az [doppler, range, az] linear power, and, if detect, detections (N x len(DET_COLS)) and
         noise_db (frame median of the detection map); if static, static_detections
-        (N x len(DET_COLS), v_r = 0): see _detect_static."""
+        (N x len(DET_COLS), v_r = 0): see _detect_static, and static_map, the zero-Doppler
+        range-azimuth map without clutter removal [range, azimuth within the FOV] dB (world
+        azimuths: static_az_deg)."""
         key = (bool(moving_only), bool(detect), bool(static))
         f = self._graphed(raw, key) if self.cuda_graph else \
             self._front(self.torch.as_tensor(raw, device=self.dev), *key)
@@ -326,6 +329,7 @@ class RadarDetector:
             out.update(detections=dets, noise_db=noise)
         if static:
             out["static_detections"] = self._detect_static(f)
+            out["static_map"] = f["st_map"]
         self.last = out
         return out
 

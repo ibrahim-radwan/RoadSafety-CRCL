@@ -84,6 +84,19 @@
   th { color: var(--muted); font-weight: 600; font-size: 13px; }
   td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   a { color: var(--accent); }
+  select { font-size: 17px; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--text); width: 100%; }
+  .live { background: var(--accent); }
+  .livegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px;
+              align-items: start; }
+  .panel { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #000; }
+  .panel canvas, .panel img { display: block; width: 100%; height: auto; }
+  .panel .cap { background: var(--card); color: var(--muted); font-size: 13px; padding: 6px 10px;
+                display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+  .panel .cap b { color: var(--text); }
+  .refl td, .refl th { font-variant-numeric: tabular-nums; }
+  .refl .diff td { font-weight: 700; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -134,6 +147,53 @@
     <div class="meta"><span id="elapsed">Elapsed –</span><span id="disk">Disk –</span><span id="reason"></span></div>
     <div class="verdict" id="verdict"></div>
     <details style="margin-top:12px"><summary>Session log</summary><pre id="log"></pre></details>
+  </section>
+
+  <section class="card" id="live">
+    <h2>Live view – sensor alignment <span id="liveTimer" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="sub" style="color:var(--muted);font-size:14px;margin-bottom:10px">
+      Shows the sensors live; nothing is saved. Not available while recording, and recording is not
+      available while it is on. Switches itself off after 10 minutes.</div>
+    <div class="row">
+      <div><label>Sensors</label>
+        <div class="checks">
+          <label><input type="checkbox" id="l_radar" checked>Radar</label>
+          <label><input type="checkbox" id="l_camera" checked>Camera</label>
+          <label><input type="checkbox" id="l_lidar" checked>LiDAR</label>
+        </div>
+      </div>
+      <div><label for="lrange">View range</label>
+        <select id="lrange" autocomplete="off"><option value="10">10 m</option><option value="20" selected>20 m</option>
+          <option value="40">40 m</option><option value="60">60 m</option></select></div>
+      <div><label for="lmap">Radar map</label>
+        <select id="lmap" autocomplete="off"><option value="static" selected>stationary (reflectors)</option>
+          <option value="moving">moving targets</option></select></div>
+      <div><label>Reflector search, range (m)</label>
+        <div style="display:flex;gap:8px"><input id="gmin" type="number" min="0" value="2" inputmode="decimal">
+          <input id="gmax" type="number" min="1" value="20" inputmode="decimal"></div></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="live" id="btnLive">Start live view</button>
+      <button class="stop" id="btnLiveStop" disabled>Stop live view</button>
+    </div>
+    <div class="msg" id="lmsg"></div>
+    <div id="liveBody" class="hidden">
+      <table class="refl">
+        <thead><tr><th>Strongest reflector</th><th>Range</th><th>Azimuth (+ left)</th><th>x / y</th><th></th></tr></thead>
+        <tbody id="refl"></tbody>
+      </table>
+      <div class="livegrid">
+        <div class="panel" id="p_camera"><img id="v_camera" alt=""><div class="cap"><b>Camera (left)</b><span></span></div></div>
+        <div class="panel" id="p_lidar"><canvas id="v_lidar" width="600" height="400"></canvas>
+          <div class="cap"><b>LiDAR top view</b>
+            <label style="display:flex;gap:6px;align-items:center;margin:0;font-size:13px">
+              <input type="checkbox" id="ovl" checked style="width:18px;height:18px">radar on top</label><span></span></div></div>
+        <div class="panel" id="p_radar"><canvas id="v_radar" width="600" height="400"></canvas>
+          <div class="cap"><b>Radar range–azimuth</b><span></span></div></div>
+      </div>
+      <div class="meta" id="lsource"></div>
+    </div>
+    <details style="margin-top:12px"><summary>Live view log</summary><pre id="llog"></pre></details>
   </section>
 
   <section class="card">
@@ -241,7 +301,12 @@ async function refresh() {
   const live = s.running && s.phase !== "finished";
   $("phase").textContent = s.phase; $("phase").className = "phase " + s.phase.split(" ")[0];
   $("dot").className = "dot" + (s.running ? " on" : "");
-  $("btnStart").disabled = s.running; $("btnStop").disabled = !s.running;
+  // Recording and live view never run together: each one's start is off while the other runs.
+  $("btnStart").disabled = s.running || s.live_on; $("btnStop").disabled = !s.running;
+  $("btnStart").textContent = s.live_on ? "Start recording (stop live view first)" : "Start recording";
+  $("btnLive").disabled = s.running || s.live_on;
+  $("btnLive").textContent = s.running ? "Start live view (not while recording)" : "Start live view";
+  if (s.live_on && !liveOn) liveBegin();
   $("sessname").textContent = s.name ? "– " + s.name : "";
   $("elapsed").textContent = "Elapsed " + (s.running ? fmtTime(s.elapsed_s) : "–");
   $("disk").textContent = "Disk free " + s.disk_free_gb + " GB";
@@ -316,6 +381,181 @@ $("btnStop").onclick = async () => {
   try { await post("/api/stop"); } catch (e) { $("msg").textContent = e.message; }
   refresh();
 };
+// ── live view ──────────────────────────────────────────────────────────
+// Images are PULLED: each panel asks for the next image only when the previous one has arrived,
+// so on a slow Wi-Fi the rate drops instead of a backlog building up.
+const COL = { radar: "#2a78d6", lidar: "#eb6834", camera: "#1baf7a" };
+let liveOn = false, liveState = null, liveLogN = 0, controlSynced = false;
+const liveImg = { lidar: null, radar: null };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function gate() {
+  const lo = parseFloat($("gmin").value) || 0, hi = parseFloat($("gmax").value) || 1e9;
+  return (row) => row[2] >= lo && row[2] <= hi;
+}
+// strongest reflector inside the range gate: radar from its stationary detections (strongest
+// first), LiDAR from its brightest spots (strongest first); rows [x, y, range, az, ...]
+function strongest(h, key) {
+  if (!h || !h[key]) return null;
+  return h[key].find(gate()) || null;
+}
+function hdr(s) { return liveState && liveState.sensors[s] ? liveState.sensors[s].header : null; }
+function toPx(ext, w, h, x, y) {          // x forward (up), y left (left)
+  const [x0, x1, y0, y1] = ext;
+  return [(y1 - y) / (y1 - y0) * w, (x1 - x) / (x1 - x0) * h];
+}
+function grid(ctx, ext, w, h) {
+  const R = ext[1], step = R <= 10 ? 2 : R <= 20 ? 5 : 10;
+  const [cx, cy] = toPx(ext, w, h, 0, 0), k = h / (ext[1] - ext[0]);
+  ctx.strokeStyle = "rgba(255,255,255,.28)"; ctx.fillStyle = "rgba(255,255,255,.75)";
+  ctx.lineWidth = 1; ctx.font = "13px -apple-system, sans-serif";
+  for (let r = step; r <= R * 1.6; r += step) {
+    ctx.beginPath(); ctx.arc(cx, cy, r * k, Math.PI, 2 * Math.PI); ctx.stroke();
+    if (r <= R) ctx.fillText(r + " m", cx + 4, cy - r * k - 3);
+  }
+  for (const a of [-60, -30, 0, 30, 60]) {
+    const t = a * Math.PI / 180, [px, py] = toPx(ext, w, h, R * 2 * Math.cos(t), R * 2 * Math.sin(t));
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(px, py); ctx.stroke();
+  }
+}
+function dot(ctx, ext, w, h, x, y, r, stroke, fill, square) {
+  const [px, py] = toPx(ext, w, h, x, y);
+  ctx.beginPath();
+  if (square) ctx.rect(px - r, py - r, 2 * r, 2 * r); else ctx.arc(px, py, r, 0, 2 * Math.PI);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2.5; ctx.stroke(); }
+}
+function radarMarks(ctx, ext, w, h, hr) {
+  if (!hr || !hr.extent) return;
+  for (const d of hr.static || []) dot(ctx, ext, w, h, d[0], d[1], 4, COL.radar, null, true);
+  for (const d of hr.moving || []) dot(ctx, ext, w, h, d[0], d[1], 4, "#fff", COL.radar);
+  const s = strongest(hr, "static");
+  if (s) dot(ctx, ext, w, h, s[0], s[1], 11, COL.radar, null);
+}
+function drawBev(sensor) {
+  const cv = $("v_" + sensor), ctx = cv.getContext("2d"), h = hdr(sensor), img = liveImg[sensor];
+  if (!img || !h || !h.extent) return;
+  const W = cv.width, H = cv.height, ext = h.extent;
+  ctx.drawImage(img, 0, 0, W, H);
+  grid(ctx, ext, W, H);
+  if (sensor === "lidar") {
+    for (const b of h.bright || []) dot(ctx, ext, W, H, b[0], b[1], 5, COL.lidar, null);
+    const s = strongest(h, "bright");
+    if (s) dot(ctx, ext, W, H, s[0], s[1], 12, "#fff", null);
+    if ($("ovl").checked) radarMarks(ctx, ext, W, H, hdr("radar"));
+  } else {
+    radarMarks(ctx, ext, W, H, h);
+  }
+}
+const f1 = (x) => (x == null ? "–" : x.toFixed(1));
+const f2 = (x) => (x == null ? "–" : x.toFixed(2));
+function showLiveNumbers() {
+  const rows = [], r = strongest(hdr("radar"), "static"), l = strongest(hdr("lidar"), "bright");
+  const row = (name, c, p, extra) => `<tr><td><b style="color:${c}">${name}</b></td>` +
+    (p ? `<td>${f2(p[2])} m</td><td>${f1(p[3])}°</td><td>${f2(p[0])} / ${f2(p[1])} m</td><td>${extra}</td>`
+       : `<td colspan="4" style="color:var(--muted)">none in the search range</td>`) + "</tr>";
+  if (liveState.sensors.radar) rows.push(row("Radar", COL.radar, r, r ? `${f1(r[4])} dB, SNR ${f1(r[5])} dB` : ""));
+  if (liveState.sensors.lidar) rows.push(row("LiDAR", COL.lidar, l, l ? `intensity ${l[4]}, ${l[5]} returns` : ""));
+  if (r && l) {
+    const apart = Math.hypot(r[0] - l[0], r[1] - l[1]);
+    rows.push(`<tr class="diff"><td>Radar − LiDAR</td><td>${(r[2] - l[2] >= 0 ? "+" : "") + f2(r[2] - l[2])} m</td>
+      <td>${(r[3] - l[3] >= 0 ? "+" : "") + f1(r[3] - l[3])}°</td><td colspan="2" style="font-weight:400">${
+      apart > 1.5 ? `<span class="tag warn">${f1(apart)} m apart – probably not the same object</span>` : `${f2(apart)} m apart`}</td></tr>`);
+  }
+  $("refl").innerHTML = rows.join("");
+}
+function showCaptions() {
+  for (const s of ["camera", "lidar", "radar"]) {
+    const st = liveState.sensors[s], p = $("p_" + s);
+    p.classList.toggle("hidden", !st);
+    if (!st) continue;
+    const h = st.header || {}, cap = p.querySelector(".cap span:last-child");
+    let t;
+    if (st.error) t = `<span class="tag bad">${st.error.replace(/[<>&]/g, "")}</span>`;
+    else if (!st.alive) t = "stopped";
+    else if (!st.seq) t = h.waiting ? "waiting for data…" : "starting…";
+    else {
+      t = `${f1(h.hz)} /s`;
+      if (s === "radar") t += h.pkt_s != null ? ` · ${h.pkt_s.toLocaleString()} pkt/s` : "";
+      if (s === "radar") t += ` · ${(h.moving || []).length} moving, ${(h.static || []).length} stationary`;
+      if (s === "lidar") t += ` · ${h.objects} objects`;
+      if (st.age_s > 3) t += ` · <span class="tag bad">no update ${st.age_s}s</span>`;
+    }
+    cap.innerHTML = t;
+  }
+}
+async function liveStateLoop() {
+  while (liveOn) {
+    try {
+      liveState = await (await fetch("/api/live/state")).json();
+      if (!controlSynced) {               // another iPad (or a reload) may have changed them
+        $("lrange").value = String(Math.round(liveState.control.range_m));
+        $("lmap").value = liveState.control.radar_map;
+        controlSynced = true;
+      }
+      showCaptions(); showLiveNumbers(); drawBev("lidar"); drawBev("radar");
+      $("liveTimer").textContent = liveState.on ? (liveState.stopping ? "– stopping…" :
+        `– ${fmtTime(liveState.remaining_s)} left`) : "";
+      $("btnLiveStop").disabled = !liveState.on || liveState.stopping;
+      $("lsource").textContent = liveState.source ? "Playing a recorded session (not the sensors): " + liveState.source : "";
+      const lines = await (await fetch("/api/live/log")).json();
+      if (lines.length !== liveLogN) { $("llog").textContent = lines.join("\n"); liveLogN = lines.length; }
+      if (!liveState.on) {
+        liveOn = false;
+        $("lmsg").textContent = liveState.stop_reason ? "Live view off: " + liveState.stop_reason : "";
+      }
+    } catch (e) { /* connection hiccup: try again */ }
+    await sleep(250);
+  }
+  $("btnLiveStop").disabled = true; $("liveTimer").textContent = "";
+}
+async function frameLoop(sensor) {
+  let seq = 0;
+  while (liveOn) {
+    try {
+      const r = await fetch(`/api/live/frame/${sensor}?after=${seq}`, { cache: "no-store" });
+      if (r.status !== 200) { await sleep(300); continue; }
+      seq = parseInt(r.headers.get("X-Seq") || "0", 10);
+      const url = URL.createObjectURL(await r.blob());
+      if (sensor === "camera") {
+        const el = $("v_camera"), old = el.src;
+        await new Promise((ok) => { el.onload = ok; el.onerror = ok; el.src = url; });
+        if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+      } else {
+        const img = new Image();
+        await new Promise((ok) => { img.onload = ok; img.onerror = ok; img.src = url; });
+        if (liveImg[sensor]) URL.revokeObjectURL(liveImg[sensor].src);
+        liveImg[sensor] = img; drawBev(sensor);
+      }
+    } catch (e) { await sleep(500); }
+  }
+}
+function liveBegin() {
+  if (liveOn) return;
+  liveOn = true; liveLogN = 0;
+  $("liveBody").classList.remove("hidden");
+  liveStateLoop();
+  for (const s of ["camera", "lidar", "radar"]) frameLoop(s);
+}
+$("btnLive").onclick = async () => {
+  $("lmsg").textContent = "";
+  const sensors = ["radar", "camera", "lidar"].filter((k) => $("l_" + k).checked);
+  try {
+    await post("/api/live/control", { range_m: $("lrange").value, radar_map: $("lmap").value });
+    await post("/api/live/start", { sensors });
+    liveBegin();
+    $("live").scrollIntoView({ behavior: "smooth" });
+  } catch (e) { $("lmsg").textContent = e.message; }
+  refresh();
+};
+$("btnLiveStop").onclick = async () => {
+  try { await post("/api/live/stop"); } catch (e) { $("lmsg").textContent = e.message; }
+  refresh();
+};
+for (const id of ["lrange", "lmap"]) {
+  $(id).onchange = () => post("/api/live/control", { range_m: $("lrange").value, radar_map: $("lmap").value })
+    .catch((e) => { $("lmsg").textContent = e.message; });
+}
+
 $("name").value = suggestName();
 refresh(); loadSessions();
 setInterval(refresh, 1000);

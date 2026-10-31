@@ -104,6 +104,22 @@ Tap it to read the full check.
 
 A plain-language **HINT** appears on the page for the common failures.
 
+### Live view (for aligning the sensors, not for recording)
+
+The **Live view** card on the same page shows the camera image, the LiDAR
+top view and the radar map live, a few times a second, plus the strongest
+reflector each sensor sees (range, azimuth). Use it while mounting or
+aligning the sensors, for example with a corner reflector on a stand.
+
+- **Nothing is saved.**
+- **Not while recording:** Start recording is greyed out while live view
+  is on, and the other way round. Press **Stop live view** before
+  recording.
+- **It switches itself off after 10 minutes.** Press Start again if you
+  need more time.
+- Set **Reflector search, range (m)** around the reflector's distance so
+  that the table picks the reflector and not something nearer.
+
 ---
 
 ## 3. Storage

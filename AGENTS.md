@@ -39,6 +39,7 @@ a separate Windows machine with its own repository.
    | Time sync, Stage 3 calibration | [07_synchronisation_and_stage3.md](docs/knowledge/07_synchronisation_and_stage3.md), `sync_capture_pipeline/SYNC_DESIGN_3_SENSORS.md` |
    | Operating the rig | `sync_capture_pipeline/DATA_COLLECTION_GUIDE.md` |
    | Replay tool | `sync_capture_pipeline/replay/README.md` |
+   | Live view (iPad, alignment) | `sync_capture_pipeline/live/README.md`, `sync_capture_pipeline/web_control/README.md` |
 | Detection (ours), processing speed | `sync_capture_pipeline/perception/README.md`, [03](docs/knowledge/03_radar_firmware_and_dca.md), [05](docs/knowledge/05_lidar.md) |
    | Facts for the research team | `sync_capture_pipeline/NOTES_FOR_TEAM.md` |
 
@@ -66,6 +67,7 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   calibration/stage3_offsets.json   the offsets in use (applied by align_session by default)
   calibration/radar_rx_phase.json   in-situ radar phase correction (provisional, until the team's recalibration)
   web_control/                  Flask iPad control (systemd service, port 8080)
+  live/                         live view workers (radar, LiDAR, camera -> JPEG + numbers to the web page; no saving)
   replay/                       PyQt/pyqtgraph replay: one window, 6 panels, live detection (camera in its own process)
   tests/                        pytest (needs the reference sessions; skips when absent)
   handover/                     briefs sent to the Windows firmware-build agent

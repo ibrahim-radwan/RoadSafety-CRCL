@@ -84,6 +84,25 @@ Every session behaves the same:
 - The guide is never triggered by the session name. **Leave it off for data
   collection.**
 
+## Live view (for aligning the sensors)
+
+The **Live view** card shows the three sensors live, for the
+radar–LiDAR–camera extrinsic alignment. The panels are the camera's left
+image, the LiDAR top view (optionally with the radar detections drawn on
+it), and the radar range–azimuth map with our detections. A table shows
+the strongest reflector per sensor (range, azimuth) inside a range window
+you set, and the radar − LiDAR difference.
+
+- **Nothing is saved.**
+- **Never at the same time as a recording:**
+  - Start recording is off while live view is on.
+  - Start live view is off while recording.
+- **It switches itself off after 10 minutes.** Press Start again for more.
+- **Sensors** are ticked as for recording; all three by default.
+
+Details, the design and what is still to verify on the rig:
+[../live/README.md](../live/README.md).
+
 ## How it works
 
 | What | How |
@@ -107,7 +126,11 @@ session completed, and the check passed.
 /home/jetson/miniconda3/envs/rel_1_py_3_8/bin/python web_control/server.py --port 8080
 ```
 
-Run this from `sync_capture_pipeline/`.
+Run this from `sync_capture_pipeline/`. The live view's workers use the
+server's interpreter (`--live-python`), which must be the conda
+environment (torch, pyzed, the LiDAR wrapper). Without sensors, add
+`--live-from-session <session>`, and live view plays that recording
+instead.
 
 ## Install as a service (starts at boot)
 

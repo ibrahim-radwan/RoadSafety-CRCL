@@ -10,6 +10,7 @@ hardware:
 |---|---|
 | Radar firmware | `r075m_v2_8fps` flashed (8 fps, 2.62–75 m). All 20 variants rebuilt with the DSS-L3 memory-init fix. See [03](03_radar_firmware_and_dca.md). |
 | Capture | Three-sensor launcher with preflight checks, board-temperature monitoring and a radar-rate watchdog; iPad web control. See `sync_capture_pipeline/DATA_COLLECTION_GUIDE.md`. |
+| Live view | iPad page card for the extrinsic alignment (2026-10-31): camera, LiDAR top view, radar map with detections, strongest reflector per sensor; nothing saved; never together with recording; off after 10 min. **Tested on a recorded session only; not yet on the rig.** See `sync_capture_pipeline/live/README.md`. |
 | Storage | 1 TB SD card (ext4), camera staged on the eMMC; 0.2% camera drops. See [04](04_storage_and_recording.md). |
 | Synchronisation | Offline alignment on CLOCK_MONOTONIC. **Stage 3 offsets measured**: radar +12.65 ± 1.45 ms, camera +23.34 ± 3.28 ms (LiDAR reference). Applied automatically. See [07](07_synchronisation_and_stage3.md). |
 | Validation | `check_session.py` (completeness, pass/fail) runs after every session. `make_report.py` produces a descriptive HTML report per session, with no verdict. |
@@ -138,6 +139,20 @@ What the baseline showed:
   degraded seems to refer to an older recording of the same name.
 
 ## Open items and ideas
+
+- **Live view (2026-10-31): first test on the rig.**
+  - Built and tested on `ibrahim-desktop`, which has no sensors, by playing
+    `freewalk_ref_02` (`--live-from-session`).
+  - Still to check on the rig: live DCA1000 control and STOP_RECORD, the
+    LiDAR sockets, the live ZED, the page over the rig's Wi-Fi, the radar
+    pkt/s during live view, and a recording straight after a live view
+    (must PASS).
+  - The server's lock does not cover `capture_session.py` started from a
+    terminal during live view. A lock file checked by the launcher's
+    preflight would; that is not done, because it changes the recording
+    path.
+  - Possible later: LiDAR over the camera image, once the team's camera
+    calibration exists.
 
 - **On hold (owner's decision):** recommending a 90 s Stage 3 check on the
   first field day after mounting. Do not add it to the guide unless asked.

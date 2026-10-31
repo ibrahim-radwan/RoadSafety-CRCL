@@ -17,6 +17,15 @@ WHAT IT DOES
     After a session ends, check_session.py runs automatically and its
     PASS/FAIL is shown and saved as <session>/check_session.txt.
 
+LIVE VIEW (liveview.py, ../live/)
+    For extrinsic alignment: the camera's left image, the LiDAR top view and
+    the radar's range-azimuth map with detections, a few times a second,
+    scaled down for the Wi-Fi. Nothing is saved. Live view and recording
+    NEVER run at the same time: each start is refused while the other runs
+    (one lock in create_app), and live view switches itself off after 10
+    minutes. --live-from-session plays a recorded session instead of the
+    sensors (development, tests).
+
 ROBUSTNESS
     The launcher runs in its own session, so a crash or restart of this
     server does not stop a recording. On start-up the server looks for a
@@ -31,6 +40,7 @@ USAGE (conda env: flask, psutil)
 from __future__ import annotations
 
 import argparse
+import atexit
 import collections
 import json
 import os
@@ -50,6 +60,7 @@ HERE = Path(__file__).resolve().parent
 PIPELINE = HERE.parent
 sys.path.insert(0, str(PIPELINE))
 import board_health  # noqa: E402  (sysfs temperatures, no root)
+import liveview  # noqa: E402
 LAUNCHER = PIPELINE / "capture_session.py"
 CHECKER = PIPELINE / "check_session.py"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -345,8 +356,24 @@ def list_sessions(root: Path, active: str = None) -> list:
     return out
 
 
-def create_app(session: Session) -> Flask:
+RECORDING_SCRIPTS = ("capture_session.py", "dca_capture_radar_sync.py", "record_lidar_raw.py", "recorder.py")
+
+
+def recording_processes() -> list:
+    """pids of capture processes on this machine, also ones not started from this page (a terminal)."""
+    pids = []
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        cmd = p.info.get("cmdline") or []
+        if any(str(c).endswith(RECORDING_SCRIPTS) for c in cmd[1:3]):
+            pids.append(p.info["pid"])
+    return pids
+
+
+def create_app(session: Session, live: liveview.LiveView = None) -> Flask:
     app = Flask(__name__)
+    live = live or liveview.LiveView(sys.executable)
+    # Recording and live view NEVER run at the same time: both starts take this lock and check the other.
+    exclusive = threading.Lock()
 
     @app.get("/")
     def index():
@@ -354,7 +381,9 @@ def create_app(session: Session) -> Flask:
 
     @app.get("/api/status")
     def api_status():
-        return jsonify(session.status())
+        st = session.status()
+        st["live_on"] = live.active()
+        return jsonify(st)
 
     @app.get("/api/log")
     def api_log():
@@ -372,7 +401,11 @@ def create_app(session: Session) -> Flask:
         if not sensors:
             return jsonify(error="select at least one sensor"), 400
         guide = "stage3" if body.get("guide") == "stage3" else None
-        err = session.start(str(body.get("name", "")).strip(), str(body.get("note", ""))[:500], secs, delay, sensors, guide)
+        with exclusive:
+            if live.active():
+                return jsonify(error="live view is on - stop it before recording"), 400
+            err = session.start(str(body.get("name", "")).strip(), str(body.get("note", ""))[:500], secs, delay,
+                                sensors, guide)
         return (jsonify(error=err), 400) if err else jsonify(ok=True)
 
     @app.post("/api/stop")
@@ -391,6 +424,54 @@ def create_app(session: Session) -> Flask:
         p = session.root / name / "check_session.txt"
         return (p.read_text(), 200, {"Content-Type": "text/plain"}) if p.is_file() else ("no check yet", 404)
 
+    # ── live view ───────────────────────────────────────────────────────
+    @app.post("/api/live/start")
+    def api_live_start():
+        body = request.get_json(force=True, silent=True) or {}
+        sensors = [s for s in body.get("sensors", list(liveview.SENSORS)) if s in liveview.SENSORS]
+        if not sensors:
+            return jsonify(error="select at least one sensor"), 400
+        with exclusive:
+            if session.running():
+                return jsonify(error="a recording is running - live view is off while recording"), 400
+            pids = recording_processes()
+            if pids:
+                return jsonify(error=f"capture processes are running (pid {', '.join(map(str, pids))}) - "
+                                     f"live view is off while recording"), 400
+            err = live.start(sensors)
+        return (jsonify(error=err), 400) if err else jsonify(ok=True)
+
+    @app.post("/api/live/stop")
+    def api_live_stop():
+        err = live.stop()
+        return (jsonify(error=err), 400) if err else jsonify(ok=True)
+
+    @app.post("/api/live/control")
+    def api_live_control():
+        try:
+            return jsonify(live.control(request.get_json(force=True, silent=True) or {}))
+        except (TypeError, ValueError):
+            return jsonify(error="bad value"), 400
+
+    @app.get("/api/live/state")
+    def api_live_state():
+        return jsonify(live.status())
+
+    @app.get("/api/live/log")
+    def api_live_log():
+        return jsonify(live.log_lines())
+
+    @app.get("/api/live/frame/<sensor>")
+    def api_live_frame(sensor):
+        """The sensor's newest image after ?after=<seq>, waiting up to 2 s (204 if none)."""
+        if sensor not in liveview.SENSORS:
+            return "bad sensor", 404
+        got = live.frame(sensor, int(request.args.get("after", 0)))
+        if got is None:
+            return "", 204
+        seq, data = got
+        return data, 200, {"Content-Type": "image/jpeg", "X-Seq": str(seq), "Cache-Control": "no-store"}
+
     return app
 
 
@@ -406,12 +487,19 @@ def main() -> int:
     ap.add_argument("--launcher-python", default="/usr/bin/python3",
                     help="interpreter for capture_session.py (stdlib only)")
     ap.add_argument("--checker-python", default="/usr/bin/python3")
+    ap.add_argument("--live-python", default=sys.executable,
+                    help="interpreter for the live-view workers (the conda env: torch, pyzed, LiDAR wrapper)")
+    ap.add_argument("--live-from-session", type=Path, default=None,
+                    help="live view plays this recorded session instead of the sensors (development, tests)")
     a = ap.parse_args()
 
     stage = None if str(a.camera_stage).lower() == "none" else a.camera_stage
     session = Session(a.sessions_root, a.launcher_python, a.checker_python, stage)
     session.adopt_running()
-    app = create_app(session)
+    liveview.end_stray_workers(lambda m: print(m, flush=True))
+    live = liveview.LiveView(a.live_python, a.live_from_session)
+    atexit.register(live.shutdown)
+    app = create_app(session, live)
     print(f"Capture web control on http://{a.host}:{a.port}  (sessions: {session.root})", flush=True)
     app.run(host=a.host, port=a.port, threaded=True)
     return 0

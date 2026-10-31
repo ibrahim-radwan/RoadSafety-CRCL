@@ -115,6 +115,9 @@ python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden fr
 9. **Stationary reflectors** (`process(..., static=True)`, experimental,
    2026-10-26). The moving path removes everything static, so parked cars,
    poles, stopped people and the whole scene at a red light are missed.
+   - `process` also returns `static_map`: the static range × azimuth map in
+     dB, with columns at `static_az_deg` (world azimuth). The live view
+     draws it. Added 2026-10-31; no other output changed.
    - The static path: the zero-Doppler band without clutter removal; an
      azimuth FFT; a 2D CFAR over range × azimuth; local peaks; a 10 dB
      sidelobe prune per range row; up to 60 m; multipath images flagged.
