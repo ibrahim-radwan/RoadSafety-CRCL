@@ -92,6 +92,31 @@ def test_both_allowed_when_idle(monkeypatch):
     assert len(sess.started) == 1
 
 
+def test_json_has_no_nan(monkeypatch):
+    """Browsers reject NaN / Infinity in JSON: the page would show nothing. The server writes null."""
+    live = FakeLive()
+    live.status = lambda: {"sensors": {"camera": {"header": {"fps": float("nan"), "x": [1.0, float("inf")]}}}}
+    r = _client(FakeSession(), live, monkeypatch).get("/api/live/state")
+    assert r.status_code == 200
+    assert b"NaN" not in r.data and b"Infinity" not in r.data
+    assert json.loads(r.data)["sensors"]["camera"]["header"] == {"fps": None, "x": [1.0, None]}
+
+
+def test_failure_answers_in_json(monkeypatch, capsys):
+    """A failing endpoint answers 500 with the error in JSON (the page shows it) and logs the traceback."""
+    sess = FakeSession()
+
+    def broken():
+        raise RuntimeError("sensor table broke")
+    sess.status = broken
+    r = _client(sess, FakeLive(), monkeypatch).get("/api/status")
+    assert r.status_code == 500
+    assert "RuntimeError: sensor table broke" in r.get_json()["error"]
+    assert "Traceback" in capsys.readouterr().err
+    r = _client(sess, FakeLive(), monkeypatch).get("/api/no-such-thing")
+    assert r.status_code == 404 and "404" in r.get_json()["error"]
+
+
 def _snapshot(root: Path) -> dict:
     return {str(p): (p.stat().st_size, p.stat().st_mtime_ns) for p in root.rglob("*")}
 

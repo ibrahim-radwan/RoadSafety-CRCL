@@ -115,8 +115,15 @@ has no sensors. A single worker can be run the same way:
 `python live/radar_live.py --from-session <session>`. Its messages are
 binary on stdout.
 
+**The LiDAR's live socket path can be tested without the sensor too.**
+Send a session's `lidar.pcap` UDP payloads to 127.0.0.1 at their recorded
+pace, and run `live/lidar_live.py --config <copy of config.yaml with
+lidar_ip and host_ip 127.0.0.1>`. Verified 2026-11-02: about 3.5
+images/s, a clean stop, and "waiting for data…" when no packets arrive.
+
 Tests: `tests/test_live_view.py`:
 - the lockout both ways (stand-ins, no data needed);
+- JSON without NaN, and server failures answered in JSON;
 - on a reference session: images and numbers from all three workers, the
   time limit, clean exits, no file in the session changed, and a worker
   stopping when its server goes away.

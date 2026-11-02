@@ -102,6 +102,7 @@
 <body>
 <main>
   <h1><span class="dot" id="dot"></span>Capture Control <span class="phase" id="phase">…</span></h1>
+  <div class="msg" id="connerr" style="margin:-6px 0 10px"></div>
 
   <section class="card">
     <h2>New session</h2>
@@ -177,6 +178,7 @@
       <button class="stop" id="btnLiveStop" disabled>Stop live view</button>
     </div>
     <div class="msg" id="lmsg"></div>
+    <div class="msg" id="lerr"></div>
     <div id="liveBody" class="hidden">
       <table class="refl">
         <thead><tr><th>Strongest reflector</th><th>Range</th><th>Azimuth (+ left)</th><th>x / y</th><th></th></tr></thead>
@@ -287,17 +289,45 @@ function setSensor(id, running, data, big, sub, bad) {
   el.querySelector(".big").textContent = big;
   el.querySelector(".sub").textContent = sub;
 }
-async function post(url, body) {
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
-                               body: JSON.stringify(body || {}) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
+// Requests say WHAT failed: no connection, a server error (with the server's message) or an
+// unreadable reply - not just "connection lost".
+function serverError(url, status, text) {
+  let msg = text;
+  try { msg = JSON.parse(text).error || text; } catch (e) { /* not JSON: an HTML error page */ }
+  if (status === 400 && msg !== text) return new Error(msg);     // a refusal with its reason, e.g. "live view is on"
+  msg = String(msg).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+  const e = new Error(`server error ${status} on ${url}: ${msg}`);
+  e.kind = "server error";
+  return e;
 }
+async function request(url, opts) {
+  let r;
+  try { r = await fetch(url, Object.assign({ cache: "no-store" }, opts)); }
+  catch (e) {
+    const err = new Error(`no connection to the Jetson (${url}: ${e.message})`);
+    err.kind = "no connection";
+    throw err;
+  }
+  const text = await r.text();
+  if (!r.ok) throw serverError(url, r.status, text);
+  try { return JSON.parse(text); }
+  catch (e) {
+    const err = new Error(`unreadable reply from ${url}: ${e.message}`);
+    err.kind = "bad reply";
+    throw err;
+  }
+}
+const getJSON = (url) => request(url);
+const post = (url, body) => request(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                                           body: JSON.stringify(body || {}) });
 async function refresh() {
   let s;
-  try { s = await (await fetch("/api/status")).json(); }
-  catch (e) { $("phase").textContent = "connection lost"; $("phase").className = "phase failed"; return; }
+  try { s = await getJSON("/api/status"); $("connerr").textContent = ""; }
+  catch (e) {
+    $("phase").textContent = e.kind || "error"; $("phase").className = "phase failed";
+    $("connerr").textContent = e.message;
+    return;
+  }
   const live = s.running && s.phase !== "finished";
   $("phase").textContent = s.phase; $("phase").className = "phase " + s.phase.split(" ")[0];
   $("dot").className = "dot" + (s.running ? " on" : "");
@@ -341,7 +371,7 @@ async function refresh() {
   const pre = $("log");
   if (s.log_epoch !== logEpoch) { pre.textContent = ""; logSeq = 0; logEpoch = s.log_epoch; }   // new session
   if (s.log_seq !== logSeq) {
-    const lines = await (await fetch("/api/log?since=" + logSeq)).json();
+    const lines = await getJSON("/api/log?since=" + logSeq);
     const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
     for (const [n, line] of lines) { pre.textContent += line + "\n"; }
     if (atEnd) pre.scrollTop = pre.scrollHeight;
@@ -352,7 +382,7 @@ async function refresh() {
   lastRunning = s.running; lastCheck = checkState;
 }
 async function loadSessions() {
-  const list = await (await fetch("/api/sessions")).json();
+  const list = await getJSON("/api/sessions");
   $("sessions").innerHTML = list.map((x) => {
     const ck = x.check === "recording" ? `<span class="tag bad">recording</span>`
       : x.check ? `<a href="/api/sessions/${encodeURIComponent(x.name)}/check" target="_blank"
@@ -486,7 +516,7 @@ function showCaptions() {
 async function liveStateLoop() {
   while (liveOn) {
     try {
-      liveState = await (await fetch("/api/live/state")).json();
+      liveState = await getJSON("/api/live/state");
       if (!controlSynced) {               // another iPad (or a reload) may have changed them
         $("lrange").value = String(Math.round(liveState.control.range_m));
         $("lmap").value = liveState.control.radar_map;
@@ -497,13 +527,14 @@ async function liveStateLoop() {
         `– ${fmtTime(liveState.remaining_s)} left`) : "";
       $("btnLiveStop").disabled = !liveState.on || liveState.stopping;
       $("lsource").textContent = liveState.source ? "Playing a recorded session (not the sensors): " + liveState.source : "";
-      const lines = await (await fetch("/api/live/log")).json();
+      const lines = await getJSON("/api/live/log");
       if (lines.length !== liveLogN) { $("llog").textContent = lines.join("\n"); liveLogN = lines.length; }
       if (!liveState.on) {
         liveOn = false;
         $("lmsg").textContent = liveState.stop_reason ? "Live view off: " + liveState.stop_reason : "";
       }
-    } catch (e) { /* connection hiccup: try again */ }
+      $("lerr").textContent = "";
+    } catch (e) { $("lerr").textContent = e.message; }      // shown, then retried
     await sleep(250);
   }
   $("btnLiveStop").disabled = true; $("liveTimer").textContent = "";
@@ -512,8 +543,13 @@ async function frameLoop(sensor) {
   let seq = 0;
   while (liveOn) {
     try {
-      const r = await fetch(`/api/live/frame/${sensor}?after=${seq}`, { cache: "no-store" });
-      if (r.status !== 200) { await sleep(300); continue; }
+      const url0 = `/api/live/frame/${sensor}?after=${seq}`;
+      const r = await fetch(url0, { cache: "no-store" });
+      if (r.status !== 200) {
+        if (r.status !== 204) $("lerr").textContent = serverError(url0, r.status, await r.text()).message;
+        await sleep(300);
+        continue;
+      }
       seq = parseInt(r.headers.get("X-Seq") || "0", 10);
       const url = URL.createObjectURL(await r.blob());
       if (sensor === "camera") {
@@ -526,7 +562,7 @@ async function frameLoop(sensor) {
         if (liveImg[sensor]) URL.revokeObjectURL(liveImg[sensor].src);
         liveImg[sensor] = img; drawBev(sensor);
       }
-    } catch (e) { await sleep(500); }
+    } catch (e) { $("lerr").textContent = `${sensor} image: ${e.message}`; await sleep(500); }
   }
 }
 function liveBegin() {

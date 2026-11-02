@@ -143,6 +143,18 @@ What the baseline showed:
 - **Live view (2026-10-31): first test on the rig.**
   - Built and tested on `ibrahim-desktop`, which has no sensors, by playing
     `freewalk_ref_02` (`--live-from-session`).
+  - **First rig report (2026-11-02):** with camera + LiDAR only, the page
+    "got stuck".
+    - The screenshot showed the server answering POSTs ("live view is
+      already on"), while `/api/status` and `/api/live/state` never
+      returned usable JSON.
+    - Not reproduced on `ibrahim-desktop`: camera + LiDAR works on recorded
+      data, and the live LiDAR socket path works with a localhost UDP
+      replay.
+    - Cause still unknown. The page now shows the real error (HTTP status,
+      the server's message), the server answers every failure in JSON with
+      the traceback in its log, and its JSON never contains NaN. Waiting for
+      the team's retest and `journalctl -u capture-web`.
   - Still to check on the rig: live DCA1000 control and STOP_RECORD, the
     LiDAR sockets, the live ZED, the page over the rig's Wi-Fi, the radar
     pkt/s during live view, and a recording straight after a live view

@@ -43,6 +43,7 @@ import argparse
 import atexit
 import collections
 import json
+import math
 import os
 import re
 import shutil
@@ -51,10 +52,13 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import psutil
 from flask import Flask, jsonify, request, send_file
+from flask.json.provider import DefaultJSONProvider
+from werkzeug.exceptions import HTTPException
 
 HERE = Path(__file__).resolve().parent
 PIPELINE = HERE.parent
@@ -356,6 +360,23 @@ def list_sessions(root: Path, active: str = None) -> list:
     return out
 
 
+def finite(obj):
+    """obj with NaN and +-Infinity replaced by None. Python's JSON writes them as NaN / Infinity,
+    which browsers refuse to parse: one such number would make the page show nothing at all."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [finite(v) for v in obj]
+    return obj
+
+
+class FiniteJSON(DefaultJSONProvider):
+    def dumps(self, obj, **kwargs):
+        return super().dumps(finite(obj), **kwargs)
+
+
 RECORDING_SCRIPTS = ("capture_session.py", "dca_capture_radar_sync.py", "record_lidar_raw.py", "recorder.py")
 
 
@@ -371,9 +392,20 @@ def recording_processes() -> list:
 
 def create_app(session: Session, live: liveview.LiveView = None) -> Flask:
     app = Flask(__name__)
+    app.json = FiniteJSON(app)
     live = live or liveview.LiveView(sys.executable)
     # Recording and live view NEVER run at the same time: both starts take this lock and check the other.
     exclusive = threading.Lock()
+
+    @app.errorhandler(Exception)
+    def on_error(exc):
+        """Every failure answers in JSON with what went wrong (the page shows it), and the traceback
+        goes to the server log (journalctl -u capture-web)."""
+        if isinstance(exc, HTTPException):
+            return jsonify(error=f"{exc.code} {exc.name}: {exc.description}"), exc.code
+        print(f"ERROR in {request.method} {request.path}:\n"
+              + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), file=sys.stderr, flush=True)
+        return jsonify(error=f"{type(exc).__name__}: {exc} (traceback in the server log)"), 500
 
     @app.get("/")
     def index():

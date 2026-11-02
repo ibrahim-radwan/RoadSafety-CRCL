@@ -68,6 +68,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="LiDAR live view (no saving)")
     add_args(ap)
     ap.add_argument("--no-detect", action="store_true", help="no ground / object detection (colour by raw height)")
+    ap.add_argument("--config", type=Path, default=LIVE_CONFIG, help="rs_driver config for the live sensor")
     a = ap.parse_args()
     link = Link("lidar", a.max_secs, {"range_m": a.range_m})
     from perception.core.lidar_io import decode_config, load_wrapper
@@ -91,7 +92,7 @@ def main() -> int:
             pcap = Path(a.from_session) / "lidar" / "lidar.pcap"
             log(f"lidar: playing {pcap}")
         else:
-            cfg, pcap = LIVE_CONFIG, None
+            cfg, pcap = a.config, None
         detector = None
         if not a.no_detect:
             from perception.lidar import LidarDetector

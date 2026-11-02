@@ -120,6 +120,24 @@ re-reads its log so live status returns, and Stop still works. This was tested
 by killing the server with SIGKILL during a three-sensor recording: the
 session completed, and the check passed.
 
+## When the page shows an error
+
+Under the title, the page says what failed. Since 2026-11-02 it no longer
+shows a bare "connection lost":
+
+- **no connection:** the Jetson did not answer. Check the Wi-Fi, and check
+  that the service runs (`systemctl status capture-web`).
+- **server error 500 on /api/…: <error>:** the server hit a bug. It answers
+  in JSON with the error, and the full traceback is in its log:
+  `journalctl -u capture-web --since "1 hour ago"`. Send both.
+- **unreadable reply:** the answer was not valid JSON.
+
+Errors in the live view appear on its card.
+
+The server never writes NaN or Infinity in its JSON; it writes `null`
+instead. Browsers refuse to parse NaN, and one such value would leave the
+page blank.
+
 ## Run it by hand
 
 ```bash
