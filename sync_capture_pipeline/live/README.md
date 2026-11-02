@@ -4,6 +4,12 @@ Watch the three sensors live on the iPad page (`web_control/`) while you
 align them: the radar–LiDAR–camera extrinsic calibration. **Nothing is
 saved.** Added 2026-10-31.
 
+**Opening the page:** live view is part of the iPad page
+(`web_control/`). The easiest way to reach it, anywhere, is the Jetson's
+own Wi-Fi hotspot: join `JetsonHotSpot` and open
+`http://192.168.50.1:8080`. Setup and details:
+`docs/knowledge/02_hardware_and_network.md`, "Wi-Fi for the iPad".
+
 ## What the page shows
 
 | Panel | Content | Rate | Size |

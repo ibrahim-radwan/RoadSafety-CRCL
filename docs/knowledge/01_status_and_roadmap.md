@@ -155,6 +155,15 @@ What the baseline showed:
       the server's message), the server answers every failure in JSON with
       the traceback in its log, and its JSON never contains NaN. Waiting for
       the team's retest and `journalctl -u capture-web`.
+  - **Page blocked on the university network (2026-11-03).** The team
+    could not open the page by name or IP. Fix: the Jetson's own Wi-Fi
+    hotspot (`setup_jetson_capture.sh --hotspot`, page at
+    `http://192.168.50.1:8080`; [02](02_hardware_and_network.md)).
+    - The script's hotspot step has not been run by us: it needs sudo and
+      changes the network. Its options and failure messages were checked
+      without sudo.
+    - `ibrahim-desktop` has the end user's hand-made profile with the same
+      settings.
   - Still to check on the rig: live DCA1000 control and STOP_RECORD, the
     LiDAR sockets, the live ZED, the page over the rig's Wi-Fi, the radar
     pkt/s during live view, and a recording straight after a live view

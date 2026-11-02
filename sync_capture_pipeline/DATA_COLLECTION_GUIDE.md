@@ -46,10 +46,23 @@ packet rate.
 
 ### Open the web page
 
-On the iPad: **http://jetson-desktop.local:8080**
+**With the Jetson's hotspot (recommended; it starts by itself at boot):**
 
-If it does not load, check that the iPad is on the same Wi-Fi as the Jetson,
-then wait a minute after the Jetson boots.
+1. On the iPad, join the Wi-Fi **JetsonHotSpot**, using the password set
+   when the hotspot was set up.
+2. Open **http://192.168.50.1:8080**.
+
+If the iPad says "No Internet Connection", stay on this network anyway; the
+page does not need the internet. Turn off Auto-Join for other networks so
+the iPad does not switch away.
+
+**Without the hotspot:** put the iPad on the same Wi-Fi as the Jetson and
+open **http://jetson-desktop.local:8080**. On university or office networks
+this is often blocked; use the hotspot instead.
+
+If the page does not load, wait a minute after the Jetson boots. To set up
+the hotspot, see `docs/knowledge/02_hardware_and_network.md`, "Wi-Fi for
+the iPad".
 
 ---
 

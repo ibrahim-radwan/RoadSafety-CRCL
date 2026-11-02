@@ -12,9 +12,11 @@
     disabled (`sudo systemctl disable --now whoopsie`; it held one core at
     ~94% when idle; undo with `enable --now`).
 - All USB-A ports share one internal hub; the USB-C ports are separate.
-- Wi-Fi `wlan0` is for the iPad web control
-  (`http://jetson-desktop.local:8080`, mDNS). The sensor subnets must not use
-  the Wi-Fi subnet (192.168.1.x).
+- Wi-Fi `wlan0` is for the iPad web control: either the Jetson's own
+  **hotspot** (`http://192.168.50.1:8080`, see "Wi-Fi for the iPad" below)
+  or a shared Wi-Fi (`http://jetson-desktop.local:8080`, mDNS). The sensor
+  subnets must not use the Wi-Fi subnet (192.168.1.x, or 192.168.50.x with
+  the hotspot).
 
 ## Sensors
 
@@ -43,6 +45,80 @@
 - History: both NICs once had 192.168.33.30, and radar traffic was routed out
   of the USB adapter. Hence the separate subnets.
 
+## Wi-Fi for the iPad: the Jetson's own hotspot (added 2026-11-03)
+
+**Why:** on managed networks (the university's Wi-Fi), devices often cannot
+reach each other, and proxies or firewalls block the page. The team could
+not open the web page by the Jetson's name or IP there. With a hotspot,
+the Jetson's Wi-Fi *is* the network: the iPad joins it and talks to the
+Jetson directly. The same works in the field, where there is no other
+Wi-Fi.
+
+| | |
+|---|---|
+| Network name (SSID) | `JetsonHotSpot` (change with `--hotspot-ssid=NAME`) |
+| Password | chosen at setup (WPA2, 8+ characters) |
+| Jetson address | **192.168.50.1**, page at **http://192.168.50.1:8080** |
+| iPad address | given out by the Jetson (192.168.50.x, DHCP) |
+| Band | 2.4 GHz: reaches farther through an enclosure; an access point on 5 GHz can fail to start on radar-protected (DFS) channels |
+| NetworkManager profile | `jetson-hotspot`: `ipv4.method shared`, autoconnect with priority 100, so it starts at every boot |
+
+**Set it up** (once per board, on the board's own screen or over Ethernet,
+**not over SSH through its Wi-Fi**: switching the Wi-Fi to hotspot ends
+that connection, so the script then sets it up without starting it):
+
+```bash
+cd ~/dev/CascadedRadarRoadSafetyOnTwoWheelers/sync_capture_pipeline
+sudo bash setup_jetson_capture.sh --hotspot              # asks for the password
+# or: sudo HOTSPOT_PASSWORD='...' bash setup_jetson_capture.sh --hotspot-ssid=RigHotSpot
+```
+
+What the script does, besides its usual steps:
+- creates or updates the `jetson-hotspot` profile. An existing profile
+  keeps its password unless a new one is given;
+- if the `ufw` firewall is on, opens DHCP (UDP 67), DNS (53) and the page
+  (TCP 8080) on `wlan0`. Without the first two, the iPad joins but gets no
+  address;
+- starts the hotspot, and prints the address to open.
+
+It does not touch the radar and LiDAR profiles (192.168.33.x / 34.x, bound
+by MAC).
+
+**Use it:**
+1. On the iPad, join the Wi-Fi `JetsonHotSpot`.
+2. Open **http://192.168.50.1:8080**.
+
+iOS may say "No Internet Connection" and drift back to a known network.
+Stay on the hotspot, and turn off Auto-Join for other networks while
+working.
+
+**What you give up while the hotspot is on:**
+- **No internet over Wi-Fi.** The card can only be either a client or the
+  hotspot reliably; both Ethernet ports are taken by the sensors. For a
+  `git pull` or updates, switch over for a moment:
+  ```bash
+  sudo nmcli con up "<your Wi-Fi profile>"   # internet (the hotspot stops)
+  sudo nmcli con up jetson-hotspot           # back to the hotspot
+  ```
+  A USB phone tether also works.
+- **No network time sync.** Sensor alignment uses CLOCK_MONOTONIC and is
+  unaffected. Only the wall-clock time in `session.json` (`started_local`)
+  can drift. Session names come from the iPad's clock.
+
+**Turn it off:**
+- `sudo nmcli con down jetson-hotspot` turns it off until the next boot.
+- `sudo nmcli con modify jetson-hotspot connection.autoconnect no` keeps it
+  off at boot.
+- `sudo nmcli con delete jetson-hotspot` removes it.
+
+**Bandwidth:** live view needs ~0.3 MB/s (≈2.6 Mbit/s); recording status
+needs far less.
+
+**Interference:** none with the sensors (radar at 77 GHz, LiDAR optical).
+
+**History:** `ibrahim-desktop` got such a profile by hand (`JetsonHotSpot`,
+192.168.50.1/24, created by the end user). The script reproduces it.
+
 ## Kernel settings (`/etc/sysctl.d/90-sensor-capture.conf`)
 
 ```
@@ -52,4 +128,4 @@ vm.dirty_bytes = 1073741824
 ```
 
 `sync_capture_pipeline/setup_jetson_capture.sh` writes all three and installs
-the web service.
+the web service; with `--hotspot` it also sets up the Wi-Fi hotspot (above).

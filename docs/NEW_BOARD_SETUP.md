@@ -172,7 +172,23 @@ This writes `/etc/sysctl.d/90-sensor-capture.conf`:
 
 It also installs and starts the `capture-web` service on port 8080. The
 iPad reaches it at `http://<hostname>.local:8080` (mDNS; the original board
-was `jetson-desktop`).
+was `jetson-desktop`) when both are on the same Wi-Fi.
+
+**Recommended: the Jetson's own Wi-Fi hotspot.** On managed networks
+(university, office), proxies, firewalls or client isolation can block the
+page. With a hotspot, the iPad joins the Jetson's Wi-Fi and opens
+`http://192.168.50.1:8080`. Run the same script with `--hotspot`, on the
+board's screen or over Ethernet, not over SSH through its Wi-Fi:
+
+```bash
+sudo bash ~/dev/CascadedRadarRoadSafetyOnTwoWheelers/sync_capture_pipeline/setup_jetson_capture.sh --hotspot
+```
+
+It asks for a password (8+ characters). While the hotspot is on, the
+board has no internet over Wi-Fi. Details, how to switch back for a
+`git pull`, and how to turn it off are in
+[knowledge/02_hardware_and_network.md](knowledge/02_hardware_and_network.md),
+"Wi-Fi for the iPad".
 
 ## 9. Radar firmware record
 

@@ -5,9 +5,15 @@ don't need a screen, keyboard or SSH on the scooter.
 
 ## Use it
 
-1. Connect the iPad to the **same Wi-Fi** as the Jetson.
-2. Open `http://<jetson-wifi-ip>:8080`. To find the IP on the Jetson, run
-   `ip -4 -br addr show wlan0`.
+1. Connect the iPad to the Jetson's network:
+   - **Recommended: the Jetson's own hotspot.** Join the Wi-Fi
+     `JetsonHotSpot` and open **`http://192.168.50.1:8080`**. Set it up once
+     with `sudo bash setup_jetson_capture.sh --hotspot`; see
+     `docs/knowledge/02_hardware_and_network.md`, "Wi-Fi for the iPad". This
+     avoids networks whose proxies or firewalls block the page.
+   - **Or the same Wi-Fi as the Jetson.**
+2. Without the hotspot, open `http://<jetson-wifi-ip>:8080`. To find the
+   IP on the Jetson, run `ip -4 -br addr show wlan0`.
 3. Enter a session name and a note, choose the sensors, and press
    **Start recording**.
    - Duration `0` means the session runs until you press **Stop**.
