@@ -68,6 +68,14 @@ Each item cost real debugging time. Read before changing the related code.
 - **Lossless H.264 decodes at only ~40–50 fps.**
 
 ## Software
+- **Never install a systemd unit with a fixed user and path.** The web
+  service's file named user `jetson` and
+  `/home/jetson/dev/CascadedRadarRoadSafetyOnTwoWheelers`, and
+  `setup_jetson_capture.sh` copied it as is. On another board (217/USER)
+  or a checkout under the GitHub name `RoadSafety-CRCL` (200/CHDIR), the
+  service failed every 3 s and the page stayed blank, which looked like a
+  network problem. The script now writes the unit for the board it runs on
+  (2026-11-04).
 - **Never let the launcher's stdout be a pipe owned by the web server.** If the
   server dies, the recording dies with a BrokenPipeError. The launcher writes
   to a file and the server follows `session.log`. The service needs

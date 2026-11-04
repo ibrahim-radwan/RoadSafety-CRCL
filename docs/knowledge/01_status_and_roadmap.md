@@ -159,9 +159,19 @@ What the baseline showed:
     could not open the page by name or IP. Fix: the Jetson's own Wi-Fi
     hotspot (`setup_jetson_capture.sh --hotspot`, page at
     `http://192.168.50.1:8080`; [02](02_hardware_and_network.md)).
-    - The script's hotspot step has not been run by us: it needs sudo and
-      changes the network. Its options and failure messages were checked
-      without sudo.
+    - **Tested on `ibrahim-desktop` (2026-11-04)** by following the docs:
+      the hotspot came up and a phone joined, but the page was blank. The
+      cause was the web service: its file fixed user `jetson` and the old
+      checkout path, so it failed with 217/USER. This is probably also the
+      team's failure (on the rig, 200/CHDIR if the checkout is
+      `RoadSafety-CRCL`).
+    - Fixed: the script writes the unit for the user, checkout and conda
+      Python of the board it runs on, waits up to 20 s for the page, and
+      prints the cause if it fails. The docs have a "page stays blank"
+      section.
+    - Verified without sudo: the generated unit's command serves the page
+      in systemd's clean environment.
+    - Still to do: the full script run here again, then on the rig.
     - `ibrahim-desktop` has the end user's hand-made profile with the same
       settings.
   - Still to check on the rig: live DCA1000 control and STOP_RECORD, the

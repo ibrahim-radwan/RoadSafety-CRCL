@@ -14,8 +14,12 @@ are tied to it.
 
 Several files contain absolute paths:
 - the flash configs: `cascaded_radar_capture_pipeline/firmware/*/flash_*.cfg`;
-- the web service: `sync_capture_pipeline/web_control/capture-web.service`;
-- `capture_session.py` and `web_control/server.py`.
+- `capture_session.py` and `web_control/server.py` (their defaults).
+
+The web service is not on this list any more (2026-11-04).
+`setup_jetson_capture.sh` (section 8) writes it for the user who runs the
+script, this checkout's folder and that user's conda Python. The file in
+git, `web_control/capture-web.service`, is only a template.
 
 They all assume user **`jetson`** and this exact location:
 

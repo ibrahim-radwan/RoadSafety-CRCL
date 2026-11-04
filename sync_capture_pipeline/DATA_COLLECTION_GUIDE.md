@@ -163,7 +163,7 @@ aligning the sensors, for example with a corner reflector on a stand.
 | HINT "SD card not found" | Insert the card fully. If it was removed while the Jetson ran, reinserting is enough; no commands are needed. |
 | HINT "storage full" | Copy finished sessions off, then delete them. |
 | HINT "board too hot" | Shade the Jetson, improve airflow, wait. |
-| Page does not load | iPad Wi-Fi; wait for the Jetson to finish booting. |
+| Page does not load | iPad Wi-Fi (with the hotspot: joined `JetsonHotSpot`?); wait for the Jetson to finish booting. Joined but the page stays blank: the web service is down. See `docs/knowledge/02_hardware_and_network.md`, "Wi-Fi for the iPad". |
 | Page reloaded or iPad locked during a recording | Harmless. The recording continues on the Jetson; reopen the page and it shows the running session. |
 
 ---

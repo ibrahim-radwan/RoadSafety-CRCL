@@ -158,13 +158,27 @@ instead.
 
 ## Install as a service (starts at boot)
 
+Install it with the setup script, as the user who should run it
+(normally `jetson`), from `sync_capture_pipeline/`. Add `--hotspot` for
+the Wi-Fi hotspot:
+
 ```bash
-sudo cp web_control/capture-web.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now capture-web
+sudo bash setup_jetson_capture.sh
 systemctl status capture-web          # should be "active (running)"
 journalctl -u capture-web -f          # server log
 ```
+
+`capture-web.service` in this folder is a **template**. The script fills
+in the user who ran sudo, this checkout's folder and that user's conda
+Python (`~/miniconda3/envs/rel_1_py_3_8`, or `CAPTURE_PYTHON=...`). It
+checks that this Python can import flask and psutil, then writes
+`/etc/systemd/system/capture-web.service`.
+
+**Do not copy the template by hand.** Until 2026-11-04 the file named user
+`jetson` and `/home/jetson/dev/CascadedRadarRoadSafetyOnTwoWheelers`, and a
+copy failed on any other board or checkout folder, restarting every 3 s.
+If the page does not load, the script's "== Check" output names the cause;
+see also `docs/knowledge/02_hardware_and_network.md`, "Wi-Fi for the iPad".
 
 The unit uses `KillMode=process`. Restarting or stopping the service stops
 only the web server, never a recording in progress. **Do not remove it.**

@@ -1,5 +1,9 @@
-# systemd unit: capture web control on port 8080, started at boot.
-# Install: see README.md in this folder.
+# systemd unit TEMPLATE: capture web control on port 8080, started at boot.
+# Install it with setup_jetson_capture.sh (sudo), which fills in the @...@ values for the board
+# it runs on: the user who ran sudo, this checkout's folder and that user's conda Python. A
+# plain copy of this file does not work. (Until 2026-11-04 it named user jetson and
+# /home/jetson/dev/CascadedRadarRoadSafetyOnTwoWheelers, and failed on any other board or
+# checkout folder: status=217/USER or 200/CHDIR.)
 [Unit]
 Description=Radar/camera/LiDAR capture web control
 After=network-online.target
@@ -7,10 +11,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=jetson
-Group=jetson
-WorkingDirectory=/home/jetson/dev/CascadedRadarRoadSafetyOnTwoWheelers/sync_capture_pipeline
-ExecStart=/home/jetson/miniconda3/envs/rel_1_py_3_8/bin/python web_control/server.py --host 0.0.0.0 --port 8080
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@PIPELINE@
+ExecStart=@PYTHON@ web_control/server.py --host 0.0.0.0 --port 8080 --camera-stage @HOME@/camera_stage
 Restart=on-failure
 RestartSec=3
 # CRITICAL: stop/restart only the web server, never the recording it started.

@@ -73,6 +73,22 @@ sudo bash setup_jetson_capture.sh --hotspot              # asks for the password
 # or: sudo HOTSPOT_PASSWORD='...' bash setup_jetson_capture.sh --hotspot-ssid=RigHotSpot
 ```
 
+**First, make sure the checkout is up to date.** Run `git pull` in the same
+folder you run the script from. The script's first line, and the "commit"
+line under "== Check", name the commit it runs: it must be the latest one.
+An older script ignores `--hotspot` without a word: its output then has
+no "== 3. Wi-Fi hotspot" section (seen on the rig, 2026-11-04).
+
+A successful run ends with:
+```
+== Check
+commit        : <latest commit>
+...
+hotspot       : on - Wi-Fi 'JetsonHotSpot'
+service       : active / enabled at boot
+web page      : OK  ->  join Wi-Fi 'JetsonHotSpot' on the iPad, open http://192.168.50.1:8080
+```
+
 What the script does, besides its usual steps:
 - creates or updates the `jetson-hotspot` profile. An existing profile
   keeps its password unless a new one is given;
@@ -104,6 +120,34 @@ working.
 - **No network time sync.** Sensor alignment uses CLOCK_MONOTONIC and is
   unaffected. Only the wall-clock time in `session.json` (`started_local`)
   can drift. Session names come from the iPad's clock.
+
+**If the phone or iPad joins the hotspot but the page stays blank:** the
+hotspot works, and the web service is the problem.
+
+1. Look at the end of the script's output, under "== Check". Since
+   2026-11-04 it waits up to 20 s for the page and, if it does not answer,
+   prints the cause and the server's last errors.
+2. Or ask the Jetson directly:
+   ```bash
+   systemctl status capture-web            # should be "active (running)"
+   journalctl -u capture-web -n 30 --no-pager
+   ```
+   - `status=217/USER` or `status=200/CHDIR`: the service was installed
+     for another user or folder. Typically this is the old service file,
+     which was copied as is and named user `jetson` and
+     `/home/jetson/dev/CascadedRadarRoadSafetyOnTwoWheelers`. Run
+     `sudo bash setup_jetson_capture.sh --hotspot` again from the current
+     checkout, as the normal user; it rewrites the service for this board.
+   - `203/EXEC` or a Python traceback: the conda environment or a package
+     is missing (`docs/NEW_BOARD_SETUP.md`).
+3. Test the page on the Jetson itself: `curl -s -o /dev/null -w "%{http_code}\n"
+   http://127.0.0.1:8080/` should print `200`. If it does, but the iPad
+   still gets nothing, check the iPad's address (192.168.50.x) and the
+   firewall (`sudo ufw status`; the script opens the ports when it is on).
+
+Found on `ibrahim-desktop` (2026-11-04): with the old service file, the
+hotspot came up, and a phone joined and got an address, but the page was
+blank. The service failed with 217/USER every 3 s.
 
 **Turn it off:**
 - `sudo nmcli con down jetson-hotspot` turns it off until the next boot.
