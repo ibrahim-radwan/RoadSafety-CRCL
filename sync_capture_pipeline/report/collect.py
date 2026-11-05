@@ -84,6 +84,8 @@ def collect_lidar(S: Path, t0: float, duration: float, rmin: float, rmax: float,
     from lidar import Lidar
 
     to_mono, fit = al.lidar_clock_fit(S)
+    from perception.core.extrinsic import extrinsic_for_session, lidar_points_to_vehicle
+    ext = extrinsic_for_session(S)                            # points into the vehicle frame
     # inverse clock map (linear), to select snapshot sweeps by lidar time
     a_ = (to_mono(1000.0) - to_mono(0.0)) / 1000.0
     b_ = float(to_mono(0.0))
@@ -103,6 +105,7 @@ def collect_lidar(S: Path, t0: float, duration: float, rmin: float, rmax: float,
         p = np.asarray(points)
         if ts <= 0 or p.ndim != 2 or p.shape[1] < 6:
             return
+        p = lidar_points_to_vehicle(p, ext)
         x, y, z, r, inten = p[:, 0], p[:, 1], p[:, 2], p[:, 3], p[:, 4]
         mtz = (r >= r0) & (r <= r1) & (x > 0) & (np.abs(y) <= tan_az * x) & (np.abs(z) <= sin_el * r)
         keys = m._voxel_keys(np.floor(x[mtz] / m.VOXEL_M).astype(np.int64),

@@ -10,7 +10,9 @@ decoding by our rs_driver wrapper (lidar_standalone_capture/rs_driver/python_wra
     decode_parallel    the same, several drivers on time chunks at once (processes), fn applied there
 
 Decode at <= 3x real time: faster, the driver drops data. Points are N x 6: x, y, z (x forward,
-y left, z up), range, intensity, time offset from the sweep timestamp. Directions with no return
+y left, z up), range, intensity, time offset from the sweep timestamp. Every reader here and in
+the tools turns them into the vehicle frame first (perception/core/extrinsic.py,
+lidar_points_to_vehicle): sweep_time's boresight is then the radar's. Directions with no return
 come back as zero-range points.
 """
 from __future__ import annotations
@@ -105,17 +107,21 @@ def lidar_offset_s(session: Path) -> float:
 
 def decode_sweeps(session: Path, rate: float = 3.0, cfg_path: Path = None, pcap_path: Path = None):
     """Decode the whole lidar.pcap (or pcap_path: a part of it, see decode_parallel); yields
-    (t_ref of the boresight points, points N x 6 float32) in time order. The driver runs at
+    (t_ref of the boresight points, points N x 6 float32 in the VEHICLE frame: the session's
+    LiDAR extrinsic applied, perception/core/extrinsic.py) in time order. The driver runs at
     `rate` x real time (<= 3)."""
     session = Path(session)
+    from .extrinsic import extrinsic_for_session, lidar_points_to_vehicle
     to_mono = lidar_to_mono(lidar_pcap_index(session), lidar_offset_s(session))
+    ext = extrinsic_for_session(session)
     cfg_path = decode_config(session, cfg_path or session / "sync" / "perception_lidar_decode.yaml")
     q: queue.Queue = queue.Queue(maxsize=200)
 
     def on_cloud(points, ts, seq):
         p = np.asarray(points)
         if ts > 0 and len(p):
-            q.put((float(to_mono(sweep_time(p, ts))), p.astype(np.float32, copy=True)))
+            p = lidar_points_to_vehicle(p.astype(np.float32, copy=True), ext)
+            q.put((float(to_mono(sweep_time(p, ts))), p))
 
     lid = load_wrapper()(str(cfg_path))
     lid.on_pointcloud(on_cloud)

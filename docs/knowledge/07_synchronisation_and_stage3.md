@@ -15,7 +15,11 @@ essentials:
     nominal-period fallback on a DCA backlog);
   - camera: per-frame conversion via `host_receipt_mono_ns`;
   - LiDAR: packet-clock fit plus per-point times, with the boresight points
-    (radar field of view) as the sweep's time.
+    (radar field of view) as the sweep's time. The boresight is the radar's,
+    in the vehicle frame (the session's LiDAR extrinsic, since 2026-11-06).
+    On the 2026-11-03 mounting (LiDAR yawed 40°), the old LiDAR-forward cone
+    was scanned ~11 ms away from the radar boresight. The Stage 3 offsets
+    were measured on the old mounting with identity, so they are unaffected.
 - **Stage 3 offsets** are measured once per setup and added to each sensor's
   time.
 

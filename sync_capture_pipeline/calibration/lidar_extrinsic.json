@@ -1,0 +1,16 @@
+{
+  "description": "LiDAR -> vehicle (radar) frame per mounting: p_vehicle = Rz(yaw_deg) * p_lidar + (tx_m, ty_m). Read by perception/core/extrinsic.py. Sessions before the first valid_from use identity.",
+  "mountings": [
+    {
+      "id": "rig_2026-11-03",
+      "valid_from": "2026-11-03T00:00:00",
+      "yaw_deg": 39.76,
+      "tx_m": -0.03,
+      "ty_m": -0.01,
+      "z_note": "z is not shifted (the radar has no elevation for stationary targets; the LiDAR detector measures its own ground)",
+      "method": "2D rigid fit of the LiDAR corner-reflector position (background-subtracted) to the 13 nominal positions of calibration_dataset 2026-11-03 (2/3/5/8 m; names read from the reflector's side, *_left = vehicle right); residual 0.11 m mean, 0.33 m max. Radar on boresight agrees within +-3 deg; the team's manual fit (manual_calibration_result.yaml, not accepted_for_use) gives 38.6 deg.",
+      "measured": "2026-11-05",
+      "provisional": "until the team's extrinsic calibration is accepted"
+    }
+  ]
+}

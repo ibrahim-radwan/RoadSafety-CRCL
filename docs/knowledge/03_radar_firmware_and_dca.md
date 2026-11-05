@@ -89,6 +89,10 @@ This page is the background an agent needs before touching radar code.
   - stage3 (2026-10-11 morning): about +3°;
   - freewalk_ref_02 (afternoon): about −0.4°;
   - run_20261014_1326: about +2° (with the per-channel correction).
+  - **2026-11-03 rig (team's corner-reflector sessions): the LiDAR is
+    yawed +39.8° from the radar boresight** (13 positions, 0.11 m
+    residual). The radar's off-axis azimuth there is 5–13° off; on
+    boresight it is within ±3°. See `NOTES_FOR_TEAM.md`.
   
   This is extrinsic calibration (the team's). The phase correction removes
   its beam-steering part so as not to absorb it.

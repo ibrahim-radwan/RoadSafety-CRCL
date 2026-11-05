@@ -2,9 +2,11 @@
 The pipeline's frame and sign conventions, in one place. Everything that converts between the
 radar processing's own angles and the pipeline frame goes through here.
 
-Pipeline frame (the LiDAR's): x forward, y LEFT, z up, metres. Azimuth = atan2(y, x), positive to
-the LEFT. Times: t_ref (CLOCK_MONOTONIC seconds, Stage 3 offsets applied). The radar is assumed
-co-located with the LiDAR until the team's extrinsic calibration.
+Pipeline frame (the vehicle's): x forward along the radar boresight, y LEFT, z up, metres.
+Azimuth = atan2(y, x), positive to the LEFT. Times: t_ref (CLOCK_MONOTONIC seconds, Stage 3
+offsets applied). LiDAR points are turned into this frame right after decoding with the session's
+mounting (perception/core/extrinsic.py, calibration/lidar_extrinsic.json; identity for mountings
+before 2026-11-03, where the LiDAR faced the radar's way).
 
 Radar processing angles (radar_config.az_axis_deg, the azimuth FFT bins): positive to the RIGHT.
 That is the original processing's convention ("x = lateral, positive = right of boresight"), not

@@ -66,6 +66,7 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   check_radar_frames.py         radar stale-word / range-time check
   calibration/stage3_offsets.json   the offsets in use (applied by align_session by default)
   calibration/radar_rx_phase.json   in-situ radar phase correction (provisional, until the team's recalibration)
+  calibration/lidar_extrinsic.json  LiDAR -> vehicle (radar) transform per mounting (provisional, until the team's)
   web_control/                  Flask iPad control (systemd service, port 8080)
   live/                         live view workers (radar, LiDAR, camera -> JPEG + numbers to the web page; no saving)
   replay/                       PyQt/pyqtgraph replay: one window, 6 panels, live detection (camera in its own process)
@@ -112,9 +113,12 @@ docs/                           knowledge base + new-board setup
 
 - **Time:** CLOCK_MONOTONIC seconds. `t_ref` = aligned time with the Stage 3
   offsets applied. Report and replay plot time from the first radar frame.
-- **Spatial frame:** x forward, y **left**, z up (the LiDAR frame; the radar is
-  assumed co-located until the team's extrinsic calibration). Bird's-eye views
-  draw forward up and vehicle-left on the left, like the camera image.
+- **Spatial frame:** the vehicle frame: x forward along the radar boresight,
+  y **left**, z up. LiDAR points are turned into it right after decoding,
+  with the session's mounting from `calibration/lidar_extrinsic.json`
+  (`perception/core/extrinsic.py`; identity before 2026-11-03, when the
+  LiDAR was found yawed +39.8°). Bird's-eye views draw forward up and
+  vehicle-left on the left, like the camera image.
 - **Radar azimuth:** the team's processing azimuth is positive to the
   **right** (their convention; it is not a mirror error). World azimuth
   (+left) = − processing azimuth, in one place:

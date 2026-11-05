@@ -51,8 +51,19 @@
 
 ## Mounting
 
-- **Facing forward, like the radar.** Alignment assumes rpy = 0 for its
-  field-of-view selection.
+- **The mounting is a transform per date** (`calibration/lidar_extrinsic.json`,
+  `perception/core/extrinsic.py`, 2026-11-06). Every tool turns the points
+  into the vehicle (radar) frame right after decoding; `align_session.py`
+  records the transform in `sync/alignment.json` and uses its yaw for the
+  boresight selection.
+  - Before 2026-11-03: facing forward, like the radar (identity).
+  - **From 2026-11-03: yawed +39.8° to the left of the radar**, t =
+    (−0.03, −0.01) m. Fitted to the team's 13 corner-reflector positions,
+    residual 0.11 m. On that rig a reflector straight ahead is at LiDAR
+    azimuth −39°.
+  - The reflector is not the LiDAR's brightest return (10–120 against 255
+    for people, hi-vis vests and near objects). Find it by difference from
+    an empty-scene recording (the live view's *Take background*).
 - **It was once found turned 57°** after the sensors were reconnected; Stage 3
   found it. Check orientation before calibration or collection, for example in
   the replay: a person straight ahead should be at ~0° azimuth.

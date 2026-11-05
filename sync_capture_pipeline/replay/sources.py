@@ -35,6 +35,7 @@ HERE = Path(__file__).resolve().parent
 PIPELINE = HERE.parent
 sys.path.insert(0, str(PIPELINE))
 from perception.core.conventions import world_azimuth                          # noqa: E402
+from perception.core.extrinsic import extrinsic_for_session, lidar_points_to_vehicle  # noqa: E402
 from perception.core.lidar_io import (decode_config, lidar_pcap_index, lidar_to_mono,  # noqa: E402,F401
                                       load_wrapper, sweep_time)
 from perception.core.radar_io import FramePrefetcher                           # noqa: E402
@@ -531,7 +532,8 @@ class LidarSource(Source):
         self.off, self.ln, self.ht, self.port, self.lts, self.mts = (idx[k] for k in
                                                                      ("off", "ln", "ht", "port", "lts", "mts"))
         self.to_mono = lidar_to_mono(idx, offset_s)
-        self.sweeps = []                    # (t_mono, raw points N x 6), last ~1.5 s
+        self.ext = extrinsic_for_session(session)   # points into the vehicle frame (identity: unchanged)
+        self.sweeps = []                    # (t_mono, points N x 6, vehicle frame), last ~1.5 s
         self.slock = threading.Lock()
 
     def span(self):
@@ -636,7 +638,8 @@ class LidarSource(Source):
             p = np.asarray(points)
             if ts <= 0 or len(p) == 0:
                 return
-            item = (float(self.to_mono(sweep_time(p, ts))), p.astype(np.float32, copy=True))
+            p = lidar_points_to_vehicle(p.astype(np.float32, copy=True), self.ext)
+            item = (float(self.to_mono(sweep_time(p, ts))), p)
             with self.slock:
                 self.sweeps.append(item)
                 self.sweeps = self.sweeps[-15:]

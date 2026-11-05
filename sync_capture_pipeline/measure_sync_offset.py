@@ -389,6 +389,9 @@ def measure_one(session: Path, a) -> dict:
     rr = radar_range_res(cfg)
     t_r, files, _, _ = al.radar_timeline(session, 0.0)
     cam_t, cam_idx, _ = al.camera_timeline(session, 0.0)
+    if a.lidar_rpy_deg is None:                  # the session's LiDAR extrinsic (yaw)
+        from perception.core.extrinsic import extrinsic_for_session
+        a.lidar_rpy_deg = (0.0, 0.0, float(extrinsic_for_session(session)["yaw_deg"]))
     rot = al.rotation(*a.lidar_rpy_deg)
 
     print("  radar : range FFT of every frame ...")
@@ -510,7 +513,8 @@ def main() -> int:
     ap.add_argument("--range-max", type=float, default=15.0, help="target window end (m)")
     ap.add_argument("--az-half", type=float, default=30.0, help="LiDAR target wedge half-width (deg)")
     ap.add_argument("--el-half", type=float, default=15.0, help="LiDAR target wedge half-height (deg)")
-    ap.add_argument("--lidar-rpy-deg", type=float, nargs=3, default=(0.0, 0.0, 0.0))
+    ap.add_argument("--lidar-rpy-deg", type=float, nargs=3, default=None,
+                    help="LiDAR -> radar rotation; default (0, 0, the session's LiDAR extrinsic yaw)")
     ap.add_argument("--min-snr-db", type=float, default=6.0, help="radar target above static background")
     ap.add_argument("--min-lidar-points", type=int, default=20)
     ap.add_argument("--min-camera-frac", type=float, default=0.005, help="moving fraction of the image")

@@ -79,6 +79,11 @@ def observations(D) -> list:
     off = al.get("offsets", {})
     obs.append(f"Time offsets applied: radar {off.get('radar_ms', 0):+.2f} ms, camera {off.get('camera_ms', 0):+.2f} ms "
                f"(LiDAR reference){'' if al.get('offsets_calibrated') else ' — NOT calibrated'}.")
+    ext = al.get("lidar_extrinsic")
+    if ext and (ext.get("yaw_deg") or ext.get("tx_m") or ext.get("ty_m")):
+        obs.append(f"LiDAR points are in the vehicle (radar) frame: extrinsic {ext.get('id')}, yaw "
+                   f"{ext['yaw_deg']:+.1f}°, offset ({ext.get('tx_m', 0):+.2f}, {ext.get('ty_m', 0):+.2f}) m "
+                   "(calibration/lidar_extrinsic.json, recorded in sync/alignment.json).")
     pr = al.get("pairing", {})
     if pr:
         obs.append(f"Pairing: {pr.get('pairs'):,} radar frames; camera error p01/p99 "
@@ -127,8 +132,9 @@ def observations(D) -> list:
     obs.append(f"LiDAR single-target track present in {tinfo['sweeps_with_target']:,} of {tinfo['sweeps']:,} sweeps "
                f"(within ±30° of forward, {D['fw'].get('hpf_floor_m', '?')}–25 m).")
     if R.get("mirror_azimuth"):
-        obs.append("Radar azimuth: the processing's angle sign is mirrored relative to the world (verified on "
-                   "freewalk_ref_02 against camera and LiDAR); radar bird's-eye views here are mirror-corrected. "
+        obs.append("Radar azimuth: the radar processing's own angle is positive to the RIGHT (the team's convention); "
+                   "everything in this report is in the pipeline frame, azimuth and y positive to the LEFT, as the "
+                   "LiDAR (perception/core/conventions.py; verified on freewalk_ref_02 against camera and LiDAR). "
                    "The TX/RX → azimuth table is not yet calibrated.")
     b = D["log"]["board"]
     if len(b):

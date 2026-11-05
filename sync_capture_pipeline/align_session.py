@@ -18,7 +18,9 @@ CAMERA  The ZED SDK capture time is on the wall clock. Each frame row also
 LIDAR   1. Clock fit: every MSOP packet carries the LiDAR timestamp and was
            stamped with CLOCK_MONOTONIC on arrival (lidar.pcap).
         2. Every point carries its own time. Points are rotated into the
-           radar frame (--lidar-rpy-deg) and those inside the radar's field
+           radar frame (--lidar-rpy-deg; default the yaw of the session's
+           LiDAR extrinsic, recorded in alignment.json as "lidar_extrinsic"
+           and applied by every tool) and those inside the radar's field
            of view are kept. A sweep's pairing time is when it scanned the
            radar BORESIGHT; the FOV time span is reported alongside.
 
@@ -377,10 +379,14 @@ def main() -> int:
     ap.add_argument("--offsets", default=None,
                     help="Stage 3 result: JSON {radar_ms, camera_ms, lidar_ms} added to each sensor's time. "
                          f"Default: {DEFAULT_OFFSETS} if it exists; 'none' = uncalibrated")
-    ap.add_argument("--lidar-rpy-deg", type=float, nargs=3, default=(0.0, 0.0, 0.0),
+    ap.add_argument("--lidar-extrinsic", default="auto", choices=["auto", "none"],
+                    help="LiDAR -> vehicle (radar) transform recorded for the session and applied by every "
+                         "tool: auto = the mounting in calibration/lidar_extrinsic.json valid at the session's "
+                         "start (identity before the first entry); none = identity")
+    ap.add_argument("--lidar-rpy-deg", type=float, nargs=3, default=None,
                     metavar=("ROLL", "PITCH", "YAW"),
-                    help="rotation LiDAR -> radar frame (radar: x forward, y left, z up). "
-                         "Default: mounted facing the same way as the radar.")
+                    help="rotation LiDAR -> radar frame for the boresight timing (radar: x forward, y left, "
+                         "z up). Default: (0, 0, the extrinsic's yaw).")
     ap.add_argument("--boresight-deg", type=float, default=5.0,
                     help="half-angle around radar +x whose scan time is the sweep's pairing time")
     ap.add_argument("--split-angle", type=float, default=180.0,
@@ -416,7 +422,15 @@ def main() -> int:
     print(f"  sensors: {', '.join(sensors)}")
     print(f"  offsets: {offsets} {'(Stage 3)' if calibrated else '(NOT CALIBRATED - Stage 3 not applied)'}")
 
+    sys.path.insert(0, str(HERE))
+    from perception.core.extrinsic import IDENTITY, describe, session_default
+    ext = session_default(s) if a.lidar_extrinsic == "auto" else dict(IDENTITY)
+    if a.lidar_rpy_deg is None:
+        a.lidar_rpy_deg = (0.0, 0.0, float(ext["yaw_deg"]))
+    print(f"  LiDAR extrinsic: {describe(ext)}")
+
     report = {"session": str(s), "offsets": offsets, "offsets_calibrated": calibrated,
+              "lidar_extrinsic": ext,
               "offsets_file": str(off_path) if off_path else None,
               "lidar_split_angle_deg": a.split_angle,
               "lidar_rpy_deg": list(a.lidar_rpy_deg), "boresight_deg": a.boresight_deg,
