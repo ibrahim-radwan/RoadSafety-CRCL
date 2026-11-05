@@ -19,6 +19,7 @@ BRIGHTEST REFLECTORS
 from __future__ import annotations
 
 import argparse
+import collections
 import shutil
 import tempfile
 import threading
@@ -27,12 +28,62 @@ from pathlib import Path
 
 import numpy as np
 
-from common import (ROOT, Link, Pacer, Rate, ASPECT, add_args, bev_extent, jpeg, log, rounded)
+from common import (ROOT, Background, Link, Pacer, Rate, ASPECT, add_args, bev_extent, jpeg, log, rounded)
 
 LIVE_CONFIG = ROOT / "lidar_standalone_capture" / "rs_driver" / "config" / "config.yaml"
 PX = 600                                       # image width (cells across)
 BRIGHT_MIN = 100.0                             # intensity floor of a "bright" return (0..255)
 N_BRIGHT = 8
+BG_SWEEPS = 20                                 # sweeps in the background (voxel occupancy)
+VOX = 0.15                                     # background voxel (m); dilated by one voxel
+CHANGE_CELL = 0.3                              # new returns are grouped in cells of this size (m)
+CHANGE_MIN = 3                                 # ... with at least this many returns
+CHANGE_SWEEPS = 5                              # new returns pooled over the last sweeps (a far reflector
+                                               # gives ~1 return per sweep at 8 m)
+
+
+def _vkeys(xyz: np.ndarray) -> np.ndarray:
+    v = np.floor(xyz / VOX).astype(np.int64) + 2048            # +-300 m
+    return (v[:, 0] << 24) | (v[:, 1] << 12) | v[:, 2]
+
+
+def background_voxels(sweeps: list) -> np.ndarray:
+    """Sorted voxel keys occupied in any background sweep, dilated by one voxel."""
+    k = np.unique(np.concatenate([_vkeys(p[p[:, 3] > 0.3, :3]) for p in sweeps]))
+    x, y, z = k >> 24, (k >> 12) & 4095, k & 4095
+    out = [((x + dx) << 24) | ((y + dy) << 12) | (z + dz)
+           for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)]
+    return np.unique(np.concatenate(out))
+
+
+def new_returns(pts: np.ndarray, ref: np.ndarray, extent, near_m: float = 0.5) -> np.ndarray:
+    """The returns of a sweep in voxels the background did not have, within the view."""
+    x0, x1, y0, y1 = extent
+    ok = (pts[:, 3] > near_m) & (pts[:, 0] > x0) & (pts[:, 0] < x1) & (pts[:, 1] > y0) & (pts[:, 1] < y1)
+    q = pts[ok]
+    k = _vkeys(q[:, :3])
+    i = np.clip(np.searchsorted(ref, k), 0, len(ref) - 1)
+    return q[ref[i] != k]
+
+
+def changed_spots(q: np.ndarray) -> list:
+    """Groups of new returns (new_returns, pooled over a few sweeps): [x, y, range, azimuth
+    (deg, + left), peak intensity, n returns], most returns first. Anything new counts (people too)."""
+    if len(q) < CHANGE_MIN:
+        return []
+    g = np.floor(q[:, :2] / CHANGE_CELL).astype(np.int64)
+    cells, inv, cnt = np.unique(g, axis=0, return_inverse=True, return_counts=True)
+    out = []
+    for c in np.argsort(-cnt):
+        if cnt[c] < CHANGE_MIN or len(out) >= N_BRIGHT:
+            break
+        m = q[inv == c]
+        cx, cy = float(m[:, 0].mean()), float(m[:, 1].mean())
+        if any(np.hypot(cx - o[0], cy - o[1]) < 1.0 for o in out):
+            continue
+        out.append([cx, cy, float(np.hypot(cx, cy)), float(np.degrees(np.arctan2(cy, cx))),
+                    float(m[:, 4].max()), int(len(m))])
+    return out
 
 
 def bright_spots(pts: np.ndarray, extent, near_m: float = 0.5) -> list:
@@ -71,6 +122,8 @@ def main() -> int:
     ap.add_argument("--config", type=Path, default=LIVE_CONFIG, help="rs_driver config for the live sensor")
     a = ap.parse_args()
     link = Link("lidar", a.max_secs, {"range_m": a.range_m})
+    from perception.core.extrinsic import (current_extrinsic, describe, extrinsic_for_session,
+                                           lidar_points_to_vehicle)
     from perception.core.lidar_io import decode_config, load_wrapper
     from sources import render_lidar           # the replay's LiDAR view
     newest = {"n": 0, "pts": None, "t": 0.0}
@@ -93,6 +146,11 @@ def main() -> int:
             log(f"lidar: playing {pcap}")
         else:
             cfg, pcap = a.config, None
+        # into the vehicle (radar) frame: the session's mounting when playing one, else the newest
+        ext = extrinsic_for_session(a.from_session) if a.from_session else current_extrinsic()
+        log(f"lidar: extrinsic {describe(ext)}")
+        bg = Background(BG_SWEEPS, background_voxels)            # in memory only
+        recent = collections.deque(maxlen=CHANGE_SWEEPS)          # new returns of the last sweeps
         detector = None
         if not a.no_detect:
             from perception.lidar import LidarDetector
@@ -121,7 +179,13 @@ def main() -> int:
                 continue
             seen = n
             tic = time.perf_counter()
+            pts = lidar_points_to_vehicle(pts, ext)
             R = float(link.control.get("range_m", 20.0))
+            if bg.follow(link.control.get("background")) or bg.ref is None:
+                recent.clear()
+            bg.add(pts)
+            if bg.ref is not None:
+                recent.append(new_returns(pts, bg.ref, bev_extent(R)))
             ground = None
             n_obj = 0
             if detector is not None:
@@ -136,7 +200,10 @@ def main() -> int:
                        "sweeps": n, "points": shown, "objects": n_obj,
                        "ground_z": None if ground is None or not np.isfinite(ground) else round(float(ground), 2),
                        # [x, y, range, azimuth (deg, + left), peak intensity, n returns], strongest first
-                       "bright": rounded(bright_spots(pts, bev_extent(R)))},
+                       "bright": rounded(bright_spots(pts, bev_extent(R))),
+                       "extrinsic": describe(ext), "background": bg.state(),
+                       # new returns since the background, most returns first (same columns)
+                       "changed": rounded(changed_spots(np.concatenate(recent)) if recent else [])},
                       jpeg(img, 80))
             pacer.wait()
     except Exception as exc:

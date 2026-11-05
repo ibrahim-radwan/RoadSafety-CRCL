@@ -31,13 +31,39 @@ from pathlib import Path
 
 import numpy as np
 
-from common import (PIPELINE, Link, Pacer, Rate, add_args, bev_extent, jpeg, log, rounded)
+from common import (PIPELINE, Background, Link, Pacer, Rate, add_args, bev_extent, jpeg, log, rounded)
 
 import dca_capture_radar_sync as dca            # noqa: E402  (the recorder's receiver, unchanged)
 import radar_firmware                           # noqa: E402
 
 W, H = 600, 400                                  # image size (ASPECT 1.5)
 N_STATIC = 40                                    # strongest static detections sent to the page
+BG_FRAMES = 16                                   # frames in the background (median stationary map)
+BG_MIN_DB = 10.0                                 # a change: this much above the background ...
+BG_ROW_DB = 6.0                                  # ... and above its range row's median (not a background null)
+N_CHANGED = 8
+
+
+def changed_cells(m: np.ndarray, ref: np.ndarray, r_axis: np.ndarray, az_deg: np.ndarray, r_max: float) -> list:
+    """Stationary-map cells that rose above the background: local maxima of (map - background),
+    >= BG_MIN_DB above it and >= BG_ROW_DB above the range row's median (so a deep null of the
+    background is not a change). Rows [x, y, range, azimuth (deg, + left), power dB, rise dB],
+    largest rise first."""
+    d = m - ref
+    ok = (r_axis[:, None] >= 0.5) & (r_axis[:, None] <= r_max)
+    ok = ok & (d >= BG_MIN_DB) & (m >= np.median(m, axis=1, keepdims=True) + BG_ROW_DB)
+    pad = np.pad(d, 1, mode="constant", constant_values=-np.inf)
+    h, w = d.shape
+    peak = np.ones_like(ok)
+    for di in (0, 1, 2):
+        for dj in (0, 1, 2):
+            if di != 1 or dj != 1:
+                peak &= d >= pad[di:di + h, dj:dj + w]
+    ri, ai = np.nonzero(ok & peak)
+    order = np.argsort(-d[ri, ai])[:N_CHANGED]
+    ri, ai = ri[order], ai[order]
+    r, az = r_axis[ri], np.radians(az_deg[ai])
+    return np.c_[r * np.cos(az), r * np.sin(az), r, np.degrees(az), m[ri, ai], d[ri, ai]].tolist()
 
 
 class LatestFrame:
@@ -231,6 +257,7 @@ def main() -> int:
     log(f"radar: firmware {variant}, in-situ RX phase correction {'on' if rx is not None else 'off'}, "
         f"device {det.dev}")
     fans = {}
+    bg = Background(BG_FRAMES, lambda maps: np.median(np.stack(maps), axis=0))   # in memory only
     rate, pacer = Rate(), Pacer(a.hz, link.stop)
     try:
         err = src.start()
@@ -263,6 +290,11 @@ def main() -> int:
             st = out["static_detections"]
             st = st[st[:, C["ghost"]] == 0]
             st = st[np.argsort(-st[:, C["power_db"]])][:N_STATIC]
+            smap = out["static_map"].cpu().numpy()
+            bg.follow(link.control.get("background"))
+            bg.add(smap)
+            changed = (changed_cells(smap, bg.ref, det.range_axis, det.static_az_deg, 1.6 * R)
+                       if bg.ref is not None else [])
             ms = (time.perf_counter() - tic) * 1e3
             rate.tick()
             cols = [C["x"], C["y"], C["range"], C["az_deg"]]
@@ -272,6 +304,9 @@ def main() -> int:
                        "moving": rounded(mv[:, cols + [C["v_r"], C["snr_db"]]]),
                        # [x, y, range, azimuth, power dB, SNR dB], strongest first
                        "static": rounded(st[:, cols + [C["power_db"], C["snr_db"]]]),
+                       # background (page's "Take background"): its state, and the cells that rose
+                       # above it [x, y, range, azimuth, power dB, rise dB], largest rise first
+                       "background": bg.state(), "changed": rounded(changed),
                        **src.status()}, jpeg(img))
             pacer.wait()
     except Exception as exc:

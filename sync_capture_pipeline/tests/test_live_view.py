@@ -158,6 +158,29 @@ def test_live_view_from_session_and_auto_off():
             time.sleep(0.3)
         else:
             raise AssertionError("radar did not follow the control message")
+        # "Take background": held by the workers in memory (the file snapshot below proves nothing
+        # is written), then the reflector pick switches to what changed
+        bg_workers = [s for s in ("radar", "lidar") if s in sensors]
+        assert lv.control({"background": "take"})["background"].startswith("take:")
+        assert "background" not in lv.control_state, "a background must not carry over to a new live view"
+        t_end = time.monotonic() + 25
+        while time.monotonic() < t_end:
+            hs = {s: lv.status()["sensors"][s]["header"] for s in bg_workers}
+            if all(h.get("background", {}).get("state") == "ready" for h in hs.values()):
+                break
+            time.sleep(0.3)
+        else:
+            raise AssertionError(f"background not ready: {[h.get('background') for h in hs.values()]}")
+        assert all(isinstance(h.get("changed"), list) for h in hs.values())
+        lv.control({"background": "clear"})
+        t_end = time.monotonic() + 10
+        while time.monotonic() < t_end:
+            if all(lv.status()["sensors"][s]["header"].get("background", {}).get("state") == "off"
+                   for s in bg_workers):
+                break
+            time.sleep(0.3)
+        else:
+            raise AssertionError("background not cleared")
         # the time limit: switched off by the server, every worker exits by itself
         t_end = time.monotonic() + 40 + liveview.STOP_GRACE_S + 10
         while lv.active() and time.monotonic() < t_end:

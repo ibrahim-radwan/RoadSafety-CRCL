@@ -148,3 +148,42 @@ def jpeg(rgb: np.ndarray, quality: int = 75) -> bytes:
 def rounded(a, nd: int = 2) -> list:
     """An array as nested lists of rounded floats, for the JSON header."""
     return np.round(np.asarray(a, float), nd).tolist()
+
+
+class Background:
+    """The empty scene, for picking a reflector as what CHANGED ("Take background" on the page).
+
+    Held in this worker's memory only: never written anywhere, gone when live view stops, and live
+    view never runs during a recording, so recorded sessions and their replay are unaffected.
+    The page sends {"background": "take:<n>" | "clear:<n>"} (one-shot tokens, web_control/liveview.py);
+    follow() starts collecting `n_items` items (frames or sweeps) on a new take, and finish(items)
+    turns them into the reference. Keep the rig still: moving it makes the background stale."""
+
+    def __init__(self, n_items: int, finish):
+        self.n, self.finish = int(n_items), finish
+        self.token, self.items, self.ref, self.t_ready = None, None, None, None
+
+    def follow(self, token) -> bool:
+        """True when the token is new (a take or clear happened)."""
+        if not token or token == self.token:
+            return False
+        self.token = token
+        self.ref, self.t_ready = None, None
+        self.items = [] if str(token).startswith("take") else None
+        log(f"background: {'collecting' if self.items is not None else 'cleared'}")
+        return True
+
+    def add(self, item) -> None:
+        if self.items is None:
+            return
+        self.items.append(item)
+        if len(self.items) >= self.n:
+            self.ref, self.items, self.t_ready = self.finish(self.items), None, time.monotonic()
+            log("background: ready")
+
+    def state(self) -> dict:
+        if self.ref is not None:
+            return {"state": "ready", "age_s": round(time.monotonic() - self.t_ready, 1)}
+        if self.items is not None:
+            return {"state": "collecting", "done": len(self.items), "of": self.n}
+        return {"state": "off"}

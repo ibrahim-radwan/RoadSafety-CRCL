@@ -180,8 +180,13 @@
     <div class="msg" id="lmsg"></div>
     <div class="msg" id="lerr"></div>
     <div id="liveBody" class="hidden">
+      <div class="row" style="align-items:center;margin-bottom:10px">
+        <button id="btnBgTake" title="Record the empty scene for a few seconds (keep the rig still, reflector and people out of view). The reflector is then picked as what changed. Kept in memory only, never saved.">Take background</button>
+        <button id="btnBgClear">Clear background</button>
+        <span id="bgstate" style="color:var(--muted);font-size:14px"></span>
+      </div>
       <table class="refl">
-        <thead><tr><th>Strongest reflector</th><th>Range</th><th>Azimuth (+ left)</th><th>x / y</th><th></th></tr></thead>
+        <thead><tr><th id="reflHead">Strongest reflector</th><th>Range</th><th>Azimuth (+ left)</th><th>x / y</th><th></th></tr></thead>
         <tbody id="refl"></tbody>
       </table>
       <div class="livegrid">
@@ -423,10 +428,18 @@ function gate() {
   return (row) => row[2] >= lo && row[2] <= hi;
 }
 // strongest reflector inside the range gate: radar from its stationary detections (strongest
-// first), LiDAR from its brightest spots (strongest first); rows [x, y, range, az, ...]
+// first), LiDAR from its brightest spots (strongest first); rows [x, y, range, az, ...].
+// With a background taken (worker memory only), the largest CHANGE from it instead.
+function bgReady(h) { return !!(h && h.background && h.background.state === "ready"); }
 function strongest(h, key) {
+  if (bgReady(h)) key = "changed";
   if (!h || !h[key]) return null;
   return h[key].find(gate()) || null;
+}
+function bgText(h) {
+  const b = h && h.background;
+  if (!b || b.state === "off") return "none";
+  return b.state === "ready" ? `ready (${Math.round(b.age_s)} s old)` : `collecting ${b.done}/${b.of}`;
 }
 function hdr(s) { return liveState && liveState.sensors[s] ? liveState.sensors[s].header : null; }
 function toPx(ext, w, h, x, y) {          // x forward (up), y left (left)
@@ -458,6 +471,7 @@ function radarMarks(ctx, ext, w, h, hr) {
   if (!hr || !hr.extent) return;
   for (const d of hr.static || []) dot(ctx, ext, w, h, d[0], d[1], 4, COL.radar, null, true);
   for (const d of hr.moving || []) dot(ctx, ext, w, h, d[0], d[1], 4, "#fff", COL.radar);
+  if (bgReady(hr)) for (const d of hr.changed || []) dot(ctx, ext, w, h, d[0], d[1], 6, "#fff", null, true);
   const s = strongest(hr, "static");
   if (s) dot(ctx, ext, w, h, s[0], s[1], 11, COL.radar, null);
 }
@@ -468,7 +482,7 @@ function drawBev(sensor) {
   ctx.drawImage(img, 0, 0, W, H);
   grid(ctx, ext, W, H);
   if (sensor === "lidar") {
-    for (const b of h.bright || []) dot(ctx, ext, W, H, b[0], b[1], 5, COL.lidar, null);
+    for (const b of (bgReady(h) ? h.changed : h.bright) || []) dot(ctx, ext, W, H, b[0], b[1], 5, COL.lidar, null);
     const s = strongest(h, "bright");
     if (s) dot(ctx, ext, W, H, s[0], s[1], 12, "#fff", null);
     if ($("ovl").checked) radarMarks(ctx, ext, W, H, hdr("radar"));
@@ -483,8 +497,14 @@ function showLiveNumbers() {
   const row = (name, c, p, extra) => `<tr><td><b style="color:${c}">${name}</b></td>` +
     (p ? `<td>${f2(p[2])} m</td><td>${f1(p[3])}°</td><td>${f2(p[0])} / ${f2(p[1])} m</td><td>${extra}</td>`
        : `<td colspan="4" style="color:var(--muted)">none in the search range</td>`) + "</tr>";
-  if (liveState.sensors.radar) rows.push(row("Radar", COL.radar, r, r ? `${f1(r[4])} dB, SNR ${f1(r[5])} dB` : ""));
-  if (liveState.sensors.lidar) rows.push(row("LiDAR", COL.lidar, l, l ? `intensity ${l[4]}, ${l[5]} returns` : ""));
+  const hr = hdr("radar"), hl = hdr("lidar"), anyBg = bgReady(hr) || bgReady(hl);
+  $("reflHead").textContent = anyBg ? "Largest change from background" : "Strongest reflector";
+  $("bgstate").textContent = (liveState.sensors.radar ? `Background – radar: ${bgText(hr)}` : "") +
+    (liveState.sensors.lidar ? `   LiDAR: ${bgText(hl)}` : "") + (hl && hl.extrinsic ? `   ·   LiDAR in vehicle frame (${hl.extrinsic})` : "");
+  if (liveState.sensors.radar) rows.push(row("Radar", COL.radar, r, r ? (bgReady(hr) ? `${f1(r[4])} dB, +${f1(r[5])} dB over background`
+    : `${f1(r[4])} dB, SNR ${f1(r[5])} dB`) : ""));
+  if (liveState.sensors.lidar) rows.push(row("LiDAR", COL.lidar, l, l ? (bgReady(hl) ? `${l[5]} new returns, intensity ${l[4]}`
+    : `intensity ${l[4]}, ${l[5]} returns`) : ""));
   if (r && l) {
     const apart = Math.hypot(r[0] - l[0], r[1] - l[1]);
     rows.push(`<tr class="diff"><td>Radar − LiDAR</td><td>${(r[2] - l[2] >= 0 ? "+" : "") + f2(r[2] - l[2])} m</td>
@@ -587,6 +607,9 @@ $("btnLiveStop").onclick = async () => {
   try { await post("/api/live/stop"); } catch (e) { $("lmsg").textContent = e.message; }
   refresh();
 };
+for (const [id, op] of [["btnBgTake", "take"], ["btnBgClear", "clear"]]) {
+  $(id).onclick = () => post("/api/live/control", { background: op }).catch((e) => { $("lmsg").textContent = e.message; });
+}
 for (const id of ["lrange", "lmap"]) {
   $(id).onchange = () => post("/api/live/control", { range_m: $("lrange").value, radar_map: $("lmap").value })
     .catch((e) => { $("lmsg").textContent = e.message; });

@@ -109,6 +109,7 @@ class LiveView:
         self.started = self.deadline = None
         self.stop_reason = None
         self.control_state = {"range_m": 20.0, "radar_map": "static"}
+        self._bg_n = 0                  # background take/clear tokens (one-shot, see control)
         self.log = collections.deque(maxlen=400)
         self._stopping = False
 
@@ -190,12 +191,18 @@ class LiveView:
             ok["range_m"] = float(min(80.0, max(5.0, float(msg["range_m"]))))
         if msg.get("radar_map") in ("static", "moving"):
             ok["radar_map"] = msg["radar_map"]
+        once = {}
+        if msg.get("background") in ("take", "clear"):
+            # one-shot: sent to the running workers only, never kept in control_state, so a new
+            # live view starts without a background. The workers hold it in memory; nothing is saved.
+            self._bg_n += 1
+            once["background"] = f"{msg['background']}:{self._bg_n}"
         with self.lock:
             self.control_state.update(ok)
             workers = list(self.workers.values())
         for w in workers:
-            w.control(ok)
-        return ok
+            w.control({**ok, **once})
+        return {**ok, **once}
 
     def frame(self, sensor: str, after: int, timeout: float = 2.0):
         with self.lock:
