@@ -203,6 +203,31 @@ alignment.
 
 ## Your corner-reflector sessions of 2026-11-03: what the data shows
 
+> **What to do next (2026-11-06)**
+>
+> 1. **Pull the repository** (commit `65ff1ec` or later) on the rig and on
+>    the processing machines.
+> 2. **Re-align every session recorded since 2026-11-03**, so it uses the
+>    LiDAR transform (item 6). Then re-run the report and detection:
+>    `python align_session.py --session <s>`, then
+>    `python make_report.py --session <s>` and
+>    `python run_perception.py --session <s>`.
+> 3. **Name calibration positions from the rig's point of view:** "left" is
+>    the vehicle's left, seen from the rig looking forward (item 1).
+> 4. **When aligning with the corner reflector in live view, press *Take
+>    background* first,** with the reflector and people out of the scene
+>    (item 7).
+> 5. **Review our LiDAR transform** (`calibration/lidar_extrinsic.json`:
+>    +39.76°; yours gave 38.6°). Replace it with your extrinsic calibration
+>    when you accept it. Add a new entry whenever the LiDAR mounting changes.
+> 6. **Radar antenna calibration** (yours): it is what fixes the 5–13° radar
+>    azimuth error off boresight (item 3).
+> 7. **On the rig, please report:**
+>    - the radar packet rate (pkt/s on the radar panel) during live view;
+>    - that a recording made straight after a live view passes
+>      `check_session`;
+>    - that *Take background* works with the live sensors.
+
 Analysed 2026-11-05: `calibration_dataset/` (an empty `background`, 14
 reflector positions at 2, 3, 5 and 8 m, `validation_test`) and
 `run_20261103_1600-Lidar-AR1`. Every session passes `check_session`. Each
