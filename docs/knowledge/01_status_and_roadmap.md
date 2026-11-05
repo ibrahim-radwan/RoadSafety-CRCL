@@ -10,7 +10,7 @@ hardware:
 |---|---|
 | Radar firmware | `r075m_v2_8fps` flashed (8 fps, 2.62–75 m). All 20 variants rebuilt with the DSS-L3 memory-init fix. See [03](03_radar_firmware_and_dca.md). |
 | Capture | Three-sensor launcher with preflight checks, board-temperature monitoring and a radar-rate watchdog; iPad web control. See `sync_capture_pipeline/DATA_COLLECTION_GUIDE.md`. |
-| Live view | iPad page card for the extrinsic alignment (2026-10-31): camera, LiDAR top view, radar map with detections, strongest reflector per sensor; nothing saved; never together with recording; off after 10 min. **Tested on a recorded session only; not yet on the rig.** See `sync_capture_pipeline/live/README.md`. |
+| Live view | iPad page card for the extrinsic alignment (2026-10-31): camera, LiDAR top view, radar map with detections, strongest reflector per sensor; nothing saved; never together with recording; off after 10 min. **Working on the rig (team, 2026-11-05):** hotspot set up, live view runs, recording works. See `sync_capture_pipeline/live/README.md`. |
 | Storage | 1 TB SD card (ext4), camera staged on the eMMC; 0.2% camera drops. See [04](04_storage_and_recording.md). |
 | Synchronisation | Offline alignment on CLOCK_MONOTONIC. **Stage 3 offsets measured**: radar +12.65 ± 1.45 ms, camera +23.34 ± 3.28 ms (LiDAR reference). Applied automatically. See [07](07_synchronisation_and_stage3.md). |
 | Validation | `check_session.py` (completeness, pass/fail) runs after every session. `make_report.py` produces a descriptive HTML report per session, with no verdict. |
@@ -140,7 +140,58 @@ What the baseline showed:
 
 ## Open items and ideas
 
-- **Live view (2026-10-31): first test on the rig.**
+- **Team's corner-reflector sessions of 2026-11-03 (analysed 2026-11-05).**
+  They are on the team's drive at `/media/ibrahim/94DD-7E88/`:
+  `calibration_dataset/` (16 sessions) and `run_20261103_1600-Lidar-AR1`.
+  All are aligned; AR1 also has its report and perception. Findings are in
+  `NOTES_FOR_TEAM.md` ("Your corner-reflector sessions"):
+  - The scene names are given from the reflector's side: `*_left` is the
+    vehicle's right.
+  - On this mounting the LiDAR is yawed **+39.8°** (to the left) from the
+    radar and camera: 13 positions, residual 0.11 m. The team's manual fit
+    gives 38.6°.
+  - Radar range is accurate (+0.1 m). Radar azimuth is within ±3° on
+    boresight but 5–13° off at 0.5–1.5 m to the side; that needs the team's
+    antenna calibration.
+  - AR1 is not usable for calibration: the radar barely sees the reflector
+    there.
+  - Replay changes made for this (2026-11-05):
+    - any view range;
+    - a range filter;
+    - stationary radar reflectors in the objects table, with x / y and
+      absolute dB;
+    - raw threshold up to 80 dB;
+    - `--radar-all`, `--range-filter`.
+  - The report no longer calls the radar azimuth "mirrored".
+  - **LiDAR extrinsic applied (2026-11-06, owner's decision on this
+    data).**
+    - Our fit is in `calibration/lidar_extrinsic.json`, per mounting
+      (`valid_from`); `perception/core/extrinsic.py` reads it.
+    - The points are turned into the vehicle (radar) frame right after
+      decoding, in align (boresight timing), report, replay, live view,
+      `run_perception` and Stage 3.
+    - It is recorded per session in `sync/alignment.json`. Sessions before
+      2026-11-03 use identity and are bit-identical.
+    - The Nov-3 sessions were re-aligned, and AR1's report and perception
+      rebuilt.
+    - Provisional until the team's extrinsic.
+  - **Live view "Take background" (2026-11-06).**
+    - The reflector is picked as the largest change from an empty-scene
+      reference, held in the workers' memory only: nothing is saved, and a
+      new live view starts without it.
+    - Verified on `calibration_dataset`: LiDAR within 0.1 m at 3–5 m;
+      radar right on boresight.
+    - `tests/test_live_view.py` takes and clears a background and checks
+      that the session's files are unchanged.
+
+- **Live view (2026-10-31): working on the rig (team's report,
+  2026-11-05).** Over the Jetson's hotspot, the team set up the page, ran
+  live view, and recorded.
+  - Not reported in numbers yet: the radar pkt/s during live view, and a
+    `check_session` PASS for a recording made straight after a live view.
+  - The 2026-11-02 "stuck" report was never explained by a log. It came
+    before the hotspot, while the page was reached over the university
+    network, and it has not come back.
   - Built and tested on `ibrahim-desktop`, which has no sensors, by playing
     `freewalk_ref_02` (`--live-from-session`).
   - **First rig report (2026-11-02):** with camera + LiDAR only, the page
@@ -171,7 +222,11 @@ What the baseline showed:
       section.
     - Verified without sudo: the generated unit's command serves the page
       in systemd's clean environment.
-    - Still to do: the full script run here again, then on the rig.
+    - **Resolved (2026-11-05).** The full documented run passed on
+      `ibrahim-desktop`: a phone joined `JetsonHotSpot` and the page loaded.
+      The rig had run a script older than 7450f46, which ignored
+      `--hotspot`. After pulling f164682, the team configured the hotspot
+      on the rig.
     - `ibrahim-desktop` has the end user's hand-made profile with the same
       settings.
   - Still to check on the rig: live DCA1000 control and STOP_RECORD, the

@@ -101,7 +101,9 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
     detections the LiDAR did not support on `stage3_02`.
 11. **The radar–LiDAR yaw differs between mountings by several degrees**
     (about −5° to +3° on the reference sessions). This is extrinsic
-    calibration; ours assumes them co-located.
+    calibration. The reference sessions are processed as co-located; from
+    2026-11-03 the LiDAR's mounting is applied (see "Your corner-reflector
+    sessions", item 6).
 
 ## LiDAR (RoboSense RS-Fairy)
 
@@ -186,9 +188,11 @@ alignment.
     reflector, and a moving-target map can be chosen instead;
   - per sensor, the strongest reflector (range, azimuth + left) inside a
     range window you set, and the radar − LiDAR difference.
-- **It needs no calibration data.** The radar is drawn as if it sat at the
-  LiDAR's origin, so the difference you see is the extrinsic offset (plus
-  the radar's azimuth error; see "Radar" above).
+- **The LiDAR is drawn in the vehicle (radar) frame** with the current
+  mounting (`calibration/lidar_extrinsic.json`, since 2026-11-06). The
+  difference you see is what that transform leaves, plus the radar's
+  azimuth error (see "Radar" above). *Take background* picks the reflector
+  as what changed (see item 7 of "Your corner-reflector sessions").
 - **Nothing is saved, and it never runs during a recording.**
 - **It switches itself off after 10 minutes.**
 - LiDAR points over the camera image will follow once your camera
@@ -196,3 +200,127 @@ alignment.
 - Details: `sync_capture_pipeline/live/README.md`.
 - **Status:** tested on a recorded session only. The first use on the rig
   is also its first test with the sensors live.
+
+## Your corner-reflector sessions of 2026-11-03: what the data shows
+
+Analysed 2026-11-05: `calibration_dataset/` (an empty `background`, 14
+reflector positions at 2, 3, 5 and 8 m, `validation_test`) and
+`run_20261103_1600-Lidar-AR1`. Every session passes `check_session`. Each
+has `sync/`, so it opens in the replay. The reflector was found in each
+sensor by comparing with `background`, near its nominal position.
+
+**1. Left and right: both sensors use + left; two things made it look
+otherwise.**
+
+- **The scene names are mirrored.** In every `*_left` scene the camera
+  shows the tripod on the vehicle's right, and in every `*_right` scene on
+  its left. The names were given from the reflector's side, facing the rig.
+  Your `manual_calibration_result.yaml` agrees: its radar point for
+  `5m_150_left` has y = −1.36 m.
+- **The LiDAR is turned about 40° to the left** of the radar and camera on
+  this mounting.
+  - A reflector straight ahead appears at LiDAR azimuth −39°, at every
+    distance from 2 to 8 m.
+  - In the LiDAR's own frame, the one the replay and live view draw, a
+    reflector 5 m ahead and 1.5 m to the left (+17° from the rig) is at
+    17° − 40° ≈ −23°. That is why L813 had a negative azimuth.
+  - The replay's table, 2D view and 3D view agree with each other: all three
+    are in the LiDAR frame, + left.
+  - The radar processing's own angle is positive to the right (your
+    convention). The pipeline converts it once, so everything shown is + left.
+    It is not mirrored.
+
+**2. The LiDAR is the accurate sensor here.**
+
+- A 2D rigid fit of the 13 LiDAR reflector positions to the nominal
+  positions gives:
+  - yaw +39.8°;
+  - offset (−0.03, −0.01) m;
+  - residual 0.11 m mean, 0.33 m max (8m_150_left).
+- Your manual fit gave 38.6°.
+- The reflector height is z ≈ −0.3 m in the LiDAR frame.
+- The reflector is **not** the brightest LiDAR return. Its intensity is
+  10–120, while people, hi-vis vests and anything within ~2 m saturate at
+  255.
+
+**3. The radar: range is accurate, azimuth only near boresight.**
+
+- **Range:** +0.01 to +0.14 m from nominal on every scene.
+- **Azimuth on boresight (centre scenes):** within ±3°. The reflector stands
+  10–25 dB above the rest of its range row and is detected in every frame.
+  Its absolute level is ~150 dB at 3–5 m.
+- **Azimuth off-axis (0.5–1.5 m to the side):**
+  - The reflector shows as a broad or split lobe only ~4–12 dB above the
+    clutter.
+  - The picked peak is 5–13° from the true angle.
+  - This is the uncalibrated azimuth response (see "Radar" above: split lobe,
+    sidelobes 5–10 dB down). Your antenna calibration is what fixes it.
+- **The radar has no elevation for stationary reflectors** (z = 0). Only the
+  LiDAR gives the reflector's height.
+- **validation_test:** the LiDAR (with the fit above) and the radar agree
+  to 0.39 m, mostly in range.
+
+**4. `run_20261103_1600-Lidar-AR1` is not usable for calibration.**
+
+- The LiDAR sees the reflector at the stated position: LiDAR (4.35, −1.78),
+  which is about (4.5, +1.4) m in the rig frame.
+- The radar does not. There it is only ~7 dB above its range row, and a
+  stationary detection is within 0.6 m in 29 of 570 frames. Most likely the
+  reflector did not face the radar.
+- The office around it is full of strong reflectors and people.
+
+**5. Why the reflector was hard to pick out.**
+
+- **Replay:** *moving only* (the default) removes the stationary scene, and
+  the reflector with it. Use `--radar-all --radar-static --range-filter <a>
+  <b>`. The objects table then lists the strongest stationary reflectors
+  (`S1..S3`) with range, azimuth, x / y and dB.
+- **Live view:** its "strongest reflector" is the strongest return in the
+  range window, and that is often a wall or desk, not the reflector. In
+  `5m_center` it picked an object at (2.8, +2.1) m. Narrow the window to the
+  reflector's distance.
+- **dB:** the live view's ~120–150 dB is the absolute power (uncalibrated,
+  0 dB = 10⁻¹² FFT units). The replay's *raw >* threshold (now 3–80 dB) is
+  in dB above the frame's median, a different quantity. The replay's table
+  shows the absolute value too.
+
+**6. The LiDAR transform is now applied (2026-11-06).**
+
+- `calibration/lidar_extrinsic.json` holds the fit above: yaw +39.76°,
+  t = (−0.03, −0.01) m, valid from 2026-11-03.
+- Every tool turns the LiDAR points into the vehicle (radar) frame right
+  after decoding: alignment (the sweep's boresight time), the report, the
+  replay, the live view, `run_perception.py` and Stage 3. The LiDAR views now
+  show forward as forward, and radar marks line up with the LiDAR.
+- Each session records the transform it used in `sync/alignment.json`
+  (`lidar_extrinsic`). Sessions before 2026-11-03 use identity and are
+  unchanged.
+- `align_session.py --lidar-extrinsic none` turns it off for a session.
+- It is provisional: replace it with your extrinsic calibration when you
+  accept it. Add a new entry with a later `valid_from` whenever the mounting
+  changes.
+- z is not shifted.
+- Re-run `align_session.py` (then the report and `run_perception.py`) on
+  sessions aligned before 2026-11-06.
+
+**7. "Take background" in the live view (2026-11-06).**
+
+1. Start live view with the reflector and people out of the scene, and the
+   rig still.
+2. Press *Take background*. The radar collects 16 frames and the LiDAR 20
+   sweeps, a few seconds.
+3. Place the reflector. The reflector table then shows the **largest
+   change from the background** inside the search range, instead of the
+   strongest return.
+
+- **Nothing is saved:** the background lives in the live-view workers'
+  memory and is gone when live view stops. Recordings and their replay are
+  not affected (live view never runs during a recording).
+- **Tested on these sessions:**
+  - LiDAR: the reflector at 3 and 5 m is picked within 0.1 m.
+  - LiDAR at 8 m: the reflector gives too few returns per sweep.
+  - Radar: right on boresight; off-axis it is limited by the azimuth
+    calibration.
+- **Anything new counts as a change.** People who walk in show up too:
+  keep them out of the search range.
+- Re-take the background after moving the rig.

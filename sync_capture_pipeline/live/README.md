@@ -21,9 +21,9 @@ own Wi-Fi hotspot: join `JetsonHotSpot` and open
 That is about 0.3 MB/s (~2.6 Mbit/s) over the Wi-Fi, measured on
 `freewalk_ref_02`. The LiDAR and radar views share one extent
 (forward 0..R, lateral ±0.75 R), so radar marks drawn over the LiDAR image
-are in the same frame. The radar is assumed to sit where the LiDAR is,
-because there are no extrinsics yet; finding that offset is what the view
-is for.
+are in the same frame. The LiDAR points are turned into the vehicle (radar)
+frame with the current mounting (below). What remains between the two is
+the residual of that extrinsic.
 
 **The strongest reflector** (the table above the panels), inside the
 range window you set on the page:
@@ -37,6 +37,42 @@ range window you set on the page:
 - **Radar − LiDAR:** the range and azimuth difference. If the two points
   are more than 1.5 m apart, the row says they are probably not the same
   object.
+
+**Take background** (2026-11-06; buttons above the table):
+
+1. Start live view without the reflector and with nobody in the scene,
+   rig still.
+2. Press *Take background*.
+   - The radar worker keeps the median stationary map of 16 frames.
+   - The LiDAR worker keeps the voxels (0.15 m, dilated by one) occupied in
+     20 sweeps.
+3. Place the reflector. The table then shows the **largest change from the
+   background**:
+   - **Radar:** local maxima of map − background, ≥ 10 dB above it and
+     ≥ 6 dB above their range row's median (so a deep null of the background
+     is not a change), largest rise first.
+   - **LiDAR:** returns in voxels the background did not have, pooled over
+     the last 5 sweeps, in 0.3 m cells of at least 3 returns, most returns
+     first.
+   - Both are marked on the views.
+4. *Clear background* returns to the strongest return.
+
+- **Memory only:**
+  - The server forwards one-shot `take:<n>` / `clear:<n>` tokens and keeps
+    none, so a new live view starts without a background.
+  - Nothing is written. `tests/test_live_view.py` checks that no file of
+    the played session changes, with a background taken and cleared.
+  - Recorded sessions and the replay are unaffected.
+- **Verified on the team's calibration_dataset** (background from
+  `background`):
+  - LiDAR: the reflector at 3 and 5 m is picked within 0.1 m of its true
+    position. At 8 m it has too few returns.
+  - Radar: right on boresight; off-axis limited by the azimuth calibration.
+
+**The LiDAR is drawn in the vehicle (radar) frame** with the newest mounting
+in `calibration/lidar_extrinsic.json` (with `--from-session`, that session's
+mounting). The page names it under the buttons. Update the file when the
+rig's mounting changes.
 
 Azimuth is positive to the **left**, as everywhere in the pipeline
 (`perception/core/conventions.py`). LiDAR-over-camera needs the team's
@@ -134,10 +170,14 @@ Tests: `tests/test_live_view.py`:
   time limit, clean exits, no file in the session changed, and a worker
   stopping when its server goes away.
 
-## Not yet verified on the rig (2026-10-31)
+## On the rig
 
-Live view was built on `ibrahim-desktop`, which has no sensors. Still to do
-on the rig:
+**Working (team's report, 2026-11-05):** over the Jetson's Wi-Fi hotspot,
+the team opened the page, ran live view, and recorded afterwards.
+
+Live view was built on `ibrahim-desktop`, which has no sensors. These were
+the checks for the rig. The report covers 1–4 and a recording after live
+view; worth confirming in numbers when convenient:
 
 1. Live DCA1000 control in live view, including STOP_RECORD at the end.
 2. The live LiDAR sockets.

@@ -97,7 +97,11 @@ radar–LiDAR–camera extrinsic alignment. The panels are the camera's left
 image, the LiDAR top view (optionally with the radar detections drawn on
 it), and the radar range–azimuth map with our detections. A table shows
 the strongest reflector per sensor (range, azimuth) inside a range window
-you set, and the radar − LiDAR difference.
+you set, and the radar − LiDAR difference. After **Take background**, the
+table shows the largest change from that empty-scene reference instead.
+The reference is held in the workers' memory only. The server forwards
+one-shot `{"background": "take" | "clear"}` controls and keeps none of them
+(`live/README.md`).
 
 - **Nothing is saved.**
 - **Never at the same time as a recording:**

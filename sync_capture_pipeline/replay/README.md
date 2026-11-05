@@ -13,7 +13,7 @@ One window, six panels (2026-10-24; the 3D view used to be a separate window):
 | LiDAR 3D | The same sweep as an orbitable point cloud, 3D boxes, radar points | same |
 | Radar BEV | Range-azimuth power on the **same forward window** as the LiDAR; detections; tracks `R<n>` | radar `.bin`, `perception/radar.py` (GPU) |
 | Range-Doppler | Range vs radial velocity (+ = receding), detections | same |
-| Objects | Confirmed tracks of both sensors: range, azimuth, speed, radial velocity | the trackers |
+| Objects | Confirmed tracks of both sensors: range, azimuth (+ left), x / y, speed, radial velocity; with *static* ticked, the strongest stationary radar reflectors (`S<n>`, absolute power in dB) | the trackers, the stationary-reflector detector |
 
 - **Maximise a panel:** double-click its title, its ⤢ button, or keys **1–6**
   (in the order above). **Esc** or **0** restores. `--maximise <panel>` at
@@ -69,8 +69,14 @@ apply at once, even while paused.
   selected range; the lateral extent follows the panel's shape, and the image
   is rendered at about one cell per screen pixel. Before, the image covered
   only a square R × R window in the middle of a wider panel.
-- **Range:** 5, 10, 20 (default), 40 or 80 m. Use 5–10 m indoors, 20 m for
-  walking scenes and 40 m on the road. Mouse wheel and drag zoom further.
+- **Range:** any value from 1 to 80 m (default 20 m; type a value and press
+  Enter, or use the arrows). Use 5–10 m indoors, 20 m for walking scenes and
+  40 m on the road. Mouse wheel and drag zoom further.
+- **Range filter** (its own group, or `--range-filter FROM TO`): only radar
+  points (detections, raw cells, stationary reflectors) and table rows of
+  both sensors within this range are shown. It does not hide LiDAR points.
+  Added 2026-11-05 at the team's request, like the live view's reflector
+  search range.
 - **Colour:**
   - **height** (top views): the highest return in each cell, from the ground
     (measured by the detector) to 3 m above it;
@@ -131,6 +137,23 @@ detections, drawn as grey squares. They are reliable within ~6–10 m; farther
 out many are sidelobe or multipath images until the antenna recalibration.
 See `perception/README.md`.
 
+- The strongest 3 inside the range filter are listed in the objects table
+  as `S1..S3`, with range, azimuth, x / y and their **absolute power** in dB.
+  That is the number the live view's reflector table shows (~120–150 dB):
+  uncalibrated, 0 dB = 10⁻¹² in FFT units, so only differences mean
+  anything.
+- **A corner reflector is stationary.** With *moving only* ticked (the
+  default) the radar map removes the static scene and the reflector
+  disappears with it. For a calibration session, untick *moving only*
+  (key **m**, or `--radar-all` at start) and tick *static*:
+
+  ```bash
+  python replay/replay_session.py --session <calibration scene> --radar-all --radar-static --range-filter 1.5 10
+  ```
+- The strongest stationary reflector is not always the corner reflector:
+  walls, desks, monitors and door frames are strong too. Narrow the range
+  filter to the reflector's distance.
+
 **Detections group:** the boxes, the track IDs and the LiDAR target can each
 be switched off. `--no-detect` turns off the LiDAR detector.
 
@@ -143,15 +166,22 @@ radar elevation is not verified (see the radar topic page).
 
 - **Detections** (default): ours, above.
 - **Raw** (the team's definition: before any filtering). Every range–azimuth
-  cell of the current frame above a *raw* threshold (dB above the frame's
-  median, a display setting only). No CFAR, no clustering.
+  cell of the current frame above a *raw* threshold (dB **above the frame's
+  median**, 3–80 dB, a display setting only). No CFAR, no clustering. This is
+  a relative threshold: compare it with the absolute power in the table's dB
+  column (and the live view) only as differences.
 - The former **filtered** option (the team's `process_frame`, pre-computed by
   `radar_cloud.py`) was retired on 2026-10-25, when that chain was merged into
   `perception/`. Its general stages live on in the detections.
-- The radar is assumed co-located with the LiDAR; there is no extrinsic
-  calibration yet. The radar–LiDAR yaw differs between mountings by a few
-  degrees (about −5° to +3° on the reference sessions); that is the team's
-  extrinsic calibration.
+- On the reference sessions the radar and LiDAR are processed as
+  co-located. The radar–LiDAR yaw there differs by a few degrees (about −5°
+  to +3°); that is the team's extrinsic calibration.
+- **LiDAR points are shown in the vehicle (radar) frame** (2026-11-06), with
+  the session's mounting (`calibration/lidar_extrinsic.json`, recorded in
+  `sync/alignment.json`). On the 2026-11-03 rig the LiDAR is turned +39.8°
+  to the left of the radar. Sessions before that date use identity.
+  Sessions aligned before 2026-11-06 pick the mounting by their start date
+  until they are re-aligned.
 
 ## Overlays and navigation
 

@@ -132,6 +132,21 @@ aligning the sensors, for example with a corner reflector on a stand.
   need more time.
 - Set **Reflector search, range (m)** around the reflector's distance so
   that the table picks the reflector and not something nearer.
+- **With a corner reflector, take a background first:**
+  1. Start live view with the reflector out of the scene, nobody in front
+     of the rig, and the rig still.
+  2. Press **Take background**; wait until the line under it says *ready*
+     for radar and LiDAR (a few seconds).
+  3. Place the reflector. The table now shows the **largest change from the
+     background**, which is the reflector, not the strongest object in the
+     room.
+  4. Keep people out of the search range: anything new counts as a change.
+     Press **Take background** again after moving the rig.
+
+  The background is kept only while live view runs and is never saved.
+- **Name calibration positions from the rig's point of view:** "left" means
+  the vehicle's left, as seen sitting on the rig looking forward. The
+  2026-11-03 `calibration_dataset` names were the other way round.
 
 ---
 
