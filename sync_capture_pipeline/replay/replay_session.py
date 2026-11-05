@@ -14,7 +14,12 @@ button, or keys 1-6; Esc restores):
                     detections (colour = radial velocity, hollow = multipath
                     ghost), confirmed tracks (R<n>)
     Range-Doppler   range vs radial velocity
-    Objects         confirmed tracks of both sensors
+    Objects         confirmed tracks of both sensors (range, azimuth + left,
+                    x / y), and with "static" ticked the strongest stationary
+                    radar reflectors (S<n>, absolute power in dB)
+
+A range filter (from - to, any metres) limits the radar points, the
+stationary reflectors and the table rows; the view range takes any value.
 
 Each panel shows the time of the data it displays; for the radar frame on
 screen, the pairing errors and flags from sync/pairs.csv are shown.
@@ -61,7 +66,8 @@ sys.path.insert(0, str(HERE.parent))
 from sources import (LIDAR_COLORS, LIDAR_VIEWS, CameraSource, LidarSource, RadarSource,  # noqa: E402
                      ReplayClock, load_csv, top_extent)
 
-LIDAR_RANGES = [5.0, 10.0, 20.0, 40.0, 80.0]
+RANGE_MIN, RANGE_MAX = 1.0, 80.0             # view range and range filter limits (m)
+N_STATIC_ROWS = 3                             # strongest stationary radar reflectors listed in the objects table
 LIDAR_NEAR = [0.0, 0.3, 0.5, 1.0, 2.0]
 SPEEDS = [0.25, 0.5, 1.0, 2.0]
 RADAR_C, LIDAR_C, CAMERA_C = (42, 120, 214), (235, 104, 52), (27, 175, 122)   # report palette
@@ -260,15 +266,18 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         items["radar_rd"] = dict(plot=p, img=img, line=rd_line, dets=rd_dets)
         panels["radar_rd"] = Panel("radar_rd", "Range-Doppler", w, toggle_max)
         bottom.addWidget(panels["radar_rd"].frame)
-    table = QtWidgets.QTableWidget(0, 7)
-    table.setHorizontalHeaderLabels(["sensor", "track", "class", "range m", "az °", "speed m/s", "v_r m/s"])
+    table = QtWidgets.QTableWidget(0, 10)
+    table.setHorizontalHeaderLabels(["sensor", "id", "class", "range m", "az ° (+L)", "x m", "y m (+L)",
+                                     "speed m/s", "v_r m/s", "dB"])
+    table.horizontalHeaderItem(9).setToolTip("stationary radar reflectors: absolute power (uncalibrated; as the "
+                                             "live view's reflector table)")
     table.verticalHeader().hide()
     table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
     table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
-    table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-    table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)   # class + motion
+    table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+    table.horizontalHeader().setStretchLastSection(True)
     table.setFocusPolicy(QtCore.Qt.NoFocus)
-    panels["objects"] = Panel("objects", "Objects (confirmed tracks)", table, toggle_max)
+    panels["objects"] = Panel("objects", "Objects", table, toggle_max)
     bottom.addWidget(panels["objects"].frame)
     for sp, sizes in ((top, [5, 5, 5]), (bottom, [5, 5, 3])):
         sp.setChildrenCollapsible(False)
@@ -287,7 +296,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         vb = items[key]["plot"].getViewBox()
         w_, h_ = max(vb.width(), 10.0), max(vb.height(), 10.0)
         mode = srcs["lidar"].view["mode"] if "lidar" in srcs else "top"
-        R = lidar_ctl["range_m"].currentData() if "range_m" in lidar_ctl else args.lidar_range
+        R = lidar_ctl["range_m"].value() if "range_m" in lidar_ctl else args.lidar_range
         return ("top" if mode == "panorama" else mode), float(R), w_ / h_, w_
 
     def apply_views(force=False):
@@ -309,7 +318,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
             c, sn = np.cos(np.radians(85)) * rr * 1.5, np.sin(np.radians(85)) * rr * 1.5
             items[key]["fov"].setData([sn, 0, -sn], [c, 0, c])
         if "radar_rd" in items:
-            R = lidar_ctl["range_m"].currentData() if "range_m" in lidar_ctl else args.lidar_range
+            R = lidar_ctl["range_m"].value() if "range_m" in lidar_ctl else args.lidar_range
             items["radar_rd"]["plot"].disableAutoRange()
             items["radar_rd"]["plot"].setRange(xRange=(rd_axes[1][0], rd_axes[1][1]), yRange=(0, R), padding=0)
 
@@ -374,7 +383,12 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
     # ── settings ────────────────────────────────────────────────────────
     sets = QtWidgets.QHBoxLayout()
     root.addLayout(sets)
-    lidar_ctl, rctl, dctl = {}, {}, {}
+    lidar_ctl, rctl, dctl, gate = {}, {}, {}, {}
+
+    def in_gate(r):
+        """Mask (or bool) of ranges inside the range filter."""
+        lo, hi = (gate["lo"].value(), gate["hi"].value()) if gate else (0.0, np.inf)
+        return (np.asarray(r) >= lo) & (np.asarray(r) <= hi)
 
     def group(title):
         g = QtWidgets.QGroupBox(title)
@@ -388,11 +402,23 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         v = srcs["lidar"].view
         for key, label, options, current in (
                 ("mode", "", [("Top - forward", "top"), ("Top - 360°", "top360"), ("Panorama", "panorama")], v["mode"]),
-                ("range_m", "range", [(f"{r:g} m", float(r)) for r in LIDAR_RANGES], v["range_m"]),
+                ("range_m", "range", None, v["range_m"]),
                 ("color", "colour", [("height", "height"), ("intensity", "intensity"), ("density", "density")], v["color"]),
                 ("near_m", "hide <", [(f"{r:g} m", float(r)) for r in LIDAR_NEAR], v["near_m"])):
             if label:
                 row.addWidget(QtWidgets.QLabel(label))
+            if options is None:                   # the view range: any value (m)
+                box = QtWidgets.QDoubleSpinBox()
+                box.setRange(RANGE_MIN, RANGE_MAX)
+                box.setDecimals(0)
+                box.setSingleStep(1.0)
+                box.setSuffix(" m")
+                box.setKeyboardTracking(False)    # typed values apply on Enter, not per digit
+                box.setValue(float(current))
+                box.valueChanged.connect(lambda val, k=key: srcs["lidar"].set_view(**{k: float(val)}))
+                row.addWidget(box)
+                lidar_ctl[key] = box
+                continue
             box = QtWidgets.QComboBox()
             for text, value in options:
                 box.addItem(text, value)
@@ -415,14 +441,18 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         row.addWidget(rmode)
         row.addWidget(QtWidgets.QLabel("raw >"))
         rthr = QtWidgets.QSpinBox()
-        rthr.setRange(3, 40)
+        rthr.setRange(3, 80)
         rthr.setValue(15)
         rthr.setSuffix(" dB")
-        rthr.setToolTip("raw cells: dB above the frame's median (display only)")
+        rthr.setToolTip("raw cells: dB ABOVE THE FRAME'S MEDIAN (display only). Not the absolute level: the live "
+                        "view's ~120-150 dB is the absolute power (uncalibrated, 0 dB = 1e-12 FFT units), shown "
+                        "here in the objects table's dB column for stationary reflectors")
         row.addWidget(rthr)
         rstat = QtWidgets.QCheckBox("static")
-        rstat.setToolTip("stationary reflectors (zero Doppler; experimental): grey squares. Reliable within "
-                         "~6-10 m; farther out many are sidelobe or multipath images until the antenna recalibration")
+        rstat.setToolTip("stationary reflectors (zero Doppler; a corner reflector): grey squares, and the strongest "
+                         f"{N_STATIC_ROWS} inside the range filter in the objects table. Untick 'moving only' to "
+                         "see the stationary scene in the map. Reliable within ~6-10 m; farther out many are "
+                         "sidelobe or multipath images until the antenna recalibration")
         rstat.stateChanged.connect(lambda s_: setattr(srcs["radar"], "show_static", bool(s_)))
         rstat.setChecked(bool(getattr(args, "radar_static", False)))
         row.addWidget(rstat)
@@ -434,6 +464,23 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         want = getattr(args, "radar_points", "detections")
         rmode.setCurrentIndex([v_ for _, v_ in RADAR_POINTS].index(want))
         moving.stateChanged.connect(lambda s_: setattr(srcs["radar"], "moving_only", bool(s_)))
+        if getattr(args, "radar_all", False):
+            moving.setChecked(False)              # the whole scene, stationary reflectors included
+    row = group("Range filter")
+    rf = getattr(args, "range_filter", None) or (0.0, RANGE_MAX)
+    for key, val in (("lo", float(rf[0])), ("hi", float(rf[1]))):
+        if key == "hi":
+            row.addWidget(QtWidgets.QLabel("–"))
+        box = QtWidgets.QDoubleSpinBox()
+        box.setRange(0.0, RANGE_MAX)
+        box.setDecimals(1)
+        box.setSingleStep(0.5)
+        box.setSuffix(" m")
+        box.setKeyboardTracking(False)
+        box.setValue(val)
+        box.setToolTip("only radar points, stationary reflectors and table rows within this range are shown")
+        row.addWidget(box)
+        gate[key] = box
     row = group("Detections")
     for key, text, tip in (("lidar_obj", "LiDAR objects", "boxes coloured by size class (heuristic)"),
                            ("tracks", "track IDs", "confirmed tracks: L<n> LiDAR, R<n> radar"),
@@ -449,11 +496,10 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
     row.addWidget(legend)
     sets.addStretch(1)
     if "lidar" in srcs:
-        for key in ("range_m", "mode"):
-            lidar_ctl[key].currentIndexChanged.connect(lambda _i: apply_views(force=True))
+        lidar_ctl["mode"].currentIndexChanged.connect(lambda _i: apply_views(force=True))
+        lidar_ctl["range_m"].valueChanged.connect(lambda _v: apply_views(force=True))
         if "lidar3d" in items:
-            lidar_ctl["range_m"].currentIndexChanged.connect(
-                lambda _i: items["lidar3d"].set_range(lidar_ctl["range_m"].currentData()))
+            lidar_ctl["range_m"].valueChanged.connect(lambda v_: items["lidar3d"].set_range(float(v_)))
     elif "radar_bev" in items:
         pass
 
@@ -641,8 +687,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 for tr in ld["tracks"]:
                     tid, x, y, vx, vy, cls, hits, motion = tr
                     label = CLASSES[cls] + {"moving": " \u25b6", "static": " \u25a0", "?": ""}[motion]
-                    rows.append(("LiDAR", f"L{tid}", label, np.hypot(x, y), np.degrees(np.arctan2(y, x)),
-                                 np.hypot(vx, vy), None, LIDAR_C))
+                    if in_gate(np.hypot(x, y)):
+                        rows.append(("LiDAR", f"L{tid}", label, np.hypot(x, y), np.degrees(np.arctan2(y, x)), x, y,
+                                     np.hypot(vx, vy), None, None, LIDAR_C))
 
         # radar
         rad = srcs["radar"].get() if "radar" in srcs else None
@@ -659,10 +706,13 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     rb[k_].setData([], [])
             mode_pts = rctl["mode"].currentData()
             if rad and changed("radar", (rad["k"], mode_pts, rctl["thr"].value(), dctl["tracks"].isChecked(),
-                                         rctl["static"].isChecked())):
+                                         rctl["static"].isChecked(), gate["lo"].value(), gate["hi"].value())):
+                from perception.radar import C as RC
                 sd = rad.get("static")
-                sd = sd[sd[:, 9] == 0] if sd is not None and len(sd) else np.zeros((0, 10), np.float32)   # no ghosts
-                rb["static"].setData(sd[:, 1], sd[:, 0])
+                sd = sd[sd[:, RC["ghost"]] == 0] if sd is not None and len(sd) else np.zeros((0, 10), np.float32)
+                sd = sd[in_gate(sd[:, RC["range"]])]                  # no ghosts, inside the range filter
+                rb["static"].setData(sd[:, RC["y"]], sd[:, RC["x"]])
+                state["radar_static"] = sd[np.argsort(-sd[:, RC["power_db"]])][:N_STATIC_ROWS]
                 bev = rad["bev"]
                 fin = np.isfinite(bev)
                 # colour from 3 dB above the noise floor, but at most 30 dB below the frame's peak: a near,
@@ -679,8 +729,8 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 hi2 = max(lo2 + 25, float(np.percentile(rdi, 99.9)))
                 rr["img"].setImage(rdi, autoLevels=False, levels=(lo2, hi2))
                 rr["img"].setRect(rd_rect)
-                from perception.radar import C as RC
                 d = rad["det"]
+                d = d[in_gate(d[:, RC["range"]])] if len(d) else d
                 real = d[:, RC["ghost"]] == 0 if len(d) else np.zeros(0, bool)
                 if mode_pts == "detections" and len(d):
                     cols = cm.coolwarm(np.clip(0.5 + 0.5 * d[real, RC["v_r"]] / 2.0, 0, 1))
@@ -697,9 +747,11 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     rb["ghosts"].setData([], [])
                     rr["dets"].setData([], [])
                 rb["pts"].setData([], [])
-                vr_ = lidar_ctl["range_m"].currentData() if "range_m" in lidar_ctl else args.lidar_range
+                vr_ = lidar_ctl["range_m"].value() if "range_m" in lidar_ctl else args.lidar_range
                 if mode_pts == "raw":
                     xyz, val = srcs["radar"].raw_points(rad["ra"], rctl["thr"].value(), vr_)
+                    keep = in_gate(np.hypot(xyz[:, 0], xyz[:, 1]))
+                    xyz, val = xyz[keep], val[keep]
                     rb["pts"].setData(xyz[:, 1], xyz[:, 0], brush=pg.mkBrush(0, 230, 255, 200), size=3)
                     radar_pts = (xyz, cm.plasma(np.clip(val / 30.0, 0, 1)),
                                  f"raw: {len(xyz):,} cells > {rctl['thr'].value()} dB above floor")
@@ -724,8 +776,15 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     md = "moving"
                     if fe is not None:                   # micro-Doppler: spread (limbs), cadence (experimental)
                         md = f"\u00b5D \u00b1{fe['spread']:.1f}" + (f" {fe['cadence_hz']:.1f}Hz" if fe["cadence_hz"] else "")
-                    rows.append(("radar", f"R{tid}", md, np.hypot(x, y), np.degrees(np.arctan2(y, x)),
-                                 np.hypot(vx, vy), vr, RADAR_C))
+                    if in_gate(np.hypot(x, y)):
+                        rows.append(("radar", f"R{tid}", md, np.hypot(x, y), np.degrees(np.arctan2(y, x)), x, y,
+                                     np.hypot(vx, vy), vr, None, RADAR_C))
+                if rctl["static"].isChecked():          # strongest stationary reflectors (a corner reflector)
+                    from perception.radar import C as RC
+                    for i_, d_ in enumerate(state.get("radar_static", [])):
+                        rows.append(("radar", f"S{i_ + 1}", "stationary \u25a0", float(d_[RC["range"]]),
+                                     float(d_[RC["az_deg"]]), float(d_[RC["x"]]), float(d_[RC["y"]]), 0.0, 0.0,
+                                     float(d_[RC["power_db"]]), RADAR_C))
 
         # 3D
         if "lidar3d" in items and items["lidar3d"].widget.isVisible() and "lidar" in srcs:
@@ -754,8 +813,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
             state["table_t"] = now
             rows.sort(key=lambda r_: r_[3])
             table.setRowCount(len(rows))
-            for i_, (sen, tid, cls, rng, az, spd, vr, col) in enumerate(rows):
-                vals = [sen, tid, cls, f"{rng:5.1f}", f"{az:+5.1f}", f"{spd:4.1f}", "" if vr is None else f"{vr:+4.1f}"]
+            for i_, (sen, tid, cls, rng, az, x, y, spd, vr, db, col) in enumerate(rows):
+                vals = [sen, tid, cls, f"{rng:5.2f}", f"{az:+5.1f}", f"{x:5.2f}", f"{y:+5.2f}", f"{spd:4.1f}",
+                        "" if vr is None else f"{vr:+4.1f}", "" if db is None else f"{db:5.1f}"]
                 for j_, v_ in enumerate(vals):
                     item = table.item(i_, j_)
                     if item is None:
@@ -763,7 +823,8 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                         table.setItem(i_, j_, item)
                     item.setText(v_)
                     item.setForeground(QtGui.QColor(*col) if j_ == 0 else QtGui.QColor(212, 215, 221))
-            panels["objects"].set(None, f"{len(rows)} confirmed")
+            n_st = sum(r_[1].startswith("S") for r_ in rows)
+            panels["objects"].set(None, f"{len(rows) - n_st} confirmed tracks" + (f" + {n_st} stationary" if n_st else ""))
 
         # info line
         if radar_pts is not None:
@@ -817,7 +878,10 @@ def main() -> int:
     ap.add_argument("--camera-width", type=int, default=960)
     ap.add_argument("--lidar-view", default="top", choices=LIDAR_VIEWS,
                     help="top (forward, matches the radar), top360, or panorama")
-    ap.add_argument("--lidar-range", type=float, default=20.0, choices=LIDAR_RANGES)
+    ap.add_argument("--lidar-range", type=float, default=20.0,
+                    help=f"forward extent of the bird's-eye views (m, {RANGE_MIN:g}-{RANGE_MAX:g}; any value)")
+    ap.add_argument("--range-filter", type=float, nargs=2, metavar=("FROM", "TO"),
+                    help="show radar points, stationary reflectors and table rows only within this range (m)")
     ap.add_argument("--lidar-color", default="height", choices=LIDAR_COLORS)
     ap.add_argument("--lidar-near", type=float, default=0.5, choices=LIDAR_NEAR,
                     help="hide returns nearer than this (mount, vehicle body)")
@@ -828,6 +892,8 @@ def main() -> int:
     ap.add_argument("--radar-points", default="detections", choices=["detections", "raw", "off"],
                     help="detections = CFAR detections + tracks (live, GPU); raw = every range-azimuth cell "
                          "above a threshold")
+    ap.add_argument("--radar-all", action="store_true",
+                    help="start with 'moving only' off: the radar map shows the stationary scene (corner reflectors)")
     ap.add_argument("--radar-static", action="store_true",
                     help="radar: also show stationary reflectors (zero Doppler; experimental)")
     ap.add_argument("--no-rx-phase", action="store_true",

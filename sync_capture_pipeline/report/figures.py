@@ -504,7 +504,7 @@ def snapshots(D):
             for aa in (ax[row, 1], ax[row, 2]):
                 aa.plot(lr[j] * np.sin(np.radians(la[j])), lr[j] * np.cos(np.radians(la[j])), "o", ms=9,
                         mfc="none", mec=INK, mew=1)
-        # radar BEV (mirror-corrected, caveat in caption)
+        # radar BEV in the pipeline frame (+ left)
         a2 = ax[row, 2]
         s = R["snaps"].get(i)
         if s is not None:
@@ -513,7 +513,7 @@ def snapshots(D):
             vmax = max(floor + 20, np.nanpercentile(bev, 99.8))
             a2.imshow(bev, origin="lower", cmap=SEQ, vmin=floor + 3, vmax=vmax, interpolation="nearest",
                       extent=[by[0], by[-1], bx[0], bx[-1]], aspect="auto")
-            a2.set_title("Radar BEV (moving, mirror-corrected)", fontsize=8, fontweight="normal", color=INK2)
+            a2.set_title("Radar BEV (moving, + left)", fontsize=8, fontweight="normal", color=INK2)
             a3 = ax[row, 3]
             rd = s["rd"].astype(float)
             kmax = int(np.searchsorted(R["static_range_axis"], 25.0))
