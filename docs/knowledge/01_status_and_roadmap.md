@@ -1,4 +1,4 @@
-# Project status and roadmap (as of 2026-10-24)
+# Project status and roadmap (updated 2026-11-07)
 
 ## Where the project stands
 
@@ -140,6 +140,37 @@ What the baseline showed:
 
 ## Open items and ideas
 
+- **Now (2026-11-07): waiting for the team's pilot from the wheeler.** The
+  reply (`docs/team_messages/2026-11-07_reply.md`) asks them to: mark the
+  LiDAR housing and collar; record a calibration set on the wheeler as
+  mounted (empty scene first, as a session named `background`, then the
+  reflector positions in the same folder); record a 10–15 min pilot
+  (calibration set, a minute of walking in front of the stopped wheeler,
+  a ride at mixed speeds, a few stops); share it; then collect, with our
+  feedback after each batch. **When it arrives:**
+  1. `check_session.py`, `align_session.py` (the extrinsic: is there an
+     entry valid for the new mounting? the 2026-11-03 one is for the rig on
+     its stand), `make_report.py`, `run_perception.py`; board health,
+     storage and gaps in the report.
+  2. Calibration set: `replay_session.py --calibration` per position and
+     `calib_reflector.py --background <bg> --positions ...` → LiDAR yaw from
+     the camera, radar − camera/LiDAR. A new mounting = a new entry in
+     `calibration/lidar_extrinsic.json` (later `valid_from`).
+  3. Timing on the walking minute: the report's velocity check; radar range
+     vs the LiDAR target (lag within ±0.03 s on the October sessions).
+  4. The ride: how often targets exceed ±4.7 m/s radial (they wrap; no
+     de-aliasing; a firmware decision for the owner); how the processing
+     behaves on a moving platform (MTI and the stationary detector assume
+     a still rig; LiDAR moving/static flag needs ego-motion; vibration);
+     ground and size classes on roads; radar false alarms.
+  5. Answer in `NOTES_FOR_TEAM.md` as the current state (09: no history or
+     corrections there); the owner writes the message.
+- **Still open (ours):** radar elevation (the elevated TX positions); the
+  inter-chip phase of the other firmware variants (unmeasured: they combine
+  the chips incoherently only); velocity de-aliasing; a walker merging
+  sideways with tall office furniture in the LiDAR; the team's mounting-photo
+  question was not answered in the reply (owner's choice).
+
 - **Team's corner-reflector sessions of 2026-11-03 (analysed 2026-11-05).**
   They are on the team's drive at `/media/ibrahim/94DD-7E88/`:
   `calibration_dataset/` (16 sessions) and `run_20261103_1600-Lidar-AR1`.
@@ -217,29 +248,23 @@ What the baseline showed:
       +0.08…+0.32 on every reference session except `run_20261014_1325`,
       where the LiDAR was turned ~20° against the radar and the camera
       (set-up session; checked on the camera images).
-  - **Open, ours, before the team's email reply:**
-    - the processing-module checks. Radar chain done 2026-11-07 (03,
-      "Processing checks"): axes, range, velocity, TDM compensation, I/Q,
-      timing all correct; one bug fixed (`timing_consistency.py` wrote the
-      LiDAR target cache without the extrinsic); open: no velocity
-      de-aliasing beyond ±4.7 m/s. Detector settings re-checked (03,
-      "Detector settings"): CFAR threshold 14 → 16 dB adopted (−25…40%
-      unsupported radar tracks, walker −0.013 at most), the rest kept;
-      baseline re-made. LiDAR module checked (05): positions, heights,
-      ground right; fixed: a roof or ceiling over a person counted as
+  - **Done before the reply (2026-11-07):**
+    - Processing checks. Radar chain (03, "Processing checks"): axes,
+      range, velocity, TDM compensation, I/Q and timing all correct; one bug
+      fixed (`timing_consistency.py` wrote the LiDAR target cache without
+      the extrinsic). Detector settings (03, "Detector settings"): CFAR
+      threshold 14 → 16 dB (−25…40% unsupported radar tracks, walker
+      −0.013 at most), the rest kept. LiDAR module (05): positions, heights
+      and ground right; fixed: a roof or ceiling over a person counted as
       part of them (vertical-gap cut; walker classed pedestrian 0.80 →
-      0.87–0.99 under the carport). Open: a walker merging sideways with
-      tall office furniture;
-    - the replay for calibration sessions: clear, reliable display for the
-      team. The owner holds the email until these are done. Done so far
-      (2026-11-07): `--background` (empty-scene recording subtracted:
-      radar coherently per channel, LiDAR new returns only; the reflector
-      is `S1` with its azimuth refined; key b; see `replay/README.md`);
-      `--calibration` (preset, sibling `background` found by itself, the
-      reflector read out in both sensors with radar − LiDAR: −1.9° at 5
-      and 8 m on 2026-11-03);
-    - radar elevation (the elevated TX positions);
-    - the inter-chip phase of the other firmware variants.
+      0.87–0.99 under the carport). Baseline re-made after each change.
+    - Replay for calibration sessions: `--background` (radar subtracted
+      coherently per channel, LiDAR new returns only) and `--calibration`
+      (sibling `background` found by itself; the reflector read out in both
+      sensors, radar − LiDAR −1.9° at 5 and 8 m on 2026-11-03); the camera
+      panel no longer shrinks when the LiDAR's info line grows.
+    - `NOTES_FOR_TEAM.md` rewritten as the current state; the owner's reply
+      is in `docs/team_messages/2026-11-07_reply.md`.
   - **Their manual calibration file was never used** by any code.
   - **The blinking wall** is the RS-Fairy skipping 0–16.5° once a second.
     The replay fills it for display only.
