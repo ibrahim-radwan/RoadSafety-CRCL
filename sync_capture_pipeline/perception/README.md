@@ -172,6 +172,26 @@ Conventions, verified against the LiDAR walker:
 3. Obstacles: points 0.2–3 m above the ground, in 0.2 m columns that reach
    down to within 1 m of the ground. Overhead roofs, canopies and branches
    drop out; posts, walls, people and vehicles stay.
+   - **Vertical-gap cut (2026-11-07):** in each column, points above the
+     first empty stretch of ≥ 0.5 m (`gap_m`, 0.1 m bins) that starts at
+     least 1.2 m above the ground (`gap_above_m`) are dropped. A roof or
+     ceiling over a person was counted with them: under the carport of
+     `freewalk_ref_02` / stage3 the walker read 2.45 m near the rig (the
+     roof), failed the pedestrian rule (0.9–2.3 m) and became "other".
+     Starting at 1.2 m, a gap in a person's legs (dark clothes) does not cut
+     them; the beams are ≤ 0.4° apart, so 0.5 m is empty space out to 60 m.
+     LiDAR detection and tracks unchanged; objects per sweep −0.5%:
+
+| session | walker classed pedestrian, before → after |
+|---|---|
+| freewalk_ref_02 | 0.87 → 0.94 |
+| freewalk_ref_01 | 0.88 → 0.94 (the old output covered only part of the session) |
+| stage3_01 / 02 / 03 | 0.82 / 0.80 / 0.80 → 0.99 / 0.95 / 0.87 |
+| run_20261014_1325 | 0.67 → 0.67 |
+| run_20261014_1326 | 0.46 → 0.64 |
+
+     Still open: in the office (`run_20261014_1326`, 4–6 m) the walker
+     merges sideways with a tall partition (clustering, not a roof).
 4. **Density-based clustering on a bird's-eye grid** (0.2 m; since
    2026-10-26). Objects grow through *core* cells only: cells with at least
    `round(200 / r²)` points, clamped to 1–8, which is 8 at 5 m, 2 at 10 m

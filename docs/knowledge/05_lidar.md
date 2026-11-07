@@ -113,6 +113,18 @@
 - **Overhead structures removed:** a 0.2 m column is an obstacle only if
   something in it reaches down to within 1 m of the ground. This drops roofs,
   canopies and branches.
+  - **And a roof over a person (2026-11-07):** within a column, points above
+    the first ≥ 0.5 m vertical gap starting ≥ 1.2 m above the ground are
+    dropped. Before, the carport roof over the walker made them 2.45 m tall
+    near the rig, so not a pedestrian. Walker classed pedestrian: stage3
+    0.80–0.82 → 0.87–0.99, freewalk 0.87–0.88 → 0.94, the office session
+    1326 0.46 → 0.64. Detection and tracks unchanged.
+- **Checked 2026-11-07:** the walker object's centre is within 0.10–0.19 m
+  of the target track; its height 1.65–1.8 m; `ground_z` meets the
+  walker's feet on level floors (+0.02 m indoors). The 2026-11-03 rig is
+  level within ~1° (reflector height −0.27 m at 2 m, −0.37 m at 5–8 m). On
+  the driveway sessions the walker sinks ~0.1 m per m of range: the 13°
+  slope, not the mount.
 - **Density-based clustering (2026-10-26).** Objects grow through dense
   cells only; a sparse cell cannot connect two objects.
   - Before, single stray points bridged objects. In a cluttered office

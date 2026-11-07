@@ -223,7 +223,11 @@ What the baseline showed:
       de-aliasing beyond ±4.7 m/s. Detector settings re-checked (03,
       "Detector settings"): CFAR threshold 14 → 16 dB adopted (−25…40%
       unsupported radar tracks, walker −0.013 at most), the rest kept;
-      baseline re-made. Next: the LiDAR module;
+      baseline re-made. LiDAR module checked (05): positions, heights,
+      ground right; fixed: a roof or ceiling over a person counted as
+      part of them (vertical-gap cut; walker classed pedestrian 0.80 →
+      0.87–0.99 under the carport). Open: a walker merging sideways with
+      tall office furniture;
     - the replay for calibration sessions: clear, reliable display for the
       team. The owner holds the email until these are done. Done so far
       (2026-11-07): `--background` (empty-scene recording subtracted:

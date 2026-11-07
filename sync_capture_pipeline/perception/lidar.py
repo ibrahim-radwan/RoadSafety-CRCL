@@ -13,7 +13,14 @@ a time.
        in columns (cell_m) that are GROUNDED - something in the column reaches
        down to within grounded_m of the ground. Overhead structures with free
        space below (carport roofs, canopies, signs, branches) drop out; posts,
-       walls, people and vehicles stay
+       walls, people and vehicles stay. Within a column, points above the first
+       vertical gap of >= gap_m (empty 0.1 m height bins) that starts at least
+       gap_above_m above the ground are dropped too: a roof or ceiling above a
+       person (carport, office) no longer counts as part of them (2026-11-07:
+       the walker's height had read 2.45 m, the roof's, under the carport of
+       freewalk_ref_02 / stage3 and the office ceiling of run_20261014_1326).
+       A leg dropout (dark clothes) starts below gap_above_m and is ignored;
+       the beams are <= 0.4 deg apart, so 0.5 m is real empty space to 60 m
     4. bird's-eye occupancy grid (cell_m), closed by one cell, 8-connected
        components (OpenCV) -> objects
     5. per object: point count, oriented box (min-area rectangle of its grid
@@ -21,7 +28,8 @@ a time.
        two-wheeler / vehicle / other / structure). Size classes are heuristics
        on the box, not a learned classifier.
 
-Pipeline frame: x forward, y left, z up (the LiDAR's own frame).
+Pipeline frame: x forward, y left, z up: the vehicle frame (the LiDAR extrinsic is applied to
+the points before detection, perception/core/extrinsic.py; only relative geometry is used here).
 """
 from __future__ import annotations
 
@@ -72,7 +80,7 @@ class LidarDetector:
                  ground_cell_m: float = 1.0, ground_thr_m: float = 0.2, max_height_m: float = 3.0,
                  grounded_m: float = 1.0, min_points: int = 8, min_height_m: float = 0.3,
                  max_step_m: float = 0.35, cluster: str = "density", core_k: float = 200.0, core_max: int = 8,
-                 core_close: bool = False):
+                 core_close: bool = False, gap_m: float = 0.5, gap_above_m: float = 1.2):
         import torch
         self.torch = torch
         self.dev = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -80,6 +88,7 @@ class LidarDetector:
         self.near, self.max_range, self.cell = near_m, max_range_m, cell_m
         self.gcell, self.g_thr, self.h_max, self.grounded = ground_cell_m, ground_thr_m, max_height_m, grounded_m
         self.min_points, self.min_height = min_points, min_height_m
+        self.gap_m, self.gap_above = gap_m, gap_above_m
         self.n_grid = int(np.ceil(2 * max_range_m / cell_m))
         self.n_ggrid = int(np.ceil(2 * max_range_m / ground_cell_m))
         self.cluster, self.core_close = cluster, core_close
@@ -112,6 +121,30 @@ class LidarDetector:
         if not bool(fin.all()):
             g = torch.where(fin, g, g[fin].median() if bool(fin.any()) else torch.zeros_like(g))
         return g.view(-1)
+
+    def _cut_above_gap(self, obst, fc, hag, bin_m: float = 0.1):
+        """obst without the points above each column's first vertical gap >= gap_m that starts at
+        least gap_above_m above the ground (a roof or ceiling over a person)."""
+        torch = self.torch
+        F = torch.nn.functional
+        oi = torch.nonzero(obst, as_tuple=True)[0]
+        if not len(oi):
+            return obst
+        cols, inv = torch.unique(fc[oi], return_inverse=True)
+        nb = int(np.ceil(self.h_max / bin_m)) + 1
+        hb = (hag[oi] / bin_m).long().clamp(0, nb - 1)
+        occ = torch.zeros(len(cols), nb, dtype=torch.bool, device=self.dev)
+        occ[inv, hb] = True
+        g = max(1, int(round(self.gap_m / bin_m)))
+        empty = F.pad((~occ).float(), (0, g - 1), value=1.0)              # above the top: empty
+        gap = empty.unfold(1, g, 1).min(dim=-1).values > 0                 # bins b .. b+g-1 all empty
+        low = occ.float().argmax(dim=1)                                    # each column's lowest bin
+        b = torch.arange(nb, device=self.dev)[None]
+        start = gap & (b > low[:, None]) & (b >= int(round(self.gap_above / bin_m)))
+        cut = torch.where(start.any(dim=1), start.float().argmax(dim=1), torch.full_like(low, nb))
+        out = obst.clone()
+        out[oi[hb >= cut[inv]]] = False
+        return out
 
     def detect(self, pts: np.ndarray, labels: bool = True):
         """pts: N x >=5 (x, y, z, range, intensity, ...). Returns dict:
@@ -149,6 +182,8 @@ class LidarDetector:
         col_low = torch.full((self.n_grid * self.n_grid,), float("inf"), device=self.dev)
         col_low = col_low.scatter_reduce(0, fc[ng], hag[ng], reduce="amin", include_self=True)
         obst = ng & (hag <= self.h_max) & (col_low[fc] <= self.grounded)
+        if self.gap_m > 0:
+            obst = self._cut_above_gap(obst, fc, hag)
         t1 = time.perf_counter()
         # occupancy grid -> connected components
         oi = torch.nonzero(obst, as_tuple=True)[0]

@@ -1,5 +1,5 @@
 {
-  "git_commit": "10ca1a5+dirty",
+  "git_commit": "a388e9c+dirty",
   "created": "2026-11-07",
   "rx_phase_file_md5": "f206cbe7d163",
   "array_file_md5": "8ff6c1600dc8",
@@ -22,12 +22,12 @@
         "detected": 0.99,
         "confirmed_track_on_target": 0.991,
         "class_of_target": {
-          "other": 0.12,
-          "pedestrian": 0.87,
+          "other": 0.051,
+          "pedestrian": 0.939,
           "two-wheeler": 0.009,
           "vehicle": 0.0
         },
-        "objects_per_sweep": 37.21
+        "objects_per_sweep": 37.07
       },
       "ours_radar_vs_lidar": {
         "confirmed_tracks_in_fov": 5813,
@@ -64,20 +64,20 @@
         "detections_per_frame": 1.46
       },
       "ours_lidar": {
-        "sweeps_with_target": 526,
-        "detected": 0.998,
-        "confirmed_track_on_target": 0.996,
+        "sweeps_with_target": 1274,
+        "detected": 0.984,
+        "confirmed_track_on_target": 0.983,
         "class_of_target": {
-          "other": 0.095,
-          "pedestrian": 0.88,
-          "two-wheeler": 0.025
+          "other": 0.041,
+          "pedestrian": 0.943,
+          "two-wheeler": 0.017
         },
-        "objects_per_sweep": 35.47
+        "objects_per_sweep": 35.26
       },
       "ours_radar_vs_lidar": {
         "confirmed_tracks_in_fov": 616,
-        "supported_by_lidar": 0.664,
-        "unsupported_per_frame": 0.25
+        "supported_by_lidar": 0.786,
+        "unsupported_per_frame": 0.16
       },
       "team_gpu": {
         "frames_with_target": 530,
@@ -105,11 +105,11 @@
         "detected": 0.998,
         "confirmed_track_on_target": 0.995,
         "class_of_target": {
-          "other": 0.178,
-          "pedestrian": 0.815,
+          "other": 0.002,
+          "pedestrian": 0.991,
           "two-wheeler": 0.007
         },
-        "objects_per_sweep": 42.14
+        "objects_per_sweep": 41.85
       },
       "ours_radar_vs_lidar": {
         "confirmed_tracks_in_fov": 1150,
@@ -142,11 +142,11 @@
         "detected": 0.999,
         "confirmed_track_on_target": 0.996,
         "class_of_target": {
-          "other": 0.198,
-          "pedestrian": 0.796,
+          "other": 0.046,
+          "pedestrian": 0.948,
           "two-wheeler": 0.006
         },
-        "objects_per_sweep": 42.31
+        "objects_per_sweep": 42.12
       },
       "ours_radar_vs_lidar": {
         "confirmed_tracks_in_fov": 1110,
@@ -178,13 +178,13 @@
       "ours_lidar": {
         "sweeps_with_target": 989,
         "detected": 0.997,
-        "confirmed_track_on_target": 0.991,
+        "confirmed_track_on_target": 0.993,
         "class_of_target": {
-          "other": 0.198,
-          "pedestrian": 0.795,
+          "other": 0.123,
+          "pedestrian": 0.87,
           "two-wheeler": 0.007
         },
-        "objects_per_sweep": 41.24
+        "objects_per_sweep": 41.06
       },
       "ours_radar_vs_lidar": {
         "confirmed_tracks_in_fov": 1058,
@@ -216,7 +216,7 @@
       "ours_lidar": {
         "sweeps_with_target": 275,
         "detected": 0.84,
-        "confirmed_track_on_target": 0.825,
+        "confirmed_track_on_target": 0.822,
         "class_of_target": {
           "other": 0.251,
           "pedestrian": 0.667,
@@ -257,12 +257,12 @@
         "detected": 0.94,
         "confirmed_track_on_target": 0.948,
         "class_of_target": {
-          "other": 0.474,
-          "pedestrian": 0.459,
-          "two-wheeler": 0.029,
+          "other": 0.291,
+          "pedestrian": 0.64,
+          "two-wheeler": 0.032,
           "vehicle": 0.038
         },
-        "objects_per_sweep": 36.56
+        "objects_per_sweep": 36.47
       },
       "ours_radar_vs_lidar": {
         "confirmed_tracks_in_fov": 783,

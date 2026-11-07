@@ -187,3 +187,37 @@ def test_radar_signs_against_lidar(S):
     assert len(a) >= 15 and len(v) >= 40
     assert np.mean(np.sign(a[:, 0]) == np.sign(a[:, 1])) > 0.8             # world azimuth = - processing
     assert np.mean(np.sign(v[:, 0]) == np.sign(v[:, 1])) > 0.9             # + = receding
+
+
+def _roof_scene(person_z, roof=True, seed=0):
+    """Flat ground at z = -1 (sensor 1 m up), a person 0.5 x 0.4 m at x = 5 m with points at the given
+    heights above the ground, and optionally a 6 x 6 m roof 2.5 m above the ground over them."""
+    rng = np.random.default_rng(seed)
+    g = np.c_[rng.uniform(1, 15, 20000), rng.uniform(-7, 7, 20000), np.full(20000, -1.0)]
+    zz = np.concatenate([np.arange(a, b, 0.03) for a, b in person_z])
+    p = np.c_[5 + rng.uniform(-0.25, 0.25, (len(zz), 1)).ravel(), rng.uniform(-0.2, 0.2, len(zz)), zz - 1.0]
+    parts = [g, p]
+    if roof:
+        parts.append(np.c_[rng.uniform(2, 8, 8000), rng.uniform(-3, 3, 8000), np.full(8000, 1.5)])
+    xyz = np.concatenate(parts).astype(np.float32)
+    r = np.linalg.norm(xyz, axis=1, keepdims=True)
+    return np.c_[xyz, r, np.full((len(xyz), 1), 50.0, np.float32)].astype(np.float32)
+
+
+@pytest.mark.parametrize("person_z,roof", [([(0.0, 1.8)], True), ([(0.0, 0.2), (0.8, 1.8)], True),
+                                          ([(0.0, 1.8)], False)])
+def test_lidar_person_under_roof(person_z, roof):
+    """The roof over a person (carport, ceiling) is not part of them (vertical-gap cut, 2026-11-07); a
+    gap low in the body (dark trousers) does not split them; without the cut the roof sets the height."""
+    pytest.importorskip("torch")
+    pytest.importorskip("cv2")
+    from perception.lidar import CLASSES, O, LidarDetector
+    pts = _roof_scene(person_z, roof)
+    ob = LidarDetector().detect(pts, labels=False)["objects"]
+    near = ob[np.hypot(ob[:, O["x"]] - 5, ob[:, O["y"]]) < 0.5]
+    assert len(near) == 1
+    assert abs(near[0, O["height"]] - 1.8) < 0.15 and CLASSES[int(near[0, O["cls"]])] == "pedestrian"
+    if roof:
+        old = LidarDetector(gap_m=0).detect(pts, labels=False)["objects"]
+        near = old[np.hypot(old[:, O["x"]] - 5, old[:, O["y"]]) < 0.5]
+        assert near[0, O["height"]] > 2.3                     # the roof counted: not a pedestrian
