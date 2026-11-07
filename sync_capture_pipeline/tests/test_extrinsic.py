@@ -60,3 +60,23 @@ def test_repo_file_is_valid():
     e = ex.extrinsic_for_date("2026-11-03T18:44:12+1100")
     assert e["id"] != "identity" and 30 < e["yaw_deg"] < 50
     assert ex.extrinsic_for_date("2026-10-11T13:00:00+1100")["id"] == "identity"   # reference sessions
+
+
+def test_timing_consistency_target_in_vehicle_frame(tmp_path, monkeypatch):
+    """timing_consistency.py writes the shared target cache (sync/timing_lidar_track.npz, read by the
+    replay, run_perception and baseline): it must decode in the vehicle frame (the session's extrinsic
+    yaw), like report/collect.py. Before 2026-11-07 it used no rotation."""
+    import pytest
+    pytest.importorskip("yaml")
+    import timing_consistency as tc
+    seen = {}
+
+    def fake_track(session, rot, *a, **k):
+        seen["rot"] = rot
+        return np.zeros(1), np.zeros(1), np.zeros(1), {}
+    monkeypatch.setattr(tc.m, "lidar_track", fake_track)
+    monkeypatch.setattr(ex, "extrinsic_for_session", lambda s, *a, **k: {"yaw_deg": 37.2, "tx_m": 0.0, "ty_m": 0.0})
+    (tmp_path / "sync").mkdir()
+    tc.lidar_series(tmp_path, 2.0, 20.0, 10.0, 3.0)
+    yaw = np.degrees(np.arctan2(seen["rot"][1, 0], seen["rot"][0, 0]))
+    assert abs(yaw - 37.2) < 1e-6

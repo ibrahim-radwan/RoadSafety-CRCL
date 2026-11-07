@@ -44,7 +44,11 @@ def lidar_series(session: Path, rmin: float, rmax: float, range_pct: float, rate
         d = np.load(cache)
         if float(d["range_pct"]) == range_pct and float(d["rmin"]) == rmin and float(d["rmax"]) == rmax:
             return d["t"], d["r"], d["az"]
-    tl, lr, la, _ = m.lidar_track(session, al.rotation(0, 0, 0), rmin, rmax, 30.0, 15.0, rate, 20,
+    # the radar (vehicle) frame, like every other writer of this cache (report/collect.py,
+    # measure_sync_offset.py): with the session's LiDAR extrinsic yaw (37.2 deg on the 2026-11-03 rig)
+    from perception.core.extrinsic import extrinsic_for_session
+    yaw = float(extrinsic_for_session(session)["yaw_deg"])
+    tl, lr, la, _ = m.lidar_track(session, al.rotation(0, 0, yaw), rmin, rmax, 30.0, 15.0, rate, 20,
                                   range_pct=range_pct)
     np.savez(cache, t=tl, r=lr, az=la, range_pct=range_pct, rmin=rmin, rmax=rmax)
     return tl, lr, la

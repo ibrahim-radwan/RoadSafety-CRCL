@@ -212,6 +212,11 @@ Each item cost real debugging time. Read before changing the related code.
   object nearby; that is how the multipath ghosts were found. But a
   single-target LiDAR track says nothing about frames where it has no target:
   the "empty" stage3 frames still had the walker in view.
+- **A file several tools write must be written the same way by all of
+  them.** `sync/timing_lidar_track.npz` (the LiDAR target) is written by the
+  report and by `timing_consistency.py`; when the LiDAR extrinsic came in,
+  only the report applied it (found 2026-11-07, before it bit). When a
+  convention changes, grep for every writer, not only the readers.
 - **Validate tools against ground truth before trusting them.** Each of these
   bugs was caught this way:
   - the radar range extraction absorbed a walker who stayed in one range span;

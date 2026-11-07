@@ -216,7 +216,12 @@ What the baseline showed:
       where the LiDAR was turned ~20° against the radar and the camera
       (set-up session; checked on the camera images).
   - **Open, ours, before the team's email reply:**
-    - the processing-module checks;
+    - the processing-module checks. Radar chain done 2026-11-07 (03,
+      "Processing checks"): axes, range, velocity, TDM compensation, I/Q,
+      timing all correct; one bug fixed (`timing_consistency.py` wrote the
+      LiDAR target cache without the extrinsic); open: no velocity
+      de-aliasing beyond ±4.7 m/s. Next: the detector's parameters tuned for
+      the old layout, the LiDAR module;
     - the replay for calibration sessions: clear, reliable display for the
       team. The owner holds the email until these are done. Done so far
       (2026-11-07): `--background` (empty-scene recording subtracted:

@@ -18,6 +18,40 @@ This page is the background an agent needs before touching radar code.
 - **In flash:** `r075m_v2_8fps`. Range resolution 0.293 m, window 2.62–75 m,
   125 ms frames, v_max ±4.7 m/s (faster targets wrap).
 
+## Processing checks (2026-11-07)
+
+After the array table turned out wrong, the rest of the radar chain was
+checked against physics and the data (walker sessions vs the LiDAR target;
+the 2026-11-03 corner reflector vs the LiDAR, the camera and the floor
+marks). Scripts in the session notes; nothing needed changing in the chain.
+
+- **Waveform → axes** (`perception/core/radar_config.py`, from the `.cfg`):
+  sampled bandwidth 19.9878 MHz/µs × 25.6 µs = 511.7 MHz → 0.2931 m bins;
+  complex sampling at 10 Msps → 75.0 m; TDM loop 6 × (4 + 31) µs = 210 µs →
+  ±4.70 m/s, 0.147 m/s bins; 125 ms frames. All as computed by hand.
+  λ is taken at the 76 GHz start, not the 76.3 GHz centre of the sampled
+  ramp: 0.4%, ≤ 0.3° at 30°; left as is.
+- **Range:** scale 1.005–1.009 against the LiDAR over 2.6–20 m. The radar
+  reads +0.09 to +0.17 m farther (walker) and +0.14 m median (reflector:
+  2.10 / 3.04 / 5.10 / 8.08 m at the 2 / 3 / 5 / 8 m marks). Geometry, not a
+  processing error: the radar sees a corner reflector at its apex and a
+  person at the torso; the LiDAR the faces and the clothes. No correction.
+- **Radial velocity:** sign agrees with the LiDAR range rate in 93–99% of
+  frames; scale 0.97–1.02 (`v_r > 0` = receding, as documented).
+- **TDM-MIMO Doppler compensation:** the azimuth error does not depend on
+  v_r (≤ 0.3° per m/s); with the compensation switched off it does
+  (−0.41° per m/s on stage3_01), so it is applied with the right sign. Its
+  effect is small at walking speed with this layout and grows with speed.
+- **No velocity de-aliasing:** beyond ±4.7 m/s (17 km/h) v_r wraps, and the
+  TDM compensation then uses the wrapped value. Fine for walkers; **open**
+  for road traffic (tracker-based unwrapping, or a waveform with a shorter
+  TDM loop: a firmware decision).
+- **I/Q order, range direction:** a swap would mirror range; radar range
+  matches the LiDAR. Azimuth sign: matches the camera.
+- **Timing:** residual radar−LiDAR lag ±0.03 s, except `freewalk_ref_01`
+  (+0.11 s: its radar times are the nominal-period fallback after a DCA1000
+  backlog).
+
 ## The v2 fix (2026-10-10)
 
 - **The bug:** the old images left the AM273x CSI-2 ping/pong buffers in

@@ -70,3 +70,14 @@ essentials:
   - On `freewalk_ref_02` it gave −4 ± 8 ms, so there is **no shift after a
     power cycle**.
   - The session report runs it for every session.
+- **Residual lag, radar range vs the LiDAR target (2026-11-07):** within
+  ±0.03 s on stage3_01–03, freewalk_ref_02 and run_20261014_1326;
+  +0.11 s on `freewalk_ref_01`, whose radar times are the nominal-period
+  fallback after a DCA1000 backlog.
+- **`timing_consistency.py` wrote the shared target cache
+  (`sync/timing_lidar_track.npz`) in the LiDAR's own frame** until
+  2026-11-07 (no extrinsic yaw); the replay, `run_perception` and
+  `baseline` read that cache in the vehicle frame. Fixed (it now uses the
+  session's extrinsic yaw, like `report/collect.py`). The existing caches
+  were checked: all in the vehicle frame (the 2026-11-03 ones were written
+  by the report).
