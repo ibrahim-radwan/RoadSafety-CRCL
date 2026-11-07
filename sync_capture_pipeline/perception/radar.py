@@ -18,7 +18,10 @@ detection list, all on the GPU in a few milliseconds:
        gap between them, sidelobes ~20 dB down); detection map = the
        angle-maximum power of each cell
     5. CA-CFAR in dB on that map (circular in Doppler), zero-Doppler band
-       excluded, 3x3 local maxima kept
+       excluded, 3x3 local maxima kept. threshold_db 16 (was 14 until
+       2026-11-07: with the measured layout, 16 drops 25-40% of the radar
+       tracks no LiDAR object supports for <= 0.013 of walker detection, 7
+       reference sessions; 03, "Detector settings")
     6. per detection: the strongest azimuth peak (max_peaks > 1 adds peaks
        within peak_db; off by default), parabolic interpolation in sin az, then
        (measured layout) the angle refined coherently across both chips: the
@@ -88,7 +91,7 @@ class RadarDetector:
     """Radar products and detections for one raw frame (int16 I/Q, I first unless cfg.iq_swap)."""
 
     def __init__(self, cfg_path, device: str = "cuda", *, cfar_guard=(2, 2), cfar_train=(4, 8),
-                 threshold_db: float = 14.0, min_range_m: float = 1.0, max_range_m: float = None,
+                 threshold_db: float = 16.0, min_range_m: float = 1.0, max_range_m: float = None,
                  fov_deg: float = 70.0, peak_db: float = 6.0, max_peaks: int = 1, zero_doppler_bins: int = 1,
                  max_detections: int = 512, rx_phase_deg=None, doppler_comp: bool = True,
                  static_guard=(2, 2), static_train=(4, 8), static_db: float = 15.0, static_sidelobe_db: float = 10.0,

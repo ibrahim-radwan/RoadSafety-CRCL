@@ -52,6 +52,32 @@ marks). Scripts in the session notes; nothing needed changing in the chain.
   (+0.11 s: its radar times are the nominal-period fallback after a DCA1000
   backlog).
 
+## Detector settings (2026-11-07, re-checked for the measured layout)
+
+Several settings were chosen on the old table's map (sidelobes 5–10 dB).
+Swept one at a time on 240 frames each of 5 walker sessions (walker found
+within 0.8 m / 10° of the LiDAR target; azimuth error; detections with no
+LiDAR object within 1.5 m), then the change through the full pipeline
+(`baseline.py compare`, 7 sessions):
+
+- **CFAR threshold 14 → 16 dB (adopted).** Full pipeline: radar tracks with
+  no LiDAR object −25 to −40% (freewalk_ref_02 0.53 → 0.32 per frame,
+  stage3_01 0.74 → 0.48, run_20261014_1326 0.97 → 0.73); walker detected
+  −0.000 to −0.013; azimuth spread unchanged or slightly better. 18 dB
+  halves them but loses up to 0.04 of the walker.
+- **One azimuth peak per cell (kept).** 2–3 peaks found no more of the
+  walker and added 25–230% unsupported detections.
+- **Refinement gate 1 dB (kept).** 0 dB: median error −0.3 to −0.5°, but
+  up to 2× the frames > 5° off (wrong fringe); 0.5 dB about the same as
+  1 dB; 2–3 dB slightly worse.
+- **Stationary detector (kept: 15 dB, 10 dB row prune).** On the 14
+  positions of 2026-11-03 without a background: the reflector is in the top
+  3 within ±1.5 m of its range at every 2–5 m position (first or second:
+  walls compete), at no 8 m position. The prune now changes little (6.8 →
+  7.7 detections per map without it); 18 dB loses the 5 m off-axis
+  reflectors. With a background subtracted the reflector is first, 8 m
+  included: use the background for calibration.
+
 ## The v2 fix (2026-10-10)
 
 - **The bug:** the old images left the AM273x CSI-2 ping/pong buffers in

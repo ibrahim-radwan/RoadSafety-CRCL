@@ -220,8 +220,10 @@ What the baseline showed:
       "Processing checks"): axes, range, velocity, TDM compensation, I/Q,
       timing all correct; one bug fixed (`timing_consistency.py` wrote the
       LiDAR target cache without the extrinsic); open: no velocity
-      de-aliasing beyond ±4.7 m/s. Next: the detector's parameters tuned for
-      the old layout, the LiDAR module;
+      de-aliasing beyond ±4.7 m/s. Detector settings re-checked (03,
+      "Detector settings"): CFAR threshold 14 → 16 dB adopted (−25…40%
+      unsupported radar tracks, walker −0.013 at most), the rest kept;
+      baseline re-made. Next: the LiDAR module;
     - the replay for calibration sessions: clear, reliable display for the
       team. The owner holds the email until these are done. Done so far
       (2026-11-07): `--background` (empty-scene recording subtracted:

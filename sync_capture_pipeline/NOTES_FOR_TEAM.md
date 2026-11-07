@@ -178,6 +178,9 @@ segments are listed in `SYNC_DESIGN_3_SENSORS.md` §11.4.
   frames:
   - the walker is detected in 72% of radar frames against 50%;
   - the azimuth spread against the LiDAR is 2.4° against 4.9°.
+  - Since 2026-11-07 (measured array layout, CFAR threshold 16 dB): 83%
+    and 2.0°, with ~40% fewer radar tracks that no LiDAR object supports.
+    Re-run `run_perception.py` on sessions processed before.
 
 ## Live view for the extrinsic alignment (2026-10-31)
 

@@ -106,7 +106,8 @@ python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden fr
    sidelobes ~20 dB down). The detection map is each cell's angle-maximum
    power. (The team layout: the table's uniform 38 positions, one FFT.)
 4. CA-CFAR in dB (circular in Doppler), zero-Doppler band excluded, 3×3
-   local maxima.
+   local maxima. Threshold 16 dB since 2026-11-07 (was 14; see
+   `docs/knowledge/03_radar_firmware_and_dca.md`, "Detector settings").
 5. Per detection:
    - one azimuth peak with sub-bin interpolation, then refined coherently
      across both chips: the fringe nearest the peak, if it beats the others
