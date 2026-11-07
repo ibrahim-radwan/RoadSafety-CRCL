@@ -47,6 +47,7 @@ python replay/replay_session.py --session sessions/run05 --maximise lidar3d
 | **[ / ]** | Slower or faster (0.25×, 0.5×, 1×, 2×) |
 | Slider, event strip | Seek (click the event strip to jump) |
 | **m** | Radar: moving targets only (static scene removed) or everything |
+| **b** | Background subtraction on or off (with `--background`) |
 | **1–6**, **Esc** | Maximise a panel, restore |
 | **s** | Save a screenshot to `<session>/sync/replay_<time>.png` (the 3D panel included) |
 
@@ -176,7 +177,46 @@ See `perception/README.md`.
   ```
 - The strongest stationary reflector is not always the corner reflector:
   walls, desks, monitors and door frames are strong too. Narrow the range
-  filter to the reflector's distance.
+  filter to the reflector's distance, or subtract a background (below).
+
+**Background subtraction** (`--background`, 2026-11-07): for calibration
+sessions, give the empty-scene recording of the same rig position (or a
+live-view *Save background* capture). Then only what changed from it is
+shown:
+
+```bash
+python replay/replay_session.py --session <cal>/5m_150_left --background <cal>/background \
+    --radar-all --radar-static --range-filter 3 7 --lidar-range 10
+```
+
+- **Radar:** the background's static part (16 frames from the middle of
+  its radar recording, mean per channel over frames and chirps) is
+  subtracted from every frame's virtual channels, coherently, before
+  beamforming (`RadarDetector.set_background`). Walls and furniture and
+  their sidelobes go; the reflector stands alone. It shows with *moving
+  only* off; the moving-target path is unaffected (its clutter removal
+  takes each frame's static part out anyway). The `S` rows are then of
+  the change, and their azimuth is refined coherently across both chips
+  (*refined* in the class column). On 2026-11-03: S1 = the reflector at
+  every position checked, same angle as `calib_reflector.py` (within
+  0.1°). Without it, the 5 m off-axis reflector was not among `S1..S3`.
+  The map's colour range is 20 dB instead of 30 then.
+- **LiDAR:** 20 sweeps of the background (from 1 s after its start) mark
+  the 0.15 m voxels it occupied (dilated by one); each sweep then draws
+  only the returns outside them, as larger dots (a reflector at 5 m gives
+  only ~6–10 returns per sweep). Display only: the LiDAR detector and the
+  objects still use the whole sweep.
+- **The check box** *Background → subtract* (key **b**) switches it; the
+  panel titles say *minus background* and how many LiDAR returns changed.
+- **Cost:** loading takes a few seconds at start (radar ~1–2 s, LiDAR
+  ~2 s, from the external drive). Per frame the radar subtraction is free
+  (15.5 vs 15.4 ms measured), the S-row refinement ~3–4 ms, the LiDAR mask
+  ~9 ms per sweep. In the full window the radar ran at 86 ms/frame with
+  the background against 72 ms without (GPU shared with the LiDAR detector
+  and the camera), still 7.9 frames/s of 8.
+- **Valid only while the rig has not moved** since the background, with
+  the same radar firmware (a different variant is refused, with a message
+  in the panel title and the terminal). People who walk in are changes too.
 
 **Detections group:** the boxes, the track IDs and the LiDAR target can each
 be switched off. `--no-detect` turns off the LiDAR detector.
@@ -335,6 +375,8 @@ keyframe.
   LiDAR on a walker, ~0.4° on a corner reflector, at every angle tested
   (−18° to +14°). Before, with the team table, the beam was split and 5–16°
   off away from boresight.
+- **Background subtraction** needs an empty scene of the same rig position;
+  the camera is not background-subtracted.
 - **Radar elevation is off** (z = 0): the elevated transmitters' positions
   are not measured yet.
 - **Radar–LiDAR yaw:** a few degrees, different per mounting; there is no

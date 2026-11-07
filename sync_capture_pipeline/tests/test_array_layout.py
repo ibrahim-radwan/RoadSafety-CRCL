@@ -119,3 +119,36 @@ def test_refine_azimuth_on_a_static_reflector():
         az0 = float(det.static_az_deg[a_i])
         az1, ok = det.refine_azimuth(bands, r_i * det.range_res, az0)
         assert ok and abs(az1 - az) < 0.2, f"{az}: incoherent {az0:.2f}, refined {az1:.2f}"
+
+
+def test_background_subtraction():
+    """set_background: a static scene (reflector A) is taken out coherently, so a new reflector B is the
+    strongest stationary detection, at its angle; CUDA graph == eager; use_background False restores the
+    plain map; refine_azimuths (batched) == refine_azimuth (one by one)."""
+    from perception.radar import C
+    dets = [_detector(cuda_graph=False)]
+    if torch.cuda.is_available():
+        dets.append(_detector())
+    a_az, a_bin, b_az, b_bin = -25.0, 30, 9.0, 17
+    bg = [_frame(dets[0], a_az, a_bin, 0.0, seed=k) for k in range(4)]
+    both = (_frame(dets[0], a_az, a_bin, 0.0, seed=9).astype(np.int32)
+            + _frame(dets[0], b_az, b_bin, 0.0, amp=600.0, seed=10)).astype(np.int16)
+    maps = []
+    for det in dets:
+        plain = det.process(both, moving_only=False, static=True)["static_detections"]
+        assert abs(plain[np.argmax(plain[:, C["power_db"]]), C["range"]] - a_bin * det.range_res) < 0.2
+        det.set_background(bg)
+        out = det.process(both, moving_only=False, static=True)
+        maps.append(out["static_map"].cpu().numpy())
+        d = out["static_detections"]
+        q = d[np.argmax(d[:, C["power_db"]])]
+        assert abs(q[C["range"]] - b_bin * det.range_res) < 0.2, "the background reflector is still the strongest"
+        assert abs(q[C["az_deg"]] - b_az) < 2.0
+        az1, ok1 = det.refine_azimuth([out["static_band"]], q[C["range"]], q[C["az_deg"]])
+        azs, oks = det.refine_azimuths([out["static_band"]], [q[C["range"]], q[C["range"]]], [q[C["az_deg"]]] * 2)
+        assert ok1 and abs(az1 - b_az) < 0.3 and np.allclose(azs, az1) and oks.all()
+        det.use_background = False
+        again = det.process(both, moving_only=False, static=True)["static_detections"]
+        assert np.allclose(again, plain)
+    if len(maps) == 2:
+        assert np.abs(maps[0] - maps[1]).max() < 1e-3

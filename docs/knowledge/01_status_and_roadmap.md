@@ -218,7 +218,10 @@ What the baseline showed:
   - **Open, ours, before the team's email reply:**
     - the processing-module checks;
     - the replay for calibration sessions: clear, reliable display for the
-      team. The owner holds the email until these are done;
+      team. The owner holds the email until these are done. Done so far
+      (2026-11-07): `--background` (empty-scene recording subtracted:
+      radar coherently per channel, LiDAR new returns only; the reflector
+      is `S1` with its azimuth refined; key b; see `replay/README.md`);
     - radar elevation (the elevated TX positions);
     - the inter-chip phase of the other firmware variants.
   - **Their manual calibration file was never used** by any code.

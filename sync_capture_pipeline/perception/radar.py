@@ -227,7 +227,10 @@ class RadarDetector:
         self.st_az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(self.sin_t[self.fov_sl]))
         self.static_az_deg = self.st_az_w.cpu().numpy()          # world azimuth of static_map's columns
         self.last = {}
-        # CUDA graph of the fixed-shape front end (_front), one per (moving_only, detect, static)
+        # an empty-scene background (set_background): its static part [range, channel], subtracted
+        # coherently from every frame's virtual channels while use_background is on
+        self.bg_virt, self.use_background = None, True
+        # CUDA graph of the fixed-shape front end (_front), one per (moving_only, detect, static, background)
         self.cuda_graph = bool(cuda_graph) and self.dev.type == "cuda"
         self._graphs, self._x, self._pin, self._copied = {}, None, None, None
 
@@ -253,14 +256,17 @@ class RadarDetector:
         B = dsp.az_spectrum(g.reshape(g.shape[:-1] + (self.n_groups, self.group)), self.win_a, self.n_az)
         return (B.real ** 2 + B.imag ** 2).sum(dim=-2), B, g
 
-    def _front(self, x, moving_only: bool, detect: bool, static: bool) -> dict:
+    def _front(self, x, moving_only: bool, detect: bool, static: bool, background: bool = False) -> dict:
         """Everything of one frame with fixed shapes, from the raw frame x (int16, on the device)
         up to the CFAR noise maps: no host sync, so it can be a CUDA graph. Thresholds and the
-        variable-size steps (nonzero onwards) stay in _detect / _detect_static."""
+        variable-size steps (nonzero onwards) stay in _detect / _detect_static. With background, the
+        background's static part (set_background) is subtracted from the virtual channels first."""
         torch = self.torch
         F = torch.nn.functional
         rng = self._range_cube(x)
         virt = dsp.virtual_array(rng, self.ch_tx, self.ch_rx)                   # [loop, range, ch]
+        if background:
+            virt = virt - self.bg_virt[None]
         dch = dsp.doppler_fft(virt, self.win_d, self.n_loops, remove_clutter=moving_only)    # [dop, range, ch]
         if self.doppler_comp:
             dch = dch * self.tdm_comp[self.ch_tx].T[:, None, :]
@@ -294,6 +300,7 @@ class RadarDetector:
             d0 = dsp.doppler_band(virt, self.win_d, self.n_loops, b)    # = doppler_fft(...)[n/2 - b:n/2 + b + 1]
             m = 10 * torch.log10(self._static_power(d0)[:, self.fov_sl] + 1e-6)  # [range, az_fov]
             f.update(self._static_stats(m))
+            f["st_band"] = d0
         return f
 
     def _static_power(self, band):
@@ -462,7 +469,7 @@ class RadarDetector:
             self._graphs[key] = self._capture(key)
         g, f = self._graphs[key]
         g.replay()
-        return {k: (v.clone() if k in ("rd", "ra", "p_az", "st_map") else v) for k, v in f.items()}
+        return {k: (v.clone() if k in ("rd", "ra", "p_az", "st_map", "st_band") else v) for k, v in f.items()}
 
     def _capture(self, key: tuple):
         """Warm up (cuFFT plans, cached tables) on a side stream, then capture _front, holding
@@ -486,8 +493,11 @@ class RadarDetector:
         noise_db (frame median of the detection map); if static, static_detections
         (N x len(DET_COLS), v_r = 0): see _detect_static, and static_map, the zero-Doppler
         range-azimuth map without clutter removal [range, azimuth within the FOV] dB (world
-        azimuths: static_az_deg)."""
-        key = (bool(moving_only), bool(detect), bool(static))
+        azimuths: static_az_deg), and static_band, its zero-Doppler band (static_band; for
+        refine_azimuth). With a background set (set_background) and use_background on, every map
+        is of the change from it (the moving-target path is unaffected: clutter removal takes
+        each frame's static part out anyway)."""
+        key = (bool(moving_only), bool(detect), bool(static), self.background_active)
         f = self._graphed(raw, key) if self.cuda_graph else \
             self._front(self.torch.as_tensor(raw, device=self.dev), *key)
         out = {"rd": f["rd"], "ra": f["ra"], "p_az": f["p_az"]}
@@ -497,8 +507,36 @@ class RadarDetector:
         if static:
             out["static_detections"] = self._detect_static(f)
             out["static_map"] = f["st_map"]
+            out["static_band"] = f["st_band"]
         self.last = out
         return out
+
+    @property
+    def background_active(self) -> bool:
+        return self.bg_virt is not None and bool(self.use_background)
+
+    def set_background(self, raws) -> int:
+        """An empty-scene background from raw frames (the same firmware): the mean over its frames and
+        loops of the virtual channels [range, channel] (complex), i.e. its static part. process() then
+        subtracts it from every frame, coherently, before beamforming, so the static maps show only
+        what changed (a corner reflector without the walls' sidelobes). Returns the frames used."""
+        torch = self.torch
+        acc, n = None, 0
+        with torch.no_grad():
+            for raw in raws:
+                virt = dsp.virtual_array(self._range_cube(torch.as_tensor(raw, device=self.dev)), self.ch_tx, self.ch_rx)
+                m = virt.mean(dim=0)
+                acc = m if acc is None else acc + m
+                n += 1
+        if n == 0:
+            raise ValueError("no background frames")
+        self.bg_virt = (acc / n).contiguous()
+        self._graphs = {k: v for k, v in self._graphs.items() if not k[3]}   # graphs hold the old buffer
+        return n
+
+    def clear_background(self) -> None:
+        self.bg_virt = None
+        self._graphs = {k: v for k, v in self._graphs.items() if not k[3]}
 
     def static_band(self, raw: np.ndarray):
         """The zero-Doppler band (+-static_bins) of the virtual channels, no clutter removal:
@@ -526,33 +564,44 @@ class RadarDetector:
         from the incoherent map) is taken under the same gate as _refine. Returns (az_deg, refined):
         az_deg unchanged and False when there is no inter-chip phase or the gate fails. On the
         2026-11-03 corner reflector it brings the spread against the camera from ~0.4 to ~0.1 deg."""
-        if not self.coherent or not len(bands):
-            return float(az_deg), False
+        az, ok = self.refine_azimuths(bands, [range_m], [az_deg])
+        return float(az[0]), bool(ok[0])
+
+    def refine_azimuths(self, bands, ranges_m, az_deg) -> tuple:
+        """refine_azimuth for several reflectors at once (one GPU pass): (az_deg array, refined array)."""
+        az_deg = np.asarray(az_deg, float).reshape(-1)
+        out, ok = az_deg.copy(), np.zeros(len(az_deg), bool)
+        if not self.coherent or not len(bands) or not len(az_deg):
+            return out, ok
         torch = self.torch
-        ri = int(np.clip(round(range_m / self.range_res), 0, self.n_range - 1))
-        coh = torch.zeros(self.n_az, device=self.dev)
+        ri = torch.as_tensor(np.clip(np.round(np.asarray(ranges_m, float) / self.range_res), 0, self.n_range - 1)
+                             .astype(np.int64), device=self.dev)
+        coh = torch.zeros(len(az_deg), self.n_az, device=self.dev)
         with torch.no_grad():
             for b in bands:
-                _, B, _ = self._beam(torch.as_tensor(b, device=self.dev)[:, ri])       # [band, 2, az]
-                coh += ((B[:, 0] + B[:, 1] * self.chip_steer).abs() ** 2).sum(dim=0)
-        coh = np.where(self.fov_ok.cpu().numpy(), coh.cpu().numpy(), 0.0)
+                _, B, _ = self._beam(torch.as_tensor(b, device=self.dev)[:, ri])       # [band, rows, 2, az]
+                coh += ((B[..., 0, :] + B[..., 1, :] * self.chip_steer).abs() ** 2).sum(dim=0)
+        coh = np.where(self.fov_ok.cpu().numpy()[None], coh.cpu().numpy(), 0.0)
         A, n = self.n_az, self.ref_near
-        i0 = int(np.argmin(np.abs(self.sin_axis - np.sin(np.radians(AZIMUTH_SIGN * az_deg)))))
-        lo, hi = max(i0 - n, 0), min(i0 + n + 1, A)
-        ci = lo + int(np.argmax(coh[lo:hi]))
-        lobe = np.zeros(A, bool)
-        lobe[max(i0 - 3 * n, 0):min(i0 + 3 * n + 1, A)] = True
-        other = lobe & (np.abs(np.arange(A) - ci) > n)
-        omax = coh[other].max() if other.any() else 0.0
-        if coh[ci] <= 0 or coh[ci] < omax * 10 ** (self.refine_gate_db / 10):
-            return float(az_deg), False
-        d = 0.0
-        if 0 < ci < A - 1:
-            y0, y1, y2 = (10 * np.log10(coh[j] + 1e-12) for j in (ci - 1, ci, ci + 1))
-            den = y0 - 2 * y1 + y2
-            d = float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5)) if abs(den) > 1e-6 else 0.0
-        s = float(np.clip(-1.0 + 2.0 * (ci + d) / A, -1, 1))
-        return float(AZIMUTH_SIGN * np.degrees(np.arcsin(s))), True
+        for j in range(len(az_deg)):
+            c_ = coh[j]
+            i0 = int(np.argmin(np.abs(self.sin_axis - np.sin(np.radians(AZIMUTH_SIGN * az_deg[j])))))
+            lo, hi = max(i0 - n, 0), min(i0 + n + 1, A)
+            ci = lo + int(np.argmax(c_[lo:hi]))
+            lobe = np.zeros(A, bool)
+            lobe[max(i0 - 3 * n, 0):min(i0 + 3 * n + 1, A)] = True
+            other = lobe & (np.abs(np.arange(A) - ci) > n)
+            omax = c_[other].max() if other.any() else 0.0
+            if c_[ci] <= 0 or c_[ci] < omax * 10 ** (self.refine_gate_db / 10):
+                continue
+            d = 0.0
+            if 0 < ci < A - 1:
+                y0, y1, y2 = (10 * np.log10(c_[k] + 1e-12) for k in (ci - 1, ci, ci + 1))
+                den = y0 - 2 * y1 + y2
+                d = float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5)) if abs(den) > 1e-6 else 0.0
+            sn = float(np.clip(-1.0 + 2.0 * (ci + d) / A, -1, 1))
+            out[j], ok[j] = AZIMUTH_SIGN * np.degrees(np.arcsin(sn)), True
+        return out, ok
 
     def _detect_static(self, f):
         """Stationary reflectors, which the moving-target path removes: the zero-Doppler band

@@ -585,6 +585,19 @@ blinked.**
 - **LiDAR:** in the live view and the calibration tool, the reflector is
   the median of its points, pooled over all sweeps of the capture.
 
+- **Background in the replay (2026-11-07):** `--background` subtracts an
+  empty-scene recording of the same rig position from a calibration
+  session, in the radar (coherently, per channel) and the LiDAR (only new
+  returns are drawn). The reflector then stands alone and is `S1`, its
+  azimuth refined across the radar chips: on `5m_150_left` −20.9°, the
+  same as `calib_reflector.py`. Key **b** switches it:
+
+  ```bash
+  python replay/replay_session.py --session calibration_dataset/5m_150_left \
+      --background calibration_dataset/background --radar-all --radar-static \
+      --range-filter 3 7 --lidar-range 10
+  ```
+
 **7. The mounting photos.**
 
 - **Alignment:** camera, LiDAR and radar are stacked on the stem's centre

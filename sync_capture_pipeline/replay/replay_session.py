@@ -21,6 +21,13 @@ button, or keys 1-6; Esc restores):
 A range filter (from - to, any metres) limits the radar points, the
 stationary reflectors and the table rows; the view range takes any value.
 
+With --background <empty-scene session or live-view capture> (calibration
+sessions), the radar subtracts it coherently per channel and the LiDAR
+draws only the returns it did not have, so a corner reflector stands
+alone. The "subtract" box (key b) switches it; the radar change shows
+with "moving only" off, and the S rows' azimuth is then refined across
+the chips. Valid only while the rig has not moved since the background.
+
 Each panel shows the time of the data it displays; for the radar frame on
 screen, the pairing errors and flags from sync/pairs.csv are shown.
 
@@ -33,12 +40,14 @@ Requires: python align_session.py --session <s>   (writes sync/)
 
 KEYS    space play/pause   left/right: previous/next radar frame
         [ ] slower/faster  s: save a screenshot   m: radar moving/all
+        b: background subtraction on/off (with --background)
         1-6 maximise a panel, Esc / 0 restore all
 
 USAGE (conda env)
     python replay/replay_session.py --session sessions/run05
     python replay/replay_session.py --session sessions/run05 --sensors lidar
     python replay/replay_session.py --session sessions/run05 --start 12.5 --speed 0.5
+    python replay/replay_session.py --session cal/5m_150_left --background cal/background --radar-all --radar-static
 """
 from __future__ import annotations
 
@@ -471,6 +480,28 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         moving.stateChanged.connect(lambda s_: setattr(srcs["radar"], "moving_only", bool(s_)))
         if getattr(args, "radar_all", False):
             moving.setChecked(False)              # the whole scene, stationary reflectors included
+    bgbox = None
+    if getattr(args, "background", None) is not None:
+        row = group("Background")
+        bgbox = QtWidgets.QCheckBox("subtract")
+        bgbox.setChecked(True)
+        bgbox.setToolTip(f"{args.background}\nshow only what changed from this empty scene - b.\n"
+                         "Radar: subtracted coherently per channel (untick 'moving only' to see the change; "
+                         "'static' lists it, azimuth refined across the chips). LiDAR: only returns in "
+                         "voxels the background did not have (display; detection uses the whole sweep). "
+                         "Valid only while the rig has not moved since the background.")
+        row.addWidget(bgbox)
+        bg_lbl = QtWidgets.QLabel(Path(args.background).name)
+        bg_lbl.setObjectName("hint")
+        row.addWidget(bg_lbl)
+
+        def set_bg(on):
+            for key_ in ("radar", "lidar"):
+                if key_ in srcs:
+                    srcs[key_].use_background = bool(on)
+            if "lidar" in srcs:
+                srcs["lidar"].set_view()             # re-draw the current sweep
+        bgbox.stateChanged.connect(set_bg)
     row = group("Range filter")
     rf = getattr(args, "range_filter", None) or (0.0, RANGE_MAX)
     for key, val in (("lo", float(rf[0])), ("hi", float(rf[1]))):
@@ -553,6 +584,8 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
             QtCore.Qt.Key_0: lambda: state["max"] and toggle_max(state["max"])}
     if rctl:
         keys[QtCore.Qt.Key_M] = lambda: rctl["moving"].setChecked(not rctl["moving"].isChecked())
+    if bgbox is not None:
+        keys[QtCore.Qt.Key_B] = lambda: bgbox.setChecked(not bgbox.isChecked())
     for i, k in enumerate(pkeys[:6]):
         keys[getattr(QtCore.Qt, f"Key_{i + 1}")] = (lambda kk=k: toggle_max(kk))
     for k, fn in keys.items():
@@ -668,6 +701,12 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     what = {"panorama": "panorama", "top360": "360°", "top": "forward"}[mode]
                     ms = "" if ld is None else f"  |  {ld['ms_total']:.0f} ms GPU"
                     gap = "  |  16.5\u00b0 gap filled from the previous sweep" if lid.get("filled") else ""
+                    bgl = lid.get("background")
+                    bgs = srcs["lidar"].bg_status
+                    if bgl:
+                        gap += f"  |  background: {bgl[0]:,} of {bgl[1]:,} returns changed"
+                    elif bgs and srcs["lidar"].use_background and srcs["lidar"].bg_vox is None:
+                        gap += f"  |  background {bgs}"                  # loading, or why it is not used
                     panels["lidar"].set(f"LiDAR {what}", f"{lid['n_shown']:,} pts  @ {fmt(lid['t'])}{ms}{gap}")
                     show_obj = ld is not None and dctl["lidar_obj"].isChecked() and mode != "panorama"
                     bl = box_lines(ld["objects"]) if show_obj else {c: ([], []) for c in CLASSES}
@@ -722,7 +761,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 # the table's S rows: from the static map averaged over the last 2 s (steadier than
                 # one frame's cells), positions interpolated between cells
                 sa = rad.get("static_avg")
-                sa = sa[sa[:, RC["ghost"]] == 0] if sa is not None and len(sa) else np.zeros((0, 10), np.float32)
+                sa = sa[sa[:, RC["ghost"]] == 0] if sa is not None and len(sa) else np.zeros((0, 11), np.float32)
                 sa = sa[in_gate(sa[:, RC["range"]])]
                 state["radar_static"] = sa[np.argsort(-sa[:, RC["power_db"]])][:N_STATIC_ROWS]
                 state["radar_static_n"] = int(rad.get("static_avg_n") or 0)
@@ -731,15 +770,21 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 # colour from 3 dB above the noise floor, but at most 30 dB below the frame's peak: a near,
                 # strong target's sidelobes (the beam is still wide) do not flood the map
                 hi = float(np.nanpercentile(bev, 99.9)) if fin.any() else 1.0
-                lo = max(float(np.nanmedian(bev)) + 3, hi - 30) if fin.any() else 0.0
+                # minus a background, the change stands alone: 20 dB, so the beam's sidelobes stay dark
+                span = 20 if rad.get("background") and not rctl["moving"].isChecked() else 30
+                lo = max(float(np.nanmedian(bev)) + 3, hi - span) if fin.any() else 0.0
                 hi = max(hi, lo + 15)
                 if rctl["map"].isChecked():
                     rb["img"].setImage(bev, autoLevels=False, levels=(lo, hi))
                 else:                                            # points only
                     rb["img"].setImage(np.full((2, 2), np.nan, np.float32), autoLevels=False, levels=(0, 1))
                 rb["img"].setRect(extent_r)     # re-apply: a "no data" placeholder may have set the scale
+                bgs = srcs["radar"].bg_status
+                bgr = ("" if not bgs or not srcs["radar"].use_background else
+                       "  |  minus background" + ("" if not rctl["moving"].isChecked() else " (untick moving only)")
+                       if rad.get("background") else f"  |  background {bgs}")
                 panels["radar_bev"].set("Radar BEV", f"frame {rad['k']}  @ {fmt(rad['t'])}  |  "
-                                                     f"{srcs['radar'].ms_per_frame:.0f} ms GPU")
+                                                     f"{srcs['radar'].ms_per_frame:.0f} ms GPU{bgr}")
                 rdi = rad["rd"].T                                    # rows = range, cols = Doppler
                 lo2 = float(np.median(rdi)) + 3
                 hi2 = max(lo2 + 25, float(np.percentile(rdi, 99.9)))
@@ -806,7 +851,8 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 if rctl["static"].isChecked():          # strongest stationary reflectors (a corner reflector)
                     from perception.radar import C as RC
                     for i_, d_ in enumerate(state.get("radar_static", [])):
-                        rows.append(("radar", f"S{i_ + 1}", f"stationary \u25a0 {state.get('radar_static_n', 0)} fr",
+                        ref_ = " refined" if len(d_) > len(RC) and d_[-1] > 0 else ""
+                        rows.append(("radar", f"S{i_ + 1}", f"stationary \u25a0 {state.get('radar_static_n', 0)} fr{ref_}",
                                      float(d_[RC["range"]]),
                                      float(d_[RC["az_deg"]]), float(d_[RC["x"]]), float(d_[RC["y"]]), 0.0, 0.0,
                                      float(d_[RC["power_db"]]), RADAR_C))
@@ -930,6 +976,9 @@ def main() -> int:
     ap.add_argument("--no-rx-phase", action="store_true",
                     help="radar, team layout: without the in-situ RX phase correction (calibration/radar_rx_phase.json)")
     ap.add_argument("--no-detect", action="store_true", help="LiDAR: no object detection (display only)")
+    ap.add_argument("--background", type=Path,
+                    help="an empty-scene session or live-view capture (Save background) of the SAME rig position: "
+                         "radar subtracted coherently, LiDAR only the changed returns (b toggles)")
     # testing / automation
     ap.add_argument("--screenshot", type=Path, help="save a screenshot after --screenshot-after s, then exit")
     ap.add_argument("--screenshot-after", type=float, default=5.0)
@@ -954,11 +1003,12 @@ def main() -> int:
     if "camera" in sensors:
         srcs["camera"] = CameraSource(clock, s, a.camera_width)
     if "radar" in sensors:
-        srcs["radar"] = RadarSource(clock, s, bev_x, bev_y, rx_phase=not a.no_rx_phase, layout=a.radar_layout)
+        srcs["radar"] = RadarSource(clock, s, bev_x, bev_y, rx_phase=not a.no_rx_phase, layout=a.radar_layout,
+                                    background=a.background)
     if "lidar" in sensors:
         srcs["lidar"] = LidarSource(clock, s, offsets.get("lidar_ms", 0.0) / 1e3,
                                     view=dict(mode=a.lidar_view, range_m=a.lidar_range, color=a.lidar_color,
-                                              near_m=a.lidar_near))
+                                              near_m=a.lidar_near), background=a.background)
         srcs["lidar"].detect = not a.no_detect
     spans = [src.span() for src in srcs.values()]
     clock.t0, clock.t1 = min(x[0] for x in spans), max(x[1] for x in spans)

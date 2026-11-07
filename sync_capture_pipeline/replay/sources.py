@@ -322,12 +322,20 @@ class RadarSource(Source):
         det             detections (perception.radar.DET_COLS), multipath ghosts flagged
         tracks          [(id, x, y, vx, vy, v_r, hits, micro-Doppler features or None,
                          accumulated points [N, 5])] reported tracks
+        static_avg      stationary reflectors of the last 2 s (DET_COLS + one column: 1 when the
+                        azimuth was refined coherently across the chips, with a background)
+    With a background (replay/background.py), set once in run(), the radar maps and stationary
+    reflectors are of the change from it while use_background is on.
     """
     name_ = "radar"
     PREFETCH = 12                       # frames read ahead (slow disks: NTFS/FUSE, USB)
 
-    def __init__(self, clock, session: Path, bev_x, bev_y, moving_only=True, rx_phase=True, layout="measured"):
+    def __init__(self, clock, session: Path, bev_x, bev_y, moving_only=True, rx_phase=True, layout="measured",
+                 background: Path = None):
         super().__init__(clock)
+        self.background = background
+        self.use_background = True
+        self.bg_status = ""                  # "" (none), "loading", "<name>: n frames", or the reason it is off
         sys.path.insert(0, str(PIPELINE))
         from perception.radar import RadarDetector, rx_phase_for
         self.session = session
@@ -352,6 +360,38 @@ class RadarSource(Source):
         self.ra_y = (np.sin(az)[:, None] * rr[None, :]).astype(np.float32)
         self.ra_r = np.broadcast_to(rr[None, :], self.ra_x.shape)
         self.prefetch = FramePrefetcher(self.timeline, self.PREFETCH)
+        self.variant = variant
+
+    def _load_background(self):
+        from replay.background import name_of, radar_frames
+        self.bg_status = "loading"
+        try:
+            raws, variant = radar_frames(self.background)
+            if variant != self.variant:
+                raise ValueError(f"firmware {variant}, the session's is {self.variant} (different channels)")
+            n = self.proc.set_background(raws)
+            self.bg_status = f"{name_of(self.background)}: {n} frames"
+            print(f"[radar] background {self.background}: {n} frames, subtracted coherently per channel")
+        except Exception as exc:
+            self.bg_status = f"not used ({exc})"
+            print(f"[radar] background {self.background} NOT used: {exc}")
+
+    def _refine_static(self, sa, bands, n_max: int = 12):
+        """Coherent azimuth across the chips (RadarDetector.refine_azimuth) of the n_max strongest
+        stationary reflectors, from the last frames' zero-Doppler bands; adds the 'refined' column."""
+        from perception.radar import C
+        flag = np.zeros((len(sa), 1), np.float32)
+        out = np.hstack([np.asarray(sa, np.float32), flag])
+        if not len(sa) or not bands or not self.proc.coherent:
+            return out
+        idx = np.argsort(-out[:, C["power_db"]])[:n_max]
+        r = out[idx, C["range"]].astype(float)
+        az, ok = self.proc.refine_azimuths([self.proc.torch.cat(bands)], r, out[idx, C["az_deg"]])
+        idx, r, az = idx[ok], r[ok], az[ok]
+        out[idx, C["az_deg"]] = az
+        out[idx, C["x"]], out[idx, C["y"]] = r * np.cos(np.radians(az)), r * np.sin(np.radians(az))
+        out[idx, -1] = 1.0
+        return out
 
     def raw_points(self, ra, thr_db: float, max_range: float):
         """Cells more than thr_db above this frame's median, within max_range: (xyz N x 3, dB above floor)."""
@@ -376,8 +416,10 @@ class RadarSource(Source):
         torch = self.proc.torch
         try:                                     # any failure, startup included, shows as self.error
             self.prefetch.start()
+            if self.background is not None:
+                self._load_background()
             k_done, mode, gen = -1, None, None
-            st_hist = []
+            st_hist, st_bands = [], []
             while not self.stop_evt.is_set():
                 k = int(np.searchsorted(self.t, self.clock.now(), side="right")) - 1
                 self.prefetch.want(k)
@@ -387,13 +429,17 @@ class RadarSource(Source):
                         self.publish(None)
                     time.sleep(0.01)
                     continue
-                if k == k_done and mode == self.moving_only:
+                self.proc.use_background = self.use_background
+                now_mode = (self.moving_only, self.proc.background_active)
+                if k == k_done and mode == now_mode:
                     time.sleep(0.004)
                     continue
                 if gen != self.clock.seek_gen or k < k_done or k > k_done + 8:
                     tracker.reset()                     # a jump: tracks start over
                     feats.reset()
-                    st_hist = []                        # ... and the static average
+                    st_hist, st_bands = [], []          # ... and the static average
+                if mode is not None and mode[1] != now_mode[1]:
+                    st_hist, st_bands = [], []          # background switched: average afresh
                 gen = self.clock.seek_gen
                 raw = self.prefetch.get(k)
                 t0 = time.perf_counter()
@@ -413,18 +459,21 @@ class RadarSource(Source):
                 if self.show_static and "static_map" in out:
                     # the S rows: stationary reflectors of the mean POWER of the last 2 s of static maps
                     # (one frame's cells come and go when a reflector is near the threshold)
-                    if k != k_done:
+                    if k != k_done or mode != now_mode:
                         st_hist = (st_hist + [out["static_map"].clone()])[-self.static_avg_frames:]
+                        st_bands = (st_bands + [out["static_band"]])[-self.static_avg_frames:]
                     if st_hist:
                         p_ = torch.stack(st_hist)
                         top = p_.max(dim=0).values
                         mean = top + 10 * torch.log10(torch.mean(10 ** ((p_ - top) / 10), dim=0))
                         st_avg, n_avg = self.proc.detect_static_map(mean), len(st_hist)
+                        # with the background gone the reflector stands alone: refine its azimuth
+                        st_avg = self._refine_static(st_avg, st_bands if now_mode[1] else [])
                 self.ms_per_frame = (time.perf_counter() - t0) * 1e3
-                k_done, mode = k, self.moving_only
+                k_done, mode = k, now_mode
                 self.publish({"t": float(self.t[k]), "k": k, "rd": rd, "bev": bev, "ra": ra, "det": det,
                               "tracks": tracks, "static": out.get("static_detections"),
-                              "static_avg": st_avg, "static_avg_n": n_avg})
+                              "static_avg": st_avg, "static_avg_n": n_avg, "background": now_mode[1]})
         except Exception as exc:
             import traceback
             traceback.print_exc()
@@ -481,13 +530,14 @@ def top_extent(view: dict):
     return 0.0, R, -R * asp / 2, R * asp / 2
 
 
-def render_lidar(pts: np.ndarray, view: dict, ground_z=None):
+def render_lidar(pts: np.ndarray, view: dict, ground_z=None, grow: int = 0):
     """pts: N x 6 (x, y, z, range, intensity, dt). Returns (rgb HxWx3, extent, n_shown).
     extent = (left, bottom, width, height) in plot coordinates: top views use
     plot-x = y (left +) and plot-y = x (forward); the panorama uses plot-x =
     azimuth (deg, left +) and plot-y = elevation (deg). Top views fill the
     panel (view["aspect"]) at about view["px"] cells across; colour by height
-    runs from the ground (ground_z, when known) to 3 m above it."""
+    runs from the ground (ground_z, when known) to 3 m above it. grow > 0 draws each top-view
+    cell as a (2 grow + 1) square: a few points (the change from a background) stay visible."""
     x, y, z, r, inten = pts[:, 0], pts[:, 1], pts[:, 2], pts[:, 3], pts[:, 4]
     near = r >= view["near_m"]                    # drop the mount / vehicle body
     if view["mode"] == "panorama":
@@ -523,7 +573,12 @@ def render_lidar(pts: np.ndarray, view: dict, ground_z=None):
         rgb, occ = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"), ground_z - 0.1, ground_z + 3.0)
     else:
         rgb, occ = _paint(cells, z[ok], nx * ny, "max", _lut("turbo"))
-    return _fill_gaps(rgb.reshape(nx, ny, 3), occ.reshape(nx, ny)), (y0, x0, y1 - y0, x1 - x0), int(ok.sum())
+    rgb, occ = rgb.reshape(nx, ny, 3), occ.reshape(nx, ny)
+    if grow > 0 and occ.any():
+        import cv2
+        ker = np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)
+        rgb, occ = cv2.dilate(rgb, ker), cv2.dilate(occ, ker)
+    return _fill_gaps(rgb, occ), (y0, x0, y1 - y0, x1 - x0), int(ok.sum())
 
 
 class LidarSource(Source):
@@ -531,9 +586,13 @@ class LidarSource(Source):
     LOOKAHEAD_S = 0.15      # a sweep is emitted after its last packet; feed ahead of the clock
     PREROLL_S = 0.3         # start decoding this much before a seek point
 
-    def __init__(self, clock, session: Path, offset_s=0.0, view=None):
+    def __init__(self, clock, session: Path, offset_s=0.0, view=None, background: Path = None):
         super().__init__(clock)
         self.session = session
+        self.background = background        # empty-scene capture: draw only what changed (display only)
+        self.use_background = True
+        self.bg_vox = None
+        self.bg_status = ""
         self.offset_s = offset_s
         self.view = dict(mode="top", range_m=40.0, color="height", near_m=0.5, version=0, aspect=1.0, px=500)
         self.view.update(view or {})
@@ -600,7 +659,13 @@ class LidarSource(Source):
             except Exception as exc:            # detection must never stop the replay
                 self.error = f"lidar detection: {exc}"
         p, filled = self._fill_gap(sweep)
-        rgb, extent, shown = render_lidar(p, view, None if det is None else det["ground_z"])
+        n_all, keep = len(p), None
+        if self.use_background and self.bg_vox is not None:     # only returns the background did not have
+            from perception.core.reflector import new_points
+            keep = new_points(p, self.bg_vox, near_m=max(0.05, float(view["near_m"])))
+            p = p[keep]
+        rgb, extent, shown = render_lidar(p, view, None if det is None else det["ground_z"],
+                                          grow=0 if keep is None else 2)
         # Raw points for the 3D view: valid returns only (the RS-Fairy fills
         # no-return directions with zero range), beyond the near filter.
         ok = np.isfinite(p[:, 3]) & (p[:, 3] > max(0.05, float(view["near_m"])))
@@ -609,12 +674,15 @@ class LidarSource(Source):
             lab = det["point_label"]
             if filled:                               # filled points have no detector label
                 lab = np.r_[lab, np.zeros(filled, lab.dtype)]
+            if keep is not None:
+                lab = lab[keep]
             lab = lab[ok]
         with self.vlock:
             self.points = (sweep[0], np.ascontiguousarray(p[ok, :5]), lab,
                            None if det is None else det["ground_z"])
         return {"t": sweep[0], "rgb": rgb, "n_shown": shown, "ext": extent, "mode": view["mode"],
-                "version": view["version"], "det": det, "filled": filled}
+                "version": view["version"], "det": det, "filled": filled,
+                "background": None if keep is None else (int(keep.sum()), n_all)}
 
     GAP_AZ = (-30.0, 3.0)       # LiDAR-frame azimuth window (deg, + left) around the sector the RS-Fairy skips
 
@@ -657,6 +725,22 @@ class LidarSource(Source):
         theirs = theirs[missing]
         return np.concatenate([p, theirs]), len(theirs)
 
+    def _load_background(self):
+        from perception.core.reflector import background_voxels
+        from replay.background import lidar_sweeps, name_of
+        self.bg_status = "loading"
+        try:
+            sw = lidar_sweeps(self.background)
+            if not sw:
+                raise ValueError("no sweeps")
+            self.bg_vox = background_voxels(sw)
+            self.bg_status = f"{name_of(self.background)}: {len(sw)} sweeps"
+            print(f"[lidar] background {self.background}: {len(sw)} sweeps, {len(self.bg_vox):,} voxels")
+            self.set_view()                          # re-draw the current sweep without it
+        except Exception as exc:
+            self.bg_status = f"not used ({exc})"
+            print(f"[lidar] background {self.background} NOT used: {exc}")
+
     def get_points(self):
         """(time, N x 5 [x, y, z, range, intensity], point labels or None, ground z or None)
         of the sweep last published, or None."""
@@ -668,6 +752,8 @@ class LidarSource(Source):
         try:
             Lidar = load_wrapper()
             cfg_path = decode_config(self.session, tmp / "decode.yaml")
+            if self.background is not None:
+                self._load_background()
             while not self.stop_evt.is_set():
                 gen = self.clock.seek_gen
                 self._play_from(self.clock.now(), tmp, cfg_path, gen, Lidar)
