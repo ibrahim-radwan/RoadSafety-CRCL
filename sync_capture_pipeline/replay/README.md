@@ -19,6 +19,10 @@ One window, six panels (2026-10-24; the 3D view used to be a separate window):
   (in the order above). **Esc** or **0** restores. `--maximise <panel>` at
   start.
 - **Resize** with the splitters between panels; the bird's-eye views re-fit.
+- A panel's info line is shortened with "…" when the panel is narrow (full
+  text on hover); it never widens the panel. Before 2026-11-07 it did: the
+  LiDAR line grew once a second (the gap-fill note), the splitter took the
+  width from the camera panel, and the camera image shrank and grew.
 - Each panel title shows the session time of the data on screen. For the radar
   frame on screen, the status line shows the paired camera frame and LiDAR
   sweep from `sync/pairs.csv`, with their time errors and any flags
@@ -178,6 +182,34 @@ See `perception/README.md`.
 - The strongest stationary reflector is not always the corner reflector:
   walls, desks, monitors and door frames are strong too. Narrow the range
   filter to the reflector's distance, or subtract a background (below).
+
+**Calibration sessions: `--calibration`** (2026-11-07). One option for a
+corner-reflector position:
+
+```bash
+python replay/replay_session.py --session <cal>/5m_150_left --calibration --range-filter 3 7 --lidar-range 10
+```
+
+- It sets `--radar-all --radar-static` and, when the session's folder has a
+  sibling session named `background` (as `calibration_dataset/` has), uses
+  it as `--background`; otherwise give `--background`.
+- **The reflector read out in both sensors** (with the background on): rows
+  `REF` at the top of the objects table and markers in both bird's-eye
+  views (LiDAR orange ×, radar blue +, each drawn in both):
+  - **LiDAR:** the persistent cluster of the returns that changed from the
+    background over the last ~1 s (as `calib_reflector.py`), inside the
+    range filter; the class column gives its returns per sweep and in how
+    many sweeps it was present. Works where the reflector is too small to
+    be a LiDAR object (3 returns per sweep at 8 m).
+  - **Radar:** S1, the strongest stationary change inside the range filter,
+    its azimuth refined across the chips.
+  - **Δ:** radar − LiDAR in range and azimuth; also in the info line. On
+    2026-11-03: +0.14 m, −1.9° at 5 m (`5m_150_left`) and +0.25 m, −1.9° at
+    8 m (`8m_1m_left`): the radar's mounting yaw relative to the LiDAR (as
+    `calib_reflector.py`, which gives −2.4° against the camera); the range
+    difference is the reflector's apex against its faces.
+- Narrow the range filter to the reflector's distance: anything that
+  changed (a person who walked in) inside it competes.
 
 **Background subtraction** (`--background`, 2026-11-07): for calibration
 sessions, give the empty-scene recording of the same rig position (or a

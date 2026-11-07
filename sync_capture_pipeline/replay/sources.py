@@ -584,6 +584,7 @@ def render_lidar(pts: np.ndarray, view: dict, ground_z=None, grow: int = 0):
 class LidarSource(Source):
     name_ = "lidar"
     LOOKAHEAD_S = 0.15      # a sweep is emitted after its last packet; feed ahead of the clock
+    REFLECTOR_SWEEPS = 10   # ~1 s of changed returns for the reflector
     PREROLL_S = 0.3         # start decoding this much before a seek point
 
     def __init__(self, clock, session: Path, offset_s=0.0, view=None, background: Path = None):
@@ -593,6 +594,11 @@ class LidarSource(Source):
         self.use_background = True
         self.bg_vox = None
         self.bg_status = ""
+        # the corner reflector in the changed returns of the last REFLECTOR_SWEEPS sweeps (with a
+        # background; perception/core/reflector.py, as calib_reflector.py), searched within
+        # reflector_range (m, set from the range filter)
+        self.reflector_range = (1.0, 15.0)
+        self._changed, self._changed_gen = {}, None
         self.offset_s = offset_s
         self.view = dict(mode="top", range_m=40.0, color="height", near_m=0.5, version=0, aspect=1.0, px=500)
         self.view.update(view or {})
@@ -659,11 +665,12 @@ class LidarSource(Source):
             except Exception as exc:            # detection must never stop the replay
                 self.error = f"lidar detection: {exc}"
         p, filled = self._fill_gap(sweep)
-        n_all, keep = len(p), None
+        n_all, keep, reflector = len(p), None, None
         if self.use_background and self.bg_vox is not None:     # only returns the background did not have
             from perception.core.reflector import new_points
             keep = new_points(p, self.bg_vox, near_m=max(0.05, float(view["near_m"])))
             p = p[keep]
+            reflector = self._reflector(sweep[0], p)
         rgb, extent, shown = render_lidar(p, view, None if det is None else det["ground_z"],
                                           grow=0 if keep is None else 2)
         # Raw points for the 3D view: valid returns only (the RS-Fairy fills
@@ -682,7 +689,21 @@ class LidarSource(Source):
                            None if det is None else det["ground_z"])
         return {"t": sweep[0], "rgb": rgb, "n_shown": shown, "ext": extent, "mode": view["mode"],
                 "version": view["version"], "det": det, "filled": filled,
-                "background": None if keep is None else (int(keep.sum()), n_all)}
+                "background": None if keep is None else (int(keep.sum()), n_all), "reflector": reflector}
+
+    def _reflector(self, t: float, changed: np.ndarray):
+        """The reflector in the changed returns of this sweep and the ones before it (~1 s)."""
+        from perception.core.reflector import lidar_reflector_from_new
+        if self._changed_gen != self.clock.seek_gen:
+            self._changed, self._changed_gen = {}, self.clock.seek_gen
+        self._changed[t] = changed[:, :5]
+        for k in [k for k in self._changed if k > t or k < t - 1.5]:
+            del self._changed[k]                       # a seek back, or older than the window
+        recent = [self._changed[k] for k in sorted(self._changed)[-self.REFLECTOR_SWEEPS:]]
+        lo, hi = self.reflector_range
+        res = lidar_reflector_from_new(recent, lo, hi)
+        res.pop("points", None)
+        return res
 
     GAP_AZ = (-30.0, 3.0)       # LiDAR-frame azimuth window (deg, + left) around the sector the RS-Fairy skips
 

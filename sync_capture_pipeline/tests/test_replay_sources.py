@@ -67,3 +67,4 @@ def test_lidar_source_publishes():
         clock.pause()
     assert item["rgb"].ndim == 3 and item["rgb"].shape[2] == 3
     assert item["det"]["objects"].ndim == 2
+

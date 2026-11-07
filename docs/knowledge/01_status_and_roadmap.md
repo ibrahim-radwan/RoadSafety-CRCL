@@ -233,6 +233,9 @@ What the baseline showed:
       (2026-11-07): `--background` (empty-scene recording subtracted:
       radar coherently per channel, LiDAR new returns only; the reflector
       is `S1` with its azimuth refined; key b; see `replay/README.md`);
+      `--calibration` (preset, sibling `background` found by itself, the
+      reflector read out in both sensors with radar − LiDAR: −1.9° at 5
+      and 8 m on 2026-11-03);
     - radar elevation (the elevated TX positions);
     - the inter-chip phase of the other firmware variants.
   - **Their manual calibration file was never used** by any code.

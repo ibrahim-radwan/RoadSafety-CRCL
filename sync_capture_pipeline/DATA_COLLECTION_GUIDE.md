@@ -160,6 +160,11 @@ aligning the sensors, for example with a corner reflector on a stand.
     or antenna calibration is needed. Radar elevation is off for now.
   - Mark the LiDAR's housing and collar before calibrating: it can turn in
     its round collar.
+- **Recorded calibration sessions (like `calibration_dataset/`):** record
+  the empty scene first, as a session named **`background`** in the same
+  folder as the positions, without moving the rig. The replay's
+  `--calibration` then finds it by itself and reads out the reflector in
+  both sensors (`replay/README.md`).
 - **Name calibration positions from the rig's point of view:** "left" means
   the vehicle's left, as seen sitting on the rig looking forward. The
   2026-11-03 `calibration_dataset` names were the other way round.

@@ -109,8 +109,39 @@ QCheckBox::indicator { width: 13px; height: 13px; }
 """
 
 
+def elided_label():
+    """A QLabel that never asks for more width than it gets: text that does not fit is shortened with
+    an ellipsis (full text in the tooltip). A plain QLabel's minimum width is its text's, so a panel
+    whose info line grew (the LiDAR's gap-fill note, once a second) widened and the splitter took the
+    space from its neighbour: the camera image shrank and grew."""
+    from PyQt5 import QtCore, QtGui, QtWidgets
+
+    class ElidedLabel(QtWidgets.QLabel):
+        def minimumSizeHint(self):
+            return QtCore.QSize(0, super().minimumSizeHint().height())
+
+        def sizeHint(self):
+            return QtCore.QSize(0, super().sizeHint().height())
+
+        def setText(self, text):
+            super().setText(text)
+            self.setToolTip(text)
+
+        def paintEvent(self, _ev):
+            painter = QtGui.QPainter(self)
+            r = self.contentsRect()
+            painter.setPen(self.palette().color(QtGui.QPalette.WindowText))
+            painter.drawText(r, int(self.alignment()),
+                             self.fontMetrics().elidedText(self.text(), QtCore.Qt.ElideLeft, r.width()))
+
+    lab = ElidedLabel()
+    lab.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+    return lab
+
+
 class Panel:
-    """A titled panel: header (title, info, maximise button) over a body widget."""
+    """A titled panel: header (title, info, maximise button) over a body widget. The info text never
+    sets the panel's width (elided_label)."""
 
     def __init__(self, key: str, title: str, body, on_max):
         from PyQt5 import QtCore, QtWidgets
@@ -126,7 +157,7 @@ class Panel:
         hl.setContentsMargins(8, 3, 4, 3)
         self.title = QtWidgets.QLabel(title)
         self.title.setObjectName("panelTitle")
-        self.info = QtWidgets.QLabel()
+        self.info = elided_label()
         self.info.setObjectName("panelInfo")
         self.info.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         self.btn = QtWidgets.QToolButton()
@@ -134,8 +165,7 @@ class Panel:
         self.btn.setToolTip("maximise / restore (double-click the title)")
         self.btn.clicked.connect(lambda: on_max(self.key))
         hl.addWidget(self.title)
-        hl.addStretch(1)
-        hl.addWidget(self.info)
+        hl.addWidget(self.info, stretch=1)
         hl.addWidget(self.btn)
         head.mouseDoubleClickEvent = lambda _e: on_max(self.key)
         lay.addWidget(head)
@@ -162,6 +192,28 @@ def _plot(pg, xlabel=None, ylabel=None):
         p.setLabel("left", ylabel)
     p.setMenuEnabled(False)
     return w, p
+
+
+def reflector_readout(lid, rad) -> list:
+    """Objects-table rows for the corner reflector, with a background only: the LiDAR's (the persistent
+    cluster of changed returns over ~1 s, as calib_reflector.py) and the radar's (S1: the strongest
+    stationary change inside the range filter, azimuth refined across the chips), and their difference
+    radar - LiDAR in range and azimuth. Row layout as the table's (the last item is the colour)."""
+    out = []
+    lr = (lid or {}).get("reflector")
+    if lr and lr.get("found"):
+        out.append(("LiDAR", "REF", f"reflector {lr['n_per_sweep']:.0f} pts/sweep, {lr['present']:.0%} of "
+                                    f"{lr['n_sweeps']} sweeps", lr["range"], lr["az_deg"], lr["x"], lr["y"],
+                    0.0, None, None, LIDAR_C))
+    rr = (rad or {}).get("reflector")
+    if rr is not None:
+        out.append(("radar", "REF", "reflector S1" + (" refined" if rr["refined"] else ""), rr["range"], rr["az_deg"],
+                    rr["x"], rr["y"], 0.0, 0.0, rr["power_db"], RADAR_C))
+    if len(out) == 2:
+        a, b = out[1], out[0]
+        out.append(("\u0394", "REF", "radar \u2212 LiDAR", a[3] - b[3], a[4] - b[4], a[5] - b[5], a[6] - b[6],
+                    0.0, None, None, (255, 255, 255)))
+    return out
 
 
 def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, pairs: dict,
@@ -210,6 +262,14 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         tgt = pg.ScatterPlotItem(size=18, symbol="o", pen=pg.mkPen((255, 255, 255), width=2), brush=None)
         tgt.setZValue(20)
         p.addItem(tgt)
+        # the corner reflector as each sensor finds it (calibration, with a background): drawn in BOTH
+        # views, so the radar's and the LiDAR's can be compared where they lie
+        refm = {"lidar": pg.ScatterPlotItem(size=22, symbol="x", pen=pg.mkPen(LIDAR_C, width=3), brush=None),
+                "radar": pg.ScatterPlotItem(size=22, symbol="+", pen=pg.mkPen(RADAR_C, width=3), brush=None)}
+        for m_ in refm.values():
+            m_.setZValue(21)
+            p.addItem(m_)
+        p._refm = refm
         return w, p, img, fov, tgt
 
     if "camera" in sensors:
@@ -225,7 +285,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
     if "lidar" in sensors:
         w, p, img, fov, tgt = bev_plot()
         boxes = {c: p.plot([], [], pen=pg.mkPen(CLASS_COLOURS[c], width=1.5), connect="finite") for c in CLASSES}
-        items["lidar"] = dict(plot=p, img=img, fov=fov, tgt=tgt, boxes=boxes, labels=[], widget=w)
+        items["lidar"] = dict(plot=p, img=img, fov=fov, tgt=tgt, boxes=boxes, labels=[], widget=w, refm=p._refm)
         panels["lidar"] = Panel("lidar", "LiDAR", w, toggle_max)
         top.addWidget(panels["lidar"].frame)
         try:
@@ -257,7 +317,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         for it in (dets, ghosts, rpts, acc, stat, trk):
             p.addItem(it)
         items["radar_bev"] = dict(plot=p, img=img, fov=fov, tgt=tgt, dets=dets, ghosts=ghosts, pts=rpts, trk=trk,
-                                  acc=acc, static=stat, labels=[], widget=w)
+                                  acc=acc, static=stat, labels=[], widget=w, refm=p._refm)
         panels["radar_bev"] = Panel("radar_bev", "Radar BEV", w, toggle_max)
         bottom.addWidget(panels["radar_bev"].frame)
         w, p = _plot(pg, "radial velocity (m/s, + = receding)", "range (m)")
@@ -764,6 +824,12 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 sa = sa[sa[:, RC["ghost"]] == 0] if sa is not None and len(sa) else np.zeros((0, 11), np.float32)
                 sa = sa[in_gate(sa[:, RC["range"]])]
                 state["radar_static"] = sa[np.argsort(-sa[:, RC["power_db"]])][:N_STATIC_ROWS]
+                s1 = state["radar_static"][0] if len(state["radar_static"]) and rad.get("background") \
+                    and not rctl["moving"].isChecked() else None
+                state["radar_reflector"] = None if s1 is None else dict(
+                    range=float(s1[RC["range"]]), az_deg=float(s1[RC["az_deg"]]), x=float(s1[RC["x"]]),
+                    y=float(s1[RC["y"]]), power_db=float(s1[RC["power_db"]]),
+                    refined=bool(len(s1) > len(RC) and s1[-1] > 0))
                 state["radar_static_n"] = int(rad.get("static_avg_n") or 0)
                 bev = rad["bev"]
                 fin = np.isfinite(bev)
@@ -857,6 +923,24 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                                      float(d_[RC["az_deg"]]), float(d_[RC["x"]]), float(d_[RC["y"]]), 0.0, 0.0,
                                      float(d_[RC["power_db"]]), RADAR_C))
 
+        # the corner reflector in both sensors (calibration sessions, with a background)
+        if rad is not None:
+            rad = dict(rad, reflector=state.get("radar_reflector") if rctl.get("static") is not None
+                       and rctl["static"].isChecked() else None)
+        ref_rows = reflector_readout(lid if (lid or {}).get("background") else None, rad)
+        rows.extend(ref_rows)
+        for key_ in ("lidar", "radar_bev"):
+            if key_ in items:
+                for sen_, m_ in items[key_]["refm"].items():
+                    r_ = next((r for r in ref_rows if r[0] == {"lidar": "LiDAR", "radar": "radar"}[sen_]), None)
+                    m_.setData([] if r_ is None else [r_[6]], [] if r_ is None else [r_[5]])
+        d_ = next((r for r in ref_rows if r[0] == "\u0394"), None)
+        if d_ is not None:
+            lines.append(f"<b>reflector</b>: radar \u2212 LiDAR {d_[3]:+.2f} m, {d_[4]:+.1f}\u00b0")
+        if "lidar" in srcs:                    # the LiDAR reflector is searched inside the range filter
+            lo_, hi_ = gate["lo"].value(), gate["hi"].value()
+            srcs["lidar"].reflector_range = (max(lo_, 0.5), hi_ if hi_ < RANGE_MAX else 15.0)
+
         # 3D
         if "lidar3d" in items and items["lidar3d"].widget.isVisible() and "lidar" in srcs:
             v3 = items["lidar3d"]
@@ -882,7 +966,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         # objects table (refresh ~5 times/s)
         if now - state.get("table_t", 0) > 0.2:
             state["table_t"] = now
-            rows.sort(key=lambda r_: r_[3])
+            rows.sort(key=lambda r_: (r_[1] != "REF", r_[3]))            # the reflector rows first
             table.setRowCount(len(rows))
             for i_, (sen, tid, cls, rng, az, x, y, spd, vr, db, col) in enumerate(rows):
                 vals = [sen, tid, cls, f"{rng:5.2f}", f"{az:+5.1f}", f"{x:5.2f}", f"{y:+5.2f}", f"{spd:4.1f}",
@@ -895,7 +979,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     item.setText(v_)
                     item.setForeground(QtGui.QColor(*col) if j_ == 0 else QtGui.QColor(212, 215, 221))
             n_st = sum(r_[1].startswith("S") for r_ in rows)
-            panels["objects"].set(None, f"{len(rows) - n_st} confirmed tracks" + (f" + {n_st} stationary" if n_st else ""))
+            n_ref = sum(r_[1] == "REF" for r_ in rows)
+            panels["objects"].set(None, f"{len(rows) - n_st - n_ref} confirmed tracks" +
+                                  (f" + {n_st} stationary" if n_st else "") + (" + reflector" if n_ref else ""))
 
         # info line
         if radar_pts is not None:
@@ -976,6 +1062,10 @@ def main() -> int:
     ap.add_argument("--no-rx-phase", action="store_true",
                     help="radar, team layout: without the in-situ RX phase correction (calibration/radar_rx_phase.json)")
     ap.add_argument("--no-detect", action="store_true", help="LiDAR: no object detection (display only)")
+    ap.add_argument("--calibration", action="store_true",
+                    help="calibration session preset: the stationary scene and reflectors (--radar-all "
+                         "--radar-static), the sibling 'background' session as --background if there is one, "
+                         "and the corner reflector read out in both sensors")
     ap.add_argument("--background", type=Path,
                     help="an empty-scene session or live-view capture (Save background) of the SAME rig position: "
                          "radar subtracted coherently, LiDAR only the changed returns (b toggles)")
@@ -986,6 +1076,15 @@ def main() -> int:
     a = ap.parse_args()
 
     s = a.session
+    if a.calibration:
+        a.radar_all = a.radar_static = True
+        if a.background is None:
+            cand = s.parent / "background"
+            if cand.resolve() != s.resolve() and (cand / "sync").is_dir():
+                a.background = cand
+                print(f"--calibration: background {cand}")
+            else:
+                print(f"--calibration: no {cand} with sync/: give --background; the reflector readout needs one")
     if not (s / "sync").is_dir():
         raise SystemExit(f"{s}/sync missing - run: python align_session.py --session {s}")
     sensors = [x.strip() for x in a.sensors.split(",") if x.strip()]

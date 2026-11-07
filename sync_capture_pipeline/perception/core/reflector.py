@@ -11,7 +11,8 @@ LiDAR (points N x >= 5: x, y, z, range, intensity, ...; any frame, as long as th
 the same frame)
     background_voxels(sweeps)      voxels (VOX m) occupied in any background sweep, dilated by one
     new_points(pts, ref)           mask of the returns in voxels the background did not have
-    lidar_reflector(sweeps, ref)   the reflector: new returns of all sweeps in CELL m cells; the
+    lidar_reflector(sweeps, ref)   the reflector (lidar_reflector_from_new: from returns already
+                                   found new): new returns of all sweeps in CELL m cells; the
                                    cell group with the most returns that is present in at least
                                    MIN_PRESENT of the sweeps wins (people move, the reflector does
                                    not). Its points are the new returns within GROUP_M of its centre.
@@ -82,12 +83,15 @@ def lidar_reflector(sweeps: list, ref: np.ndarray, r_lo: float = 1.0, r_hi: floa
     found, x, y, z (median of its points), range, az_deg (+ left), sd_xy (m, of the per-sweep
     centroids), n_per_sweep (median), present (share of sweeps with >= 1 point), n_sweeps, and
     points: list (per sweep) of the reflector's points (rows of the input). Not found: found False."""
-    news = []
-    for p in sweeps:
-        m = new_points(p, ref)
-        q = p[m]
-        q = q[_in_window(q[:, :2], r_lo, r_hi, fov_deg) & (q[:, 2] >= z_lo) & (q[:, 2] <= z_hi)]
-        news.append(q)
+    return lidar_reflector_from_new([p[new_points(p, ref)] for p in sweeps], r_lo, r_hi, fov_deg, z_lo, z_hi)
+
+
+def lidar_reflector_from_new(changed: list, r_lo: float = 1.0, r_hi: float = 15.0, fov_deg: float = 70.0,
+                             z_lo: float = -3.0, z_hi: float = 3.0) -> dict:
+    """lidar_reflector from each sweep's returns already found new against the background (e.g. the
+    replay's background mask): the same window, cells, persistence rule and result."""
+    news = [q[_in_window(q[:, :2], r_lo, r_hi, fov_deg) & (q[:, 2] >= z_lo) & (q[:, 2] <= z_hi)] for q in changed]
+    sweeps = changed
     n = len(sweeps)
     res = {"found": False, "n_sweeps": n, "points": [np.zeros((0, sweeps[0].shape[1] if n else 6), np.float32)] * n}
     allq = [q for q in news if len(q)]

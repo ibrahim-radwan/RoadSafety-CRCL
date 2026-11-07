@@ -133,3 +133,27 @@ def test_replay_fill_gap_only_fills_a_short_sweep():
     assert 0.95 * missing <= n <= missing                       # (cells half-empty at the gap's edges stay)
     fake.sweeps.append((0.1, short))
     assert fill((0.2, full))[1] == 0                             # a full sweep after a short one: untouched
+
+
+def test_reflector_from_new_matches_and_replay_readout():
+    """lidar_reflector_from_new (the replay's path: returns already found new) gives what lidar_reflector
+    gives; the replay's readout rows hold both sensors' reflector and radar - LiDAR."""
+    rng = np.random.default_rng(3)
+    bg = [np.c_[rng.uniform(1, 20, (4000, 2)) * [1, 0.5], rng.uniform(-1, 1, 4000)] for _ in range(3)]
+    bg = [np.c_[b, np.linalg.norm(b, axis=1), np.full(len(b), 30.0)].astype(np.float32) for b in bg]
+    ref = rf.background_voxels(bg)
+    sweeps = []
+    for k in range(6):
+        refl = np.c_[5.0 + rng.normal(0, 0.03, 8), -1.8 + rng.normal(0, 0.03, 8), rng.normal(-0.3, 0.05, 8)]
+        refl = np.c_[refl, np.linalg.norm(refl, axis=1), np.full(8, 80.0)].astype(np.float32)
+        sweeps.append(np.r_[bg[k % 3], refl])
+    a = rf.lidar_reflector(sweeps, ref, 3, 7)
+    b = rf.lidar_reflector_from_new([p[rf.new_points(p, ref)] for p in sweeps], 3, 7)
+    assert a["found"] and b["found"] and abs(a["x"] - b["x"]) < 1e-6 and abs(a["y"] - b["y"]) < 1e-6
+    sys.path.insert(0, str(PIPELINE / "replay"))
+    from replay_session import reflector_readout
+    rad = {"reflector": dict(range=5.45, az_deg=-21.0, x=5.09, y=-1.95, power_db=140.0, refined=True)}
+    rows = reflector_readout({"reflector": b, "background": (8, 100)}, rad)
+    assert [r[0] for r in rows] == ["LiDAR", "radar", "Δ"]
+    assert abs(rows[2][3] - (5.45 - b["range"])) < 1e-9 and abs(rows[2][4] - (-21.0 - b["az_deg"])) < 1e-9
+    assert reflector_readout(None, rad)[0][0] == "radar" and len(reflector_readout(None, None)) == 0

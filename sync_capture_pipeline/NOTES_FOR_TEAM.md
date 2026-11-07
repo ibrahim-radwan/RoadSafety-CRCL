@@ -601,6 +601,17 @@ blinked.**
       --range-filter 3 7 --lidar-range 10
   ```
 
+  Shorter, with the reflector read out in both sensors (`--calibration`
+  finds the sibling `background` session): the objects table's `REF` rows
+  give the LiDAR's and the radar's reflector and radar − LiDAR, and both
+  are marked in both bird's-eye views. On `5m_150_left`: +0.14 m, −1.9°;
+  on `8m_1m_left`: +0.25 m, −1.9°.
+
+  ```bash
+  python replay/replay_session.py --session calibration_dataset/5m_150_left \
+      --calibration --range-filter 3 7 --lidar-range 10
+  ```
+
 **7. The mounting photos.**
 
 - **Alignment:** camera, LiDAR and radar are stacked on the stem's centre
