@@ -144,7 +144,8 @@ What the baseline showed:
   They are on the team's drive at `/media/ibrahim/94DD-7E88/`:
   `calibration_dataset/` (16 sessions) and `run_20261103_1600-Lidar-AR1`.
   All are aligned; AR1 also has its report and perception. Findings are in
-  `NOTES_FOR_TEAM.md` ("Your corner-reflector sessions"):
+  `NOTES_FOR_TEAM.md` before its 2026-11-07 rewrite (git history, "Your
+  corner-reflector sessions"):
   - The scene names are given from the reflector's side: `*_left` is the
     vehicle's right.
   - On this mounting the LiDAR is yawed **+37.2°** (to the left) from the
@@ -187,7 +188,8 @@ What the baseline showed:
       that the session's files are unchanged.
 
 - **Team's follow-up questions of 2026-11-06 (answered 2026-11-07,**
-  `NOTES_FOR_TEAM.md` "Your follow-up questions"):
+  the reply sent: `docs/team_messages/2026-11-07_reply.md`; current state in
+  `NOTES_FOR_TEAM.md`):
   - **Yaw revised to 37.2°, referenced to the camera.** All 17 sessions on
     the team's drive were re-aligned; AR1's report and perception were
     rebuilt.

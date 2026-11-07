@@ -90,6 +90,7 @@ flashing/boot/                  TI UART flashing tools + flash_variant.sh (third
 utils/                          earlier DCA1000 investigation scripts
 environment/rel_1_py_3_8.yml    conda environment (vendor wheels installed separately)
 docs/                           knowledge base + new-board setup
+  team_messages/                messages sent to the research team, as sent (NOTES_FOR_TEAM.md = current state)
 ```
 
 ## Hard rules (summary; full list in 09_working_practices.md)

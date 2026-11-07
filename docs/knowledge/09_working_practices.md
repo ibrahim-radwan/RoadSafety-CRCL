@@ -19,6 +19,14 @@
     paths do not affect them.
   - Keep what they rely on documented: output formats, conventions, and the
     findings in `NOTES_FOR_TEAM.md`.
+  - **`NOTES_FOR_TEAM.md` is the current state, not a history** (owner,
+    2026-11-07). Write only what the team needs to act on or to process the
+    data, in line with what the owner sends them. No superseded statements
+    or in-place corrections ("revised", "was wrong"), no internal detail
+    about how we got there, nothing that invites questions without helping
+    them: replace outdated text instead of annotating it. The engineering
+    record (`docs/knowledge/`) keeps the history; git keeps old versions.
+    Messages the owner sends are kept in `docs/team_messages/`.
   - Measure every change of an algorithm against the reference sessions
     (`run_perception.py` scores) before replacing the old one.
 - **Calibration stays the team's.** Radar antenna/intrinsic calibration and

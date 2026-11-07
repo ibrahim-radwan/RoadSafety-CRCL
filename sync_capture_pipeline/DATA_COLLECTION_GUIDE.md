@@ -156,7 +156,7 @@ aligning the sensors, for example with a corner reflector on a stand.
   4. Afterwards, on a processing machine:
      `python calib_reflector.py --set /mnt/sdcard/sessions/calibration/<set>`.
   - Radar azimuth is good off boresight since the measured array layout
-    (2026-11-07, `NOTES_FOR_TEAM.md` follow-up item 1): no radar recording
+    (2026-11-07, `NOTES_FOR_TEAM.md`, question 1): no radar recording
     or antenna calibration is needed. Radar elevation is off for now.
   - Mark the LiDAR's housing and collar before calibrating: it can turn in
     its round collar.
@@ -241,8 +241,9 @@ repeat Stage 3:
    Accept the result when the three sessions agree. Slow or narrow walking
    gives wrong offsets.
 
-**Spatial calibration** (where the sensors sit relative to each other) and
-**radar antenna calibration** are done by the end-user team.
+**Spatial calibration** (where the sensors sit relative to each other) is
+done by the end-user team, with a corner reflector (section 2, calibration
+capture). The radar needs no antenna calibration.
 
 ---
 

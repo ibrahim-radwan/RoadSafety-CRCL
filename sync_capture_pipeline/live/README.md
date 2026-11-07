@@ -68,7 +68,8 @@ range window you set on the page:
   `background`):
   - LiDAR: the reflector at 3 and 5 m is picked within 0.1 m of its true
     position. At 8 m it has too few returns.
-  - Radar: right on boresight; off-axis limited by the azimuth calibration.
+  - Radar: within 1° of the camera at every position at 2–5 m, after the
+    radar's mounting offset (2026-11-07).
 
 **Calibration capture** (2026-11-07; the team's request: save
 synchronised radar and LiDAR frames for the empty background and each
