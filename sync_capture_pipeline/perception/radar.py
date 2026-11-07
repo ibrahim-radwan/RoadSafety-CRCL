@@ -5,26 +5,27 @@ team's process_frame.
 One raw frame -> display products (range-Doppler, range-azimuth) and a
 detection list, all on the GPU in a few milliseconds:
 
-    1. calibration (the .cfg antennaCalibParams, times an optional in-situ
-       per-RX phase correction, see below), range FFT (Hann)
+    1. range FFT (Hann); measured layout: the slave chip's phase (a constant
+       plus a ramp in range, calibration/radar_array.json) removed
     2. MTI (mean over chirp loops removed) and Doppler FFT (Hann) of every
        virtual channel, then TDM-MIMO Doppler compensation: a moving target's
        phase advances between the 6 TX slots of a loop, by 2 pi f_d t_slot
        per slot; each channel is rotated back by its TX slot
-    3. virtual arrays: 38 uniform azimuth positions (overlaps averaged) and the
-       8-channel elevation row (TX5), paired with the azimuth row at shared
-       positions
-    4. azimuth FFT of every range-Doppler cell (256 bins, uniform in sin az);
-       detection map = the angle-maximum power of each cell (coherent gain of
-       the whole aperture, ~16 dB over a single channel)
+    3. virtual array (ARRAY LAYOUT below): measured, two groups of 11 uniform
+       positions, one per chip (the 4 azimuth chirps x 4 RX, overlaps averaged)
+    4. azimuth FFT of every range-Doppler cell and group (256 bins, uniform in
+       sin az, Hann); the groups' powers add (incoherent: no fringes from the
+       gap between them, sidelobes ~20 dB down); detection map = the
+       angle-maximum power of each cell
     5. CA-CFAR in dB on that map (circular in Doppler), zero-Doppler band
        excluded, 3x3 local maxima kept
     6. per detection: the strongest azimuth peak (max_peaks > 1 adds peaks
-       within peak_db; off by default: with the current calibration the beam
-       still has a split lobe ~13 deg away, ~4 dB down, which would become a
-       second, false target), parabolic interpolation in sin az, range
-       interpolation,
-       elevation from the top/bottom pair phase (UNVERIFIED geometry)
+       within peak_db; off by default), parabolic interpolation in sin az, then
+       (measured layout) the angle refined coherently across both chips: the
+       fringe nearest the peak, when it beats the others by refine_gate_db
+       (_refine); range interpolation; elevation: 0 with the measured layout
+       (its elevated TX positions are not measured yet), the top/bottom pair
+       phase with the team layout (UNVERIFIED geometry)
     7. multipath ghosts flagged (column "ghost" = 1, see flag_multipath): a
        weaker detection at the azimuth of a stronger one, either at n x its
        range with n x its radial velocity (n = 2, 3; radar -> target -> rig
@@ -43,11 +44,19 @@ docs/knowledge/03_radar_firmware_and_dca.md):
     * Radial velocity: the team's Doppler axis (cfg.doppler_axis); positive =
       receding (99% sign agreement with the LiDAR range rate).
 
-In-situ RX phase correction (calibration/radar_rx_phase.json, per firmware
-variant, from estimate_rx_phase.py): the .cfg calibration was measured with
-the old HPF setting and leaves a stable per-RX phase error (up to ~70 deg) on
-the v2 images, which splits the azimuth beam. It is PROVISIONAL: replace it
-with the team's recalibration when it arrives (pass rx_phase_deg=None).
+ARRAY LAYOUT (layout=, 2026-11-07; docs/knowledge/03_radar_firmware_and_dca.md,
+"Off-axis azimuth"):
+    "measured" (default)  calibration/radar_array.json, from estimate_array_layout.py:
+                          chirps 0, 1, 2, 5 are azimuth TX at 4, 2, 0, 7 (lambda/2) in each
+                          chip's group, chirps 3 and 4 are elevated; RX 0-3 (master) and 4-7
+                          (slave) 19 apart. No .cfg antennaCalibParams, no in-situ phase: they
+                          made it worse. On the 2026-11-03 corner reflector: 0.4 deg spread
+                          against the camera (refined coherently: ~0.1), none off by > 1 deg
+    "team"                radar_config.py's table (TX at 0, 4, 7, 11, 15, chirp 5 elevated),
+                          the .cfg calibration and, if given, the in-situ phase
+                          (calibration/radar_rx_phase.json, estimate_rx_phase.py). It does not
+                          match the board: a split beam and 5-16 deg errors off boresight.
+                          Kept for comparisons and the old chain (radar_chain.py)
 
 Output columns of `detections` (float32, N x len(DET_COLS)): see DET_COLS.
 """
@@ -58,7 +67,8 @@ from pathlib import Path
 import numpy as np
 
 from . import radar_dsp as dsp
-from .core.calibration import RX_PHASE_FILE, apply_phase, load_radar_config, rx_phase_for  # noqa: F401
+from .core.calibration import (ARRAY_FILE, RX_PHASE_FILE, apply_phase, array_for, array_layout,  # noqa: F401
+                               load_radar_config, rx_phase_for, variant_of_cfg)
 from .core.conventions import AZIMUTH_SIGN
 from .core.gpu import GPU_LOCK
 
@@ -82,7 +92,9 @@ class RadarDetector:
                  fov_deg: float = 70.0, peak_db: float = 6.0, max_peaks: int = 1, zero_doppler_bins: int = 1,
                  max_detections: int = 512, rx_phase_deg=None, doppler_comp: bool = True,
                  static_guard=(2, 2), static_train=(4, 8), static_db: float = 15.0, static_sidelobe_db: float = 10.0,
-                 static_bins: int = 1, static_max_range_m: float = 60.0, cuda_graph: bool = True):
+                 static_bins: int = 1, static_max_range_m: float = 60.0, cuda_graph: bool = True,
+                 layout: str = "measured", cfg_calibration: bool = None, inter_chip: bool = True,
+                 refine_gate_db: float = 1.0):
         import torch
         self.torch = torch
         cfg, corr = load_radar_config(cfg_path)
@@ -90,26 +102,72 @@ class RadarDetector:
         self.dev = torch.device(device if torch.cuda.is_available() else "cpu")
         self.n_tx, self.n_rx, self.n_loops, self.n_s = cfg.num_tx, cfg.num_rx, cfg.num_loops, cfg.num_samples
         self.iq_swap = bool(cfg.iq_swap)
+        self.variant = variant_of_cfg(cfg_path)
+        lay = array_layout() if layout == "measured" else None
+        if layout == "measured" and lay is None:
+            raise FileNotFoundError(f"layout='measured' needs a layout in {ARRAY_FILE}")
+        if layout not in ("measured", "team"):
+            raise ValueError(f"layout {layout!r}: 'measured' or 'team'")
+        self.layout = layout
+        # the .cfg antenna calibration belongs to the team layout (it makes the measured one worse)
+        if cfg_calibration is None:
+            cfg_calibration = layout == "team"
+        if not cfg_calibration:
+            corr = np.ones_like(corr)
         corr = apply_phase(corr, rx_phase_deg)   # in-situ correction: per RX (8) or per channel (6 x 8)
         self.rx_phase_deg = None if rx_phase_deg is None else np.asarray(rx_phase_deg, float)
         self.corr = torch.as_tensor(corr, dtype=torch.complex64, device=self.dev)
-        ch_az, ch_el, _ = cfg.build_channel_table()
-        self.n_pos = n_pos = max(c["az"] for c in ch_az) + 1
-        self.ch_tx = torch.tensor([c["tx"] for c in ch_az], device=self.dev)
-        self.ch_rx = torch.tensor([c["rx"] for c in ch_az], device=self.dev)
-        self.ch_pos_np = np.array([c["az"] for c in ch_az], float)              # aperture position per channel
-        # elevation row: top channel and the azimuth position it shares with the bottom row
-        self.el_tx = torch.tensor([c["tx"] for c in ch_el], device=self.dev)
-        self.el_rx = torch.tensor([c["rx"] for c in ch_el], device=self.dev)
-        self.el_pos = torch.tensor([c["az"] for c in ch_el], device=self.dev)   # = index in the uniform array
-        self.d_el = float(cfg.d_el_lambda)
-        self.win_r = dsp.window("hann", self.n_s, device=self.dev)
-        self.win_d = dsp.window("hann", self.n_loops, device=self.dev)
-        self.win_a = dsp.window("hann", n_pos, device=self.dev)
-        self.n_az = int(cfg.az_fft_size)
         self.range_res = float(cfg.range_res_m)
         self.n_range = int(cfg.n_range)
         self.range_axis = np.arange(self.n_range) * self.range_res
+        self.chip_corr = None                    # [rx, range] inter-chip phase, applied after the range FFT
+        if lay is None:
+            ch_az, ch_el, _ = cfg.build_channel_table()
+            self.n_pos = n_pos = max(c["az"] for c in ch_az) + 1
+            self.ch_tx = torch.tensor([c["tx"] for c in ch_az], device=self.dev)
+            self.ch_rx = torch.tensor([c["rx"] for c in ch_az], device=self.dev)
+            self.ch_pos_np = np.array([c["az"] for c in ch_az], float)          # index in the uniform array
+            self.ch_phys_np = self.ch_pos_np.copy()                             # aperture position, lambda/2
+            # elevation row: top channel and the azimuth position it shares with the bottom row
+            self.el_tx = torch.tensor([c["tx"] for c in ch_el], device=self.dev)
+            self.el_rx = torch.tensor([c["rx"] for c in ch_el], device=self.dev)
+            self.el_pos = torch.tensor([c["az"] for c in ch_el], device=self.dev)
+            self.has_el = len(ch_el) > 0
+            self.n_groups, self.group = 1, n_pos
+            self.win_a = dsp.window("hann", n_pos, device=self.dev)
+            self.coherent, self.chip_offset = False, 0
+        else:
+            # measured: each chip's channels form one contiguous group of `group` positions; the two
+            # groups are chip_offset apart (a gap between them). Beamformed per group, the groups'
+            # powers add (incoherent: no fringes from the gap); the angle is then refined coherently
+            # across both (see _cell_rows). Elevated TX (None) are not in the azimuth row.
+            txp, rxc, rxp = lay["chirp_tx_pos"], lay["rx_chip"], lay["rx_pos"]
+            chans = [(t, r) for t in range(self.n_tx) if txp[t] is not None for r in range(self.n_rx)]
+            self.group = G = max(p for p in txp if p is not None) + max(rxp) + 1
+            self.n_groups = int(max(rxc)) + 1
+            idx = np.array([rxc[r] * G + txp[t] + rxp[r] for t, r in chans], float)
+            if len(np.unique(idx)) != self.n_groups * G:
+                raise ValueError(f"{ARRAY_FILE}: the groups are not contiguous ({len(np.unique(idx))} positions)")
+            self.chip_offset = int(lay["chip_offset"])
+            self.ch_tx = torch.tensor([t for t, _ in chans], device=self.dev)
+            self.ch_rx = torch.tensor([r for _, r in chans], device=self.dev)
+            self.ch_pos_np = idx                                                 # index in the [group x position] array
+            self.ch_phys_np = np.array([rxc[r] * self.chip_offset + txp[t] + rxp[r] for t, r in chans], float)
+            self.n_pos = n_pos = self.n_groups * G
+            self.has_el = False                                                  # elevated TX positions not measured yet
+            self.el_tx = self.el_rx = self.el_pos = None
+            self.win_a = torch.as_tensor(np.hanning(G + 2)[1:-1].astype(np.float32), device=self.dev)
+            A = array_for(self.variant) if inter_chip else None
+            self.coherent = A is not None and self.n_groups == 2
+            if self.coherent:
+                ph = np.zeros((self.n_rx, self.n_range))
+                ph[np.asarray(rxc) == 1] = (float(A["slave_phase_rad_per_m"]) * self.range_axis
+                                            + np.radians(float(A["slave_phase_deg"])))[None, :]
+                self.chip_corr = torch.as_tensor(np.exp(-1j * ph), dtype=torch.complex64, device=self.dev)
+        self.d_el = float(cfg.d_el_lambda)
+        self.win_r = dsp.window("hann", self.n_s, device=self.dev)
+        self.win_d = dsp.window("hann", self.n_loops, device=self.dev)
+        self.n_az = int(cfg.az_fft_size)
         self.az_axis = np.asarray(cfg.az_axis_deg)               # processing azimuth (+ = right), ascending
         self.sin_axis = np.linspace(-1.0, 1.0, self.n_az, endpoint=False)
         self.dop_axis = np.asarray(cfg.doppler_axis)
@@ -143,6 +201,15 @@ class RadarDetector:
         self.dop_ok = torch.as_tensor(dmask, device=self.dev)
         self.sin_t = torch.as_tensor(self.sin_axis, dtype=torch.float32, device=self.dev)
         self.fov_ok = self.sin_t.abs() <= self.fov_sin
+        # coherent refinement across the two chips (measured layout): the gap makes fringes 2 / D apart
+        # in sin (D = chip_offset); the fringe nearest the incoherent peak (within 1 / D) is taken when
+        # it beats every other fringe within 3 / D by refine_gate_db, else the incoherent angle stays.
+        self.refine_gate_db = float(refine_gate_db)
+        if self.coherent:
+            step = 2.0 / self.n_az
+            self.ref_near = int(round(1.0 / self.chip_offset / step))
+            self.ref_offs = torch.arange(-3 * self.ref_near, 3 * self.ref_near + 1, device=self.dev)
+            self.chip_steer = torch.exp(-1j * np.pi * self.chip_offset * self.sin_t.double()).to(torch.complex64)
         self.static_guard, self.static_train = tuple(static_guard), tuple(static_train)
         self.static_db, self.static_sidelobe_db, self.static_bins = float(static_db), float(static_sidelobe_db), int(static_bins)
         self.static_range_ok = self.range_ok & torch.as_tensor(self.range_axis <= static_max_range_m, device=self.dev)
@@ -174,7 +241,17 @@ class RadarDetector:
         x = x.view(self.n_loops, self.n_tx, self.n_rx, self.n_s, 2).float()
         iq = torch.complex(x[..., 1], x[..., 0]) if self.iq_swap else torch.complex(x[..., 0], x[..., 1])
         cube = iq.permute(1, 0, 2, 3) * self.corr[:, None, :, None]       # TDM: chirp = loop * n_tx + tx
-        return dsp.range_fft(cube, self.win_r, self.n_s)[..., :self.n_range]
+        rng = dsp.range_fft(cube, self.win_r, self.n_s)[..., :self.n_range]
+        if self.chip_corr is not None:                                   # the slave's phase: constant + range ramp
+            rng = rng * self.chip_corr[None, None]
+        return rng
+
+    def _beam(self, x):
+        """Measured layout: virtual channels [..., channel] -> (power [..., n_az] linear, the groups'
+        powers added, and the groups' spectra [..., groups, n_az] complex)."""
+        g, _ = dsp.unique_aperture(x, self.ch_pos_np)                    # [..., groups * group]
+        B = dsp.az_spectrum(g.reshape(g.shape[:-1] + (self.n_groups, self.group)), self.win_a, self.n_az)
+        return (B.real ** 2 + B.imag ** 2).sum(dim=-2), B, g
 
     def _front(self, x, moving_only: bool, detect: bool, static: bool) -> dict:
         """Everything of one frame with fixed shapes, from the raw frame x (int16, on the device)
@@ -184,16 +261,22 @@ class RadarDetector:
         F = torch.nn.functional
         rng = self._range_cube(x)
         virt = dsp.virtual_array(rng, self.ch_tx, self.ch_rx)                   # [loop, range, ch]
-        el = dsp.virtual_array(rng, self.el_tx, self.el_rx)                     # [loop, range, 8]
         dch = dsp.doppler_fft(virt, self.win_d, self.n_loops, remove_clutter=moving_only)    # [dop, range, ch]
-        el_dop = dsp.doppler_fft(el, self.win_d, self.n_loops, remove_clutter=moving_only)   # [dop, range, 8]
         if self.doppler_comp:
             dch = dch * self.tdm_comp[self.ch_tx].T[:, None, :]
-            el_dop = el_dop * self.tdm_comp[self.el_tx].T[:, None, :]
-        dop, _ = dsp.unique_aperture(dch, self.ch_pos_np)                      # uniform array [dop, range, pos]
+        el_dop = grp = None
+        if self.has_el:
+            el = dsp.virtual_array(rng, self.el_tx, self.el_rx)                 # [loop, range, 8]
+            el_dop = dsp.doppler_fft(el, self.win_d, self.n_loops, remove_clutter=moving_only)   # [dop, range, 8]
+            if self.doppler_comp:
+                el_dop = el_dop * self.tdm_comp[self.el_tx].T[:, None, :]
+        if self.layout == "team":
+            dop, _ = dsp.unique_aperture(dch, self.ch_pos_np)                  # uniform array [dop, range, pos]
+            az = dsp.az_spectrum(dop, self.win_a, self.n_az)                    # [dop, range, az]
+            p_az = az.real ** 2 + az.imag ** 2
+        else:
+            p_az, grp, dop = self._beam(dch)                                     # [dop, range, az], [.., groups, az]
         rd = dsp.power_db(dop, dim=-1)                                           # [dop, range]
-        az = dsp.az_spectrum(dop, self.win_a, self.n_az)                        # [dop, range, az]
-        p_az = az.real ** 2 + az.imag ** 2
         ra = 10 * torch.log10(p_az.sum(dim=0).T + 1e-6)                          # [az, range]
         f = {"rd": rd, "ra": ra, "p_az": p_az}               # p_az: [doppler, range, az] linear power (GPU)
         if detect:
@@ -205,28 +288,74 @@ class RadarDetector:
                      # 3x3 local maxima of the detection map (circular in Doppler)
                      det_max=F.max_pool2d(F.pad(xm, (0, 0, 1, 1), mode="circular"), 3, stride=1, padding=(0, 1))[0, 0],
                      det_median=det_map.median())
-            f.update(self._cell_rows(p_az, dop, el_dop, det_map, f["det_noise"]))
+            f.update(self._cell_rows(p_az, dop, el_dop, det_map, f["det_noise"], grp))
         if static:
             b = self.static_bins
             d0 = dsp.doppler_band(virt, self.win_d, self.n_loops, b)    # = doppler_fft(...)[n/2 - b:n/2 + b + 1]
-            cube, _ = dsp.unique_aperture(d0, self.ch_pos_np)                   # [band, range, pos]
-            az0 = dsp.az_spectrum(cube, self.win_a, self.n_az)
-            m = 10 * torch.log10((az0.real ** 2 + az0.imag ** 2).sum(dim=0)[:, self.fov_sl] + 1e-6)   # [range, az_fov]
-            tr_, ta = self.static_pad
-            xs = m[None, None]
-            f.update(st_map=m, st_noise=F.conv2d(F.pad(xs, (ta, ta, tr_, tr_), mode="replicate"), self.static_kernel)[0, 0],
-                     st_max=F.max_pool2d(F.pad(xs, (1, 1, 1, 1), mode="replicate"), 3, stride=1)[0, 0],
-                     st_rowmax=m.max(dim=1, keepdim=True).values)
-            snr = m - f["st_noise"]
-            r = self.range_m_t[:, None]
-            az_w = self.st_az_w[None, :]
-            zero = torch.zeros_like(m)
-            f.update(st_snr=snr, st_rows=torch.stack(       # one DET_COLS row per range-azimuth cell
-                [r * torch.cos(torch.deg2rad(az_w)) + zero, r * torch.sin(torch.deg2rad(az_w)) + zero, zero,
-                 r + zero, az_w + zero, zero, zero, m, snr, zero], dim=-1))
+            m = 10 * torch.log10(self._static_power(d0)[:, self.fov_sl] + 1e-6)  # [range, az_fov]
+            f.update(self._static_stats(m))
         return f
 
-    def _cell_rows(self, p_az, dop, el_dop, det_map, noise) -> dict:
+    def _static_power(self, band):
+        """Azimuth power [range, n_az] (linear) of a zero-Doppler band [band, range, channel], summed
+        over the band (and, measured layout, over the chips: incoherent)."""
+        if self.layout == "team":
+            cube, _ = dsp.unique_aperture(band, self.ch_pos_np)                 # [band, range, pos]
+            az0 = dsp.az_spectrum(cube, self.win_a, self.n_az)
+            return (az0.real ** 2 + az0.imag ** 2).sum(dim=0)
+        return self._beam(band)[0].sum(dim=0)
+
+    def _static_stats(self, m):
+        """The static CFAR's maps of a [range, az_fov] dB static map m (no host sync)."""
+        torch = self.torch
+        F = torch.nn.functional
+        tr_, ta = self.static_pad
+        xs = m[None, None]
+        f = dict(st_map=m, st_noise=F.conv2d(F.pad(xs, (ta, ta, tr_, tr_), mode="replicate"), self.static_kernel)[0, 0],
+                 st_max=F.max_pool2d(F.pad(xs, (1, 1, 1, 1), mode="replicate"), 3, stride=1)[0, 0],
+                 st_rowmax=m.max(dim=1, keepdim=True).values)
+        snr = m - f["st_noise"]
+        r = self.range_m_t[:, None]
+        az_w = self.st_az_w[None, :]
+        zero = torch.zeros_like(m)
+        f.update(st_snr=snr, st_rows=torch.stack(       # one DET_COLS row per range-azimuth cell
+            [r * torch.cos(torch.deg2rad(az_w)) + zero, r * torch.sin(torch.deg2rad(az_w)) + zero, zero,
+             r + zero, az_w + zero, zero, zero, m, snr, zero], dim=-1))
+        return f
+
+    def detect_static_map(self, m, interpolate: bool = True) -> np.ndarray:
+        """Stationary reflectors of ANY static map (dB, [range, az_fov], e.g. the mean power of the
+        last frames' static_map, which is steadier than one frame): the same CFAR, local maxima,
+        sidelobe prune and multipath flag as process(static=True). With interpolate, each
+        detection's range and azimuth are refined by a parabola through its neighbours (sub-cell),
+        and x, y follow."""
+        torch = self.torch
+        with torch.no_grad():
+            m = torch.as_tensor(m, device=self.dev, dtype=torch.float32)
+            f = self._static_stats(m)
+            det = self._detect_static(f)
+            if not interpolate or not len(det):
+                return det
+            mm = m.cpu().numpy()
+        h, w = mm.shape
+        az = np.asarray(self.static_az_deg, float)
+        for row in det:
+            ri = int(round(row[C["range"]] / self.range_res))
+            ai = int(np.argmin(np.abs(az - row[C["az_deg"]])))
+            fr = fa = 0.0
+            if 0 < ri < h - 1:
+                d = mm[ri - 1, ai] - 2 * mm[ri, ai] + mm[ri + 1, ai]
+                fr = float(np.clip(0.5 * (mm[ri - 1, ai] - mm[ri + 1, ai]) / d, -0.5, 0.5)) if d < 0 else 0.0
+            if 0 < ai < w - 1:
+                d = mm[ri, ai - 1] - 2 * mm[ri, ai] + mm[ri, ai + 1]
+                fa = float(np.clip(0.5 * (mm[ri, ai - 1] - mm[ri, ai + 1]) / d, -0.5, 0.5)) if d < 0 else 0.0
+            r = (ri + fr) * self.range_res
+            a = float(np.interp(ai + fa, np.arange(w), az))
+            row[C["range"]], row[C["az_deg"]] = r, a
+            row[C["x"]], row[C["y"]] = r * np.cos(np.radians(a)), r * np.sin(np.radians(a))
+        return det
+
+    def _cell_rows(self, p_az, dop, el_dop, det_map, noise, grp=None) -> dict:
         """The moving-target detection row (DET_COLS) of EVERY range-Doppler cell and azimuth peak,
         [dop, range, max_peaks, cols], with det_ok [dop, range, max_peaks] (a real peak): elementwise,
         so a detected cell's row is what computing it for that cell alone gives, but as a few large
@@ -257,15 +386,21 @@ class RadarDetector:
         den = (y0 - 2 * top_v + y2)
         delta = torch.where(den.abs() > 1e-6, 0.5 * (y0 - y2) / den, torch.zeros_like(den)).clamp(-0.5, 0.5)
         sin_proc = (self.sin_t[top_i] + delta * (2.0 / A)).clamp(-1, 1)
+        if self.coherent and grp is not None:
+            sin_proc = self._refine(grp, top_i, sin_proc)
         # range interpolation on the detection map
         r0 = det_map[:, self.r_prev]
         r2 = det_map[:, self.r_next]
         rden = r0 - 2 * det_map + r2
         rdel = torch.where(rden.abs() > 1e-6, 0.5 * (r0 - r2) / rden, torch.zeros_like(rden)).clamp(-0.5, 0.5)
         rng_m = (self.r_idx_f[None, :] + rdel) * self.range_res                # [dop, range]
-        # elevation: phase of top x conj(bottom) over the pairs, at each range-Doppler cell (unverified)
-        phase = torch.angle((el_dop * dop[..., self.el_pos].conj()).sum(dim=-1))
-        sin_el = (phase / (2 * np.pi * self.d_el)).clamp(-1, 1)
+        # elevation: phase of top x conj(bottom) over the pairs, at each range-Doppler cell (unverified;
+        # team layout only: the measured layout's elevated TX positions are not measured yet -> 0)
+        if self.has_el:
+            phase = torch.angle((el_dop * dop[..., self.el_pos].conj()).sum(dim=-1))
+            sin_el = (phase / (2 * np.pi * self.d_el)).clamp(-1, 1)
+        else:
+            sin_el = torch.zeros_like(rng_m)
         # assemble: one row per (cell, azimuth peak)
         az_w = AZIMUTH_SIGN * torch.rad2deg(torch.asin(sin_proc))              # world azimuth, + = left
         el_d = torch.rad2deg(torch.asin(sin_el))[..., None].expand_as(az_w)
@@ -275,6 +410,38 @@ class RadarDetector:
                             r, az_w, el_d, self.dop_axis_t[:, None, None].expand_as(az_w), top_v,
                             top_v - noise[..., None], torch.zeros_like(r)], dim=-1)
         return {"det_rows": rows, "det_ok": top_v > -1e8}
+
+    def _refine(self, grp, top_i, sin_inc):
+        """Coherent angle across the two chips (measured layout), per cell and peak: beam(s) =
+        |B0(s) + B1(s) exp(-j pi D s)|^2 has fringes 2 / D apart under the incoherent peak; take the
+        fringe nearest the peak (within 1 / D bins), parabolically interpolated, when it is
+        refine_gate_db above every other fringe within 3 / D, else keep sin_inc. grp [dop, range,
+        2, az] complex, top_i [dop, range, P] incoherent peak bins, sin_inc [dop, range, P]."""
+        torch = self.torch
+        A, n = self.n_az, self.ref_near
+        P = top_i.shape[-1]
+        idx = (top_i[..., None] + self.ref_offs).clamp(0, A - 1)                 # [dop, range, P, W]
+        flat = idx.reshape(idx.shape[0], idx.shape[1], -1)
+        b0 = torch.gather(grp[..., 0, :], -1, flat).reshape(idx.shape)
+        b1 = torch.gather(grp[..., 1, :], -1, flat).reshape(idx.shape)
+        coh = (b0 + b1 * self.chip_steer[idx]).abs() ** 2
+        coh = torch.where(self.fov_ok[idx], coh, torch.zeros_like(coh))
+        near = self.ref_offs.abs() <= n                                          # [W]
+        ci = torch.where(near, coh, torch.zeros_like(coh)).argmax(dim=-1, keepdim=True)   # [dop, range, P, 1]
+        cmax = torch.gather(coh, -1, ci)
+        off_c = self.ref_offs[ci]                                                # offset of the chosen fringe
+        other = (self.ref_offs - off_c).abs() > n
+        omax = torch.where(other, coh, torch.zeros_like(coh)).max(dim=-1, keepdim=True).values
+        ok = cmax >= omax * (10 ** (self.refine_gate_db / 10))
+        W = coh.shape[-1]
+        c0 = torch.gather(coh, -1, (ci - 1).clamp(0, W - 1))
+        c2 = torch.gather(coh, -1, (ci + 1).clamp(0, W - 1))
+        y0, y1, y2 = (10 * torch.log10(v + 1e-12) for v in (c0, cmax, c2))
+        den = y0 - 2 * y1 + y2
+        dl = torch.where(den.abs() > 1e-6, 0.5 * (y0 - y2) / den, torch.zeros_like(den)).clamp(-0.5, 0.5)
+        bin_c = torch.gather(idx, -1, ci).float() + dl
+        sin_c = (-1.0 + 2.0 * bin_c / A).clamp(-1, 1)[..., 0]
+        return torch.where(ok[..., 0] & (cmax[..., 0] > 0), sin_c, sin_inc)
 
     def _graphed(self, raw: np.ndarray, key: tuple) -> dict:
         """_front(raw, *key) as a CUDA graph replay: the frame goes through a pinned staging
@@ -332,6 +499,60 @@ class RadarDetector:
             out["static_map"] = f["st_map"]
         self.last = out
         return out
+
+    def static_band(self, raw: np.ndarray):
+        """The zero-Doppler band (+-static_bins) of the virtual channels, no clutter removal:
+        complex [2 static_bins + 1, range, channel] on the device, what static_map is made of. Two
+        bands can be subtracted COHERENTLY (a position minus an empty-scene background, e.g.
+        calib_reflector.py) before static_map_of: the change is then beamformed on its own, without
+        the sidelobes of the walls around it."""
+        torch = self.torch
+        with torch.no_grad():
+            virt = dsp.virtual_array(self._range_cube(torch.as_tensor(raw, device=self.dev)), self.ch_tx, self.ch_rx)
+            return dsp.doppler_band(virt, self.win_d, self.n_loops, self.static_bins)
+
+    def static_map_of(self, band) -> np.ndarray:
+        """[range, azimuth in the FOV] dB map of a static_band (or a difference of bands), exactly as
+        process(static=True)["static_map"] (columns at static_az_deg, world + left)."""
+        torch = self.torch
+        with torch.no_grad():
+            p = self._static_power(band)[:, self.fov_sl]
+            return (10 * torch.log10(p + 1e-6)).float().cpu().numpy()
+
+    def refine_azimuth(self, bands, range_m: float, az_deg: float) -> tuple:
+        """Coherent azimuth of ONE static reflector (measured layout), from its zero-Doppler bands (e.g.
+        a position minus the background, static_band): the beams of the two chips combined coherently,
+        summed over the bands, at the reflector's range bin; the fringe nearest az_deg (world, + left;
+        from the incoherent map) is taken under the same gate as _refine. Returns (az_deg, refined):
+        az_deg unchanged and False when there is no inter-chip phase or the gate fails. On the
+        2026-11-03 corner reflector it brings the spread against the camera from ~0.4 to ~0.1 deg."""
+        if not self.coherent or not len(bands):
+            return float(az_deg), False
+        torch = self.torch
+        ri = int(np.clip(round(range_m / self.range_res), 0, self.n_range - 1))
+        coh = torch.zeros(self.n_az, device=self.dev)
+        with torch.no_grad():
+            for b in bands:
+                _, B, _ = self._beam(torch.as_tensor(b, device=self.dev)[:, ri])       # [band, 2, az]
+                coh += ((B[:, 0] + B[:, 1] * self.chip_steer).abs() ** 2).sum(dim=0)
+        coh = np.where(self.fov_ok.cpu().numpy(), coh.cpu().numpy(), 0.0)
+        A, n = self.n_az, self.ref_near
+        i0 = int(np.argmin(np.abs(self.sin_axis - np.sin(np.radians(AZIMUTH_SIGN * az_deg)))))
+        lo, hi = max(i0 - n, 0), min(i0 + n + 1, A)
+        ci = lo + int(np.argmax(coh[lo:hi]))
+        lobe = np.zeros(A, bool)
+        lobe[max(i0 - 3 * n, 0):min(i0 + 3 * n + 1, A)] = True
+        other = lobe & (np.abs(np.arange(A) - ci) > n)
+        omax = coh[other].max() if other.any() else 0.0
+        if coh[ci] <= 0 or coh[ci] < omax * 10 ** (self.refine_gate_db / 10):
+            return float(az_deg), False
+        d = 0.0
+        if 0 < ci < A - 1:
+            y0, y1, y2 = (10 * np.log10(coh[j] + 1e-12) for j in (ci - 1, ci, ci + 1))
+            den = y0 - 2 * y1 + y2
+            d = float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5)) if abs(den) > 1e-6 else 0.0
+        s = float(np.clip(-1.0 + 2.0 * (ci + d) / A, -1, 1))
+        return float(AZIMUTH_SIGN * np.degrees(np.arcsin(s))), True
 
     def _detect_static(self, f):
         """Stationary reflectors, which the moving-target path removes: the zero-Doppler band

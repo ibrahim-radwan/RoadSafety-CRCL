@@ -124,7 +124,7 @@ top view and the radar map live, a few times a second, plus the strongest
 reflector each sensor sees (range, azimuth). Use it while mounting or
 aligning the sensors, for example with a corner reflector on a stand.
 
-- **Nothing is saved.**
+- **Nothing is saved**, except calibration captures (below).
 - **Not while recording:** Start recording is greyed out while live view
   is on, and the other way round. Press **Stop live view** before
   recording.
@@ -144,6 +144,22 @@ aligning the sensors, for example with a corner reflector on a stand.
      Press **Take background** again after moving the rig.
 
   The background is kept only while live view runs and is never saved.
+- **To keep the calibration data, use Calibration capture** (the box in
+  the live card):
+  1. Enter a set name. With the scene empty and the rig still, press
+     **Save background**.
+  2. Place the reflector, type the position name, and press **Save
+     position**. Wait until the line under the buttons says *saved* for
+     each sensor (about 3 s), then move the reflector.
+  3. The table lists each position's reflector, LiDAR and radar. Tick
+     **reflector only** to see only what changed from the background.
+  4. Afterwards, on a processing machine:
+     `python calib_reflector.py --set /mnt/sdcard/sessions/calibration/<set>`.
+  - Radar azimuth is good off boresight since the measured array layout
+    (2026-11-07, `NOTES_FOR_TEAM.md` follow-up item 1): no radar recording
+    or antenna calibration is needed. Radar elevation is off for now.
+  - Mark the LiDAR's housing and collar before calibrating: it can turn in
+    its round collar.
 - **Name calibration positions from the rig's point of view:** "left" means
   the vehicle's left, as seen sitting on the rig looking forward. The
   2026-11-03 `calibration_dataset` names were the other way round.

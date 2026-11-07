@@ -68,6 +68,7 @@ import liveview  # noqa: E402
 LAUNCHER = PIPELINE / "capture_session.py"
 CHECKER = PIPELINE / "check_session.py"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+CALIB_DIR = "calibration"          # <sessions-root>/calibration: live-view calibration captures, not a session
 
 COUNTDOWN_RE = re.compile(r"Starting in (\d+) s")
 RADAR_RE = re.compile(r"\[radar\]\s+t\+\s*(\d+)s\s+([\d,]+) pkt/s")
@@ -190,6 +191,8 @@ class Session:
                 return "a session is already running"
         if not NAME_RE.match(name):
             return "name: letters, digits, '-' and '_' only (max 64)"
+        if name == CALIB_DIR:
+            return f"'{CALIB_DIR}' is the live view's calibration-capture folder - choose another name"
         out = self.root / name
         if out.exists():
             return f"session '{name}' already exists - choose a new name"
@@ -342,7 +345,8 @@ def list_sessions(root: Path, active: str = None) -> list:
     out = []
     if not root.is_dir():
         return out
-    dirs = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")]   # .launcher = internal
+    dirs = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")   # .launcher = internal
+            and p.name != CALIB_DIR]
     for d in sorted(dirs, key=lambda p: p.stat().st_mtime, reverse=True):
         meta = {}
         if (d / "session.json").is_file():
@@ -485,6 +489,26 @@ def create_app(session: Session, live: liveview.LiveView = None) -> Flask:
         except (TypeError, ValueError):
             return jsonify(error="bad value"), 400
 
+    @app.post("/api/live/capture")
+    def api_live_capture():
+        """A calibration capture (Save background / Save position) while live view is on."""
+        b = request.get_json(force=True, silent=True) or {}
+        try:
+            r = live.capture(b.get("kind"), b.get("set"), b.get("name"), float(b.get("r_lo", 1.0)),
+                             float(b.get("r_hi", 15.0)))
+        except (TypeError, ValueError):
+            return jsonify(error="bad value"), 400
+        return (jsonify(r), 400) if "error" in r else jsonify(r)
+
+    @app.get("/api/calib")
+    def api_calib_sets():
+        return jsonify(live.calib_sets())
+
+    @app.get("/api/calib/<set_name>")
+    def api_calib_set(set_name):
+        r = live.calib_set(set_name)
+        return (jsonify(r), 400) if "error" in r else jsonify(r)
+
     @app.get("/api/live/state")
     def api_live_state():
         return jsonify(live.status())
@@ -529,7 +553,7 @@ def main() -> int:
     session = Session(a.sessions_root, a.launcher_python, a.checker_python, stage)
     session.adopt_running()
     liveview.end_stray_workers(lambda m: print(m, flush=True))
-    live = liveview.LiveView(a.live_python, a.live_from_session)
+    live = liveview.LiveView(a.live_python, a.live_from_session, calib_root=a.sessions_root / CALIB_DIR)
     atexit.register(live.shutdown)
     app = create_app(session, live)
     print(f"Capture web control on http://{a.host}:{a.port}  (sessions: {session.root})", flush=True)

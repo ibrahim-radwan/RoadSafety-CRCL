@@ -53,6 +53,7 @@ from perception.core.lidar_io import decode_parallel, decode_sweeps            #
 from perception.core.radar_io import iter_frames                               # noqa: E402
 from perception.core.session import Session, target_at                         # noqa: E402
 from perception.lidar import CLASSES, LIDAR_TRACKER, O, detect_sweep           # noqa: E402
+from perception.core.calibration import ARRAY_FILE, file_md5                  # noqa: E402
 from perception.radar import (C, DET_COLS, RADAR_TRACKER, RadarDetector, cluster_detections,  # noqa: E402
                               rx_phase_for)
 from perception.track_features import TrackFeatures                            # noqa: E402
@@ -103,7 +104,8 @@ def run_radar(S: Path, use_rx_phase: bool = True, log=print) -> dict:
     ns = np.array([len(x) for x in stat])
     res.update(static_start=np.r_[0, np.cumsum(ns)],
                static_det=np.concatenate(stat) if ns.sum() else np.zeros((0, len(DET_COLS)), np.float32))
-    res["meta"] = {"variant": variant, "rx_phase_deg": rx, "frames": len(tl), "seconds": round(el, 1),
+    res["meta"] = {"variant": variant, "rx_phase_deg": rx, "layout": det.layout, "inter_chip": det.coherent,
+                   "array_file_md5": file_md5(ARRAY_FILE), "frames": len(tl), "seconds": round(el, 1),
                    "ms_per_frame": round(1e3 * el / max(len(tl), 1), 1),
                    "detections_per_frame": round(float(nd.mean()), 2), "objects_per_frame": round(float(no.mean()), 2)}
     log(f"  radar: {len(tl)} frames in {el:.0f} s ({res['meta']['ms_per_frame']} ms/frame incl. file reads), "
@@ -248,7 +250,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="GPU detection + tracking for a session (radar, LiDAR)")
     ap.add_argument("--session", type=Path, nargs="+", required=True)
     ap.add_argument("--sensors", default="radar,lidar")
-    ap.add_argument("--no-rx-phase", action="store_true", help="radar: without the in-situ RX phase correction")
+    ap.add_argument("--no-rx-phase", action="store_true",
+                    help="radar: without the in-situ RX phase correction (only used with the team layout)")
     ap.add_argument("--lidar-workers", type=int, default=None,
                     help="LiDAR decoders running at once on time chunks (each ~3x real time; 1 = one driver). "
                          "Default 2 while the radar runs too (they share the GPU), else 4")

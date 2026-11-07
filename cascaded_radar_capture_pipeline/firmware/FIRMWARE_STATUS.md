@@ -105,6 +105,15 @@ all variants.
 - **Antenna calibration** must be redone with the HPF 0/0 images:
   `r017m_calib_v2` for 77 GHz, a corner reflector with a 76 GHz v2 image for
   the rest. The TX/RX → azimuth table is unverified.
+  - **2026-11-07: the TX/RX → azimuth table was wrong; measured from the
+    data instead** (`perception/estimate_array_layout.py`,
+    `sync_capture_pipeline/calibration/radar_array.json`): per chip, chirps
+    0, 1, 2, 5 are azimuth TX at 4, 2, 0, 7 (λ/2); chirps 3 and 4 are
+    elevated; RX as in the table. With it, no `antennaCalibParams` are
+    needed (they made it worse); the processing ignores them. If the
+    board's antenna drawing or the chirp → physical TX map is available
+    here, please compare (`docs/knowledge/03_radar_firmware_and_dca.md`,
+    "Off-axis azimuth").
 - r050m_v2 has the least clipping headroom (~17 dB). Watch the peak sample
   on close targets.
 - The Windows capture config `AM273X_Capture_fixed.json` still uses

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 live/radar_live.py - the radar's live view: newest frame -> our detector -> a range-azimuth fan
-image plus the detections, a few times a second. Nothing is written to disk.
+image plus the detections, a few times a second. Nothing is written to disk, except a calibration
+capture on the page's request (below).
 
 INPUT
     live            the DCA1000, armed with EXACTLY the command sequence and packet delay of
@@ -12,13 +13,24 @@ INPUT
                     waits on processing. STOP_RECORD is sent on every exit path.
     --from-session  a recorded session's frame files, at their recorded times (looping).
 
-PROCESSING (perception/radar.py RadarDetector, the flashed firmware's .cfg, in-situ RX phase)
+PROCESSING (perception/radar.py RadarDetector, the flashed firmware's .cfg, the measured array layout)
     moving detections (CFAR, TDM Doppler compensation, multipath ghosts dropped), and the
     stationary-reflector map and detections (zero Doppler, no clutter removal): a corner reflector
     is stationary, so the "strongest reflector" for extrinsic alignment comes from these.
 
 The page asks for the map shown ({"radar_map": "static" | "moving"}) and the range
 ({"range_m": R}) over stdin.
+
+BACKGROUND AND CALIBRATION CAPTURE (2026-11-07)
+    The background keeps, besides the median stationary map, the mean zero-Doppler band of the
+    channels (RadarDetector.static_band): a frame minus it, subtracted coherently and then
+    beamformed, shows only what changed, without the walls' sidelobes ({"reflector_only": true}
+    draws that map). "Save background" / "Save position" (common.Capture) write the next
+    CAPTURE_FRAMES raw frames to <dir>/radar/: frames.npy (int16, as the recorder's .bin files),
+    t.npy (CLOCK_MONOTONIC at receipt), meta.json; a background also background_band.npy and
+    background_ref.npy, and is used at once; a position also reflector.json and
+    reflector_points.npz (perception/core/reflector.py radar_reflector on the change maps, against
+    the set's saved background if there is one, else the one in memory).
 """
 from __future__ import annotations
 
@@ -31,7 +43,8 @@ from pathlib import Path
 
 import numpy as np
 
-from common import (PIPELINE, Background, Link, Pacer, Rate, add_args, bev_extent, jpeg, log, rounded)
+from common import (PIPELINE, Background, Capture, Link, Pacer, Rate, add_args, bev_extent, jpeg, json_dump, log,
+                    rounded)
 
 import dca_capture_radar_sync as dca            # noqa: E402  (the recorder's receiver, unchanged)
 import radar_firmware                           # noqa: E402
@@ -42,6 +55,7 @@ BG_FRAMES = 16                                   # frames in the background (med
 BG_MIN_DB = 10.0                                 # a change: this much above the background ...
 BG_ROW_DB = 6.0                                  # ... and above its range row's median (not a background null)
 N_CHANGED = 8
+CAPTURE_FRAMES = 16                              # frames per calibration capture (2 s at 8 frames/s)
 
 
 def changed_cells(m: np.ndarray, ref: np.ndarray, r_axis: np.ndarray, az_deg: np.ndarray, r_max: float) -> list:
@@ -254,10 +268,88 @@ def main() -> int:
     from perception.radar import C, RadarDetector, rx_phase_for
     rx = rx_phase_for(variant)
     det = RadarDetector(radar_firmware.cfg_for_variant(variant), rx_phase_deg=rx)
-    log(f"radar: firmware {variant}, in-situ RX phase correction {'on' if rx is not None else 'off'}, "
-        f"device {det.dev}")
+    log(f"radar: firmware {variant}, array layout {det.layout} (inter-chip phase {'on' if det.coherent else 'off'}), "
+        f"in-situ RX phase {'on' if rx is not None else 'off'}, device {det.dev}")
     fans = {}
-    bg = Background(BG_FRAMES, lambda maps: np.median(np.stack(maps), axis=0))   # in memory only
+    from perception.core import reflector as rf
+
+    def bg_finish(items):
+        """[(static map, static band)] -> the background: median map, mean band, and the band's own
+        frame-to-frame residual map (the reference a change must rise above)."""
+        bands = [b for _, b in items]
+        mean = sum(bands) / len(bands)
+        return {"map": np.median(np.stack([m for m, _ in items]), axis=0), "band": mean,
+                "ref": rf.mean_db([det.static_map_of(b - mean) for b in bands])}
+
+    bg = Background(BG_FRAMES, bg_finish)              # "Take background": in memory only
+    cap = Capture("radar", CAPTURE_FRAMES)             # "Save background / position": written
+    saved_bg = {}                                      # a set's saved background, by path
+    loaded_bg = [None]                                 # the saved background in use (page's set)
+    r_axis, az_static = det.range_axis, np.asarray(det.static_az_deg, float)
+
+    def background_for(spec: dict):
+        """A position's background: the set's saved one (<set>/background/radar), else memory."""
+        d = Path(spec["dir"]).parent / "background" / "radar"
+        if (d / "background_band.npy").is_file():
+            if str(d) not in saved_bg:
+                band = det.torch.as_tensor(np.load(d / "background_band.npy"), device=det.dev)
+                if band.shape[-1] != len(det.ch_pos_np):            # saved with another array layout
+                    raise ValueError(f"{d}: background saved with {band.shape[-1]} radar channels, this "
+                                     f"detector has {len(det.ch_pos_np)} (array layout changed): save it again")
+                saved_bg[str(d)] = {"band": band, "ref": np.load(d / "background_ref.npy")}
+            return saved_bg[str(d)], "saved"
+        return (bg.ref, "memory") if bg.ref is not None else (None, None)
+
+    def finish_capture(items, spec):
+        raws = np.stack([r for r, _, _, _ in items])
+        ts = np.array([t for _, t, _, _ in items])
+        meta = {"variant": variant, "cfg": str(radar_firmware.cfg_for_variant(variant)), "rx_phase": rx is not None, "layout": det.layout,
+                "inter_chip": det.coherent,
+                "frames": len(items), "source": str(a.from_session) if a.from_session else "live",
+                "kind": spec.get("kind"), "time_local": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+        if spec.get("kind") == "background":
+            ref = bg_finish([(m, b) for _, _, m, b in items])
+            bg.set(ref)                               # used at once, like Take background
+            saved_bg.clear()
+            arrays = {"background_band.npy": ref["band"].cpu().numpy(), "background_ref.npy": ref["ref"],
+                      "background_map.npy": ref["map"]}
+            result = {}
+        else:
+            b, where = background_for(spec)
+            arrays, result = {}, {"reflector": None, "background": where}
+            if b is not None:
+                change = [band - b["band"] for _, _, _, band in items]
+                maps = [det.static_map_of(c) for c in change]
+                res = rf.radar_reflector(maps, b["ref"], r_axis, az_static, float(spec.get("r_lo", 1.0)),
+                                         float(spec.get("r_hi", 15.0)))
+                if res["found"]:                      # coherent across both chips (measured layout)
+                    rf.refine_radar(res, lambda rng, az: det.refine_azimuth(change, rng, az))
+                summary = {k: v for k, v in res.items() if k not in ("points", "mean_points")}
+                summary["background"] = where
+                result["reflector"] = summary
+                pts = [q for q in res["points"]]
+                arrays["reflector_points.npz"] = dict(
+                    points=np.concatenate(pts) if any(len(q) for q in pts) else np.zeros((0, 6), np.float32),
+                    frame=np.concatenate([np.full(len(q), i) for i, q in enumerate(pts)]).astype(np.int32)
+                    if pts else np.zeros(0, np.int32), mean_points=res["mean_points"],
+                    columns=np.array("x y range az_deg(+left) power_db rise_db (vehicle frame)"))
+                meta["reflector"] = summary
+
+        def write():
+            d = cap.out_dir()
+            np.save(d / "frames.npy", raws)
+            np.save(d / "t.npy", ts)
+            for name, arr in arrays.items():
+                if name.endswith(".npz"):
+                    np.savez_compressed(d / name, **arr)
+                else:
+                    np.save(d / name, arr)
+            if "reflector" in meta:
+                json_dump(d / "reflector.json", meta["reflector"])
+            json_dump(d / "meta.json", meta)          # last: the capture is complete
+            cap.saved(**result)
+        cap.in_thread(write)
+
     rate, pacer = Rate(), Pacer(a.hz, link.stop)
     try:
         err = src.start()
@@ -292,9 +384,31 @@ def main() -> int:
             st = st[np.argsort(-st[:, C["power_db"]])][:N_STATIC]
             smap = out["static_map"].cpu().numpy()
             bg.follow(link.control.get("background"))
-            bg.add(smap)
-            changed = (changed_cells(smap, bg.ref, det.range_axis, det.static_az_deg, 1.6 * R)
+            use = link.control.get("use_background")
+            if use and use != loaded_bg[0] and (Path(use) / "radar" / "meta.json").is_file():
+                d = Path(use) / "radar"                     # the page's set has a saved background: use it
+                band0 = np.load(d / "background_band.npy")
+                loaded_bg[0] = use
+                if band0.shape[-1] != len(det.ch_pos_np):  # saved with another array layout
+                    log(f"radar: background in {d} has {band0.shape[-1]} channels, this detector "
+                        f"{len(det.ch_pos_np)} (array layout changed): not used, save it again")
+                else:
+                    bg.set({"map": np.load(d / "background_map.npy"), "ref": np.load(d / "background_ref.npy"),
+                            "band": det.torch.as_tensor(band0, device=det.dev)})
+                    log(f"radar: background from {d}")
+            cap.follow(link.control.get("capture"))
+            only = bool(link.control.get("reflector_only")) and bg.ref is not None
+            band = det.static_band(raw) if (bg.items is not None or cap.collecting or only) else None
+            if bg.items is not None:
+                bg.add((smap, band))
+            if cap.collecting:
+                done = cap.add((raw.copy(), t_frame, smap, band))
+                if done is not None:
+                    finish_capture(done, cap.spec)
+            changed = (changed_cells(smap, bg.ref["map"], det.range_axis, det.static_az_deg, 1.6 * R)
                        if bg.ref is not None else [])
+            if only and kind == "static":             # only what changed: frame - background, coherently
+                img = fans[key].render(det.static_map_of(band - bg.ref["band"]))
             ms = (time.perf_counter() - tic) * 1e3
             rate.tick()
             cols = [C["x"], C["y"], C["range"], C["az_deg"]]
@@ -307,6 +421,7 @@ def main() -> int:
                        # background (page's "Take background"): its state, and the cells that rose
                        # above it [x, y, range, azimuth, power dB, rise dB], largest rise first
                        "background": bg.state(), "changed": rounded(changed),
+                       "reflector_only": only, "capture": cap.state(),
                        **src.status()}, jpeg(img))
             pacer.wait()
     except Exception as exc:

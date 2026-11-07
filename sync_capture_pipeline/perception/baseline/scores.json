@@ -1,20 +1,21 @@
 {
-  "git_commit": "5f76e99",
-  "created": "2026-10-26",
+  "git_commit": "1e1e529+dirty",
+  "created": "2026-11-07",
   "rx_phase_file_md5": "f206cbe7d163",
+  "array_file_md5": "8ff6c1600dc8",
   "metrics": "see run_perception.py: detected = a detection within 0.6 m range and 10 deg of the LiDAR walker; az_spread = median |err - bias|; team_* = the old chain's filtered clouds (cpu: OS-CFAR, gpu: CASO on range-Doppler)",
   "sessions": {
     "freewalk_ref_02": {
       "ours_radar": {
         "frames_with_target": 3937,
-        "detected": 0.718,
-        "az_bias_deg": -5.02,
-        "az_spread_deg": 2.41,
-        "az_within_3deg_of_bias": 0.543,
-        "confirmed_track_on_target": 0.654,
-        "other_confirmed_tracks_per_frame": 1.1,
-        "confirmed_tracks_per_empty_frame": 0.87,
-        "detections_per_frame": 3.85
+        "detected": 0.838,
+        "az_bias_deg": -3.76,
+        "az_spread_deg": 1.99,
+        "az_within_3deg_of_bias": 0.674,
+        "confirmed_track_on_target": 0.726,
+        "other_confirmed_tracks_per_frame": 0.93,
+        "confirmed_tracks_per_empty_frame": 0.9,
+        "detections_per_frame": 3.94
       },
       "ours_lidar": {
         "sweeps_with_target": 4956,
@@ -29,9 +30,9 @@
         "objects_per_sweep": 37.21
       },
       "ours_radar_vs_lidar": {
-        "confirmed_tracks_in_fov": 7555,
-        "supported_by_lidar": 0.61,
-        "unsupported_per_frame": 0.61
+        "confirmed_tracks_in_fov": 6939,
+        "supported_by_lidar": 0.633,
+        "unsupported_per_frame": 0.53
       },
       "team_gpu": {
         "frames_with_target": 3937,
@@ -53,14 +54,14 @@
     "freewalk_ref_01": {
       "ours_radar": {
         "frames_with_target": 530,
-        "detected": 0.343,
-        "az_bias_deg": -0.51,
-        "az_spread_deg": 11.74,
-        "az_within_3deg_of_bias": 0.071,
-        "confirmed_track_on_target": 0.491,
-        "other_confirmed_tracks_per_frame": 0.92,
-        "confirmed_tracks_per_empty_frame": 0.19,
-        "detections_per_frame": 1.83
+        "detected": 0.664,
+        "az_bias_deg": -3.37,
+        "az_spread_deg": 2.6,
+        "az_within_3deg_of_bias": 0.564,
+        "confirmed_track_on_target": 0.73,
+        "other_confirmed_tracks_per_frame": 0.63,
+        "confirmed_tracks_per_empty_frame": 0.22,
+        "detections_per_frame": 1.96
       },
       "ours_lidar": {
         "sweeps_with_target": 526,
@@ -74,9 +75,9 @@
         "objects_per_sweep": 35.47
       },
       "ours_radar_vs_lidar": {
-        "confirmed_tracks_in_fov": 827,
-        "supported_by_lidar": 0.487,
-        "unsupported_per_frame": 0.51
+        "confirmed_tracks_in_fov": 780,
+        "supported_by_lidar": 0.594,
+        "unsupported_per_frame": 0.38
       },
       "team_gpu": {
         "frames_with_target": 530,
@@ -90,13 +91,13 @@
     "stage3_01": {
       "ours_radar": {
         "frames_with_target": 641,
-        "detected": 0.682,
-        "az_bias_deg": -1.43,
-        "az_spread_deg": 1.36,
-        "az_within_3deg_of_bias": 0.753,
-        "confirmed_track_on_target": 0.811,
-        "other_confirmed_tracks_per_frame": 1.33,
-        "confirmed_tracks_per_empty_frame": 2.22,
+        "detected": 0.768,
+        "az_bias_deg": -0.52,
+        "az_spread_deg": 1.28,
+        "az_within_3deg_of_bias": 0.883,
+        "confirmed_track_on_target": 0.906,
+        "other_confirmed_tracks_per_frame": 1.16,
+        "confirmed_tracks_per_empty_frame": 2.14,
         "detections_per_frame": 5.97
       },
       "ours_lidar": {
@@ -111,9 +112,9 @@
         "objects_per_sweep": 42.14
       },
       "ours_radar_vs_lidar": {
-        "confirmed_tracks_in_fov": 1580,
-        "supported_by_lidar": 0.477,
-        "unsupported_per_frame": 1.15
+        "confirmed_tracks_in_fov": 1509,
+        "supported_by_lidar": 0.645,
+        "unsupported_per_frame": 0.74
       },
       "team_gpu": {
         "frames_with_target": 641,
@@ -127,14 +128,14 @@
     "stage3_02": {
       "ours_radar": {
         "frames_with_target": 645,
-        "detected": 0.71,
-        "az_bias_deg": -1.69,
-        "az_spread_deg": 1.31,
-        "az_within_3deg_of_bias": 0.75,
-        "confirmed_track_on_target": 0.896,
-        "other_confirmed_tracks_per_frame": 1.04,
-        "confirmed_tracks_per_empty_frame": 1.67,
-        "detections_per_frame": 5.53
+        "detected": 0.789,
+        "az_bias_deg": -0.85,
+        "az_spread_deg": 1.27,
+        "az_within_3deg_of_bias": 0.887,
+        "confirmed_track_on_target": 0.944,
+        "other_confirmed_tracks_per_frame": 0.92,
+        "confirmed_tracks_per_empty_frame": 1.75,
+        "detections_per_frame": 5.47
       },
       "ours_lidar": {
         "sweeps_with_target": 992,
@@ -148,9 +149,9 @@
         "objects_per_sweep": 42.31
       },
       "ours_radar_vs_lidar": {
-        "confirmed_tracks_in_fov": 1416,
-        "supported_by_lidar": 0.522,
-        "unsupported_per_frame": 0.94
+        "confirmed_tracks_in_fov": 1332,
+        "supported_by_lidar": 0.612,
+        "unsupported_per_frame": 0.72
       },
       "team_gpu": {
         "frames_with_target": 645,
@@ -160,19 +161,19 @@
         "az_within_3deg_of_bias": 0.45,
         "detections_per_frame": 1.47
       },
-      "note": "radar phase correction measured on this session: radar azimuth scores are in-sample"
+      "note": "radar inter-chip phase measured on this session: radar azimuth scores are in-sample"
     },
     "stage3_03": {
       "ours_radar": {
         "frames_with_target": 643,
-        "detected": 0.706,
-        "az_bias_deg": -1.87,
-        "az_spread_deg": 1.38,
-        "az_within_3deg_of_bias": 0.715,
-        "confirmed_track_on_target": 0.844,
-        "other_confirmed_tracks_per_frame": 1.07,
-        "confirmed_tracks_per_empty_frame": 1.75,
-        "detections_per_frame": 5.68
+        "detected": 0.801,
+        "az_bias_deg": -0.81,
+        "az_spread_deg": 1.33,
+        "az_within_3deg_of_bias": 0.871,
+        "confirmed_track_on_target": 0.932,
+        "other_confirmed_tracks_per_frame": 0.85,
+        "confirmed_tracks_per_empty_frame": 1.73,
+        "detections_per_frame": 5.66
       },
       "ours_lidar": {
         "sweeps_with_target": 989,
@@ -186,9 +187,9 @@
         "objects_per_sweep": 41.24
       },
       "ours_radar_vs_lidar": {
-        "confirmed_tracks_in_fov": 1417,
-        "supported_by_lidar": 0.507,
-        "unsupported_per_frame": 0.97
+        "confirmed_tracks_in_fov": 1279,
+        "supported_by_lidar": 0.647,
+        "unsupported_per_frame": 0.63
       },
       "team_gpu": {
         "frames_with_target": 643,
@@ -198,19 +199,19 @@
         "az_within_3deg_of_bias": 0.446,
         "detections_per_frame": 1.48
       },
-      "note": "radar phase correction measured on this session: radar azimuth scores are in-sample"
+      "note": "radar inter-chip phase measured on this session: radar azimuth scores are in-sample"
     },
     "run_20261014_1325": {
       "ours_radar": {
         "frames_with_target": 155,
-        "detected": 0.419,
-        "az_bias_deg": 7.68,
-        "az_spread_deg": 8.28,
-        "az_within_3deg_of_bias": 0.387,
-        "confirmed_track_on_target": 0.761,
-        "other_confirmed_tracks_per_frame": 0.99,
-        "confirmed_tracks_per_empty_frame": 1.2,
-        "detections_per_frame": 4.23
+        "detected": 0.065,
+        "az_bias_deg": 19.47,
+        "az_spread_deg": 2.19,
+        "az_within_3deg_of_bias": 0.647,
+        "confirmed_track_on_target": 0.716,
+        "other_confirmed_tracks_per_frame": 1.76,
+        "confirmed_tracks_per_empty_frame": 1.48,
+        "detections_per_frame": 4.4
       },
       "ours_lidar": {
         "sweeps_with_target": 275,
@@ -225,9 +226,9 @@
         "objects_per_sweep": 24.45
       },
       "ours_radar_vs_lidar": {
-        "confirmed_tracks_in_fov": 608,
-        "supported_by_lidar": 0.688,
-        "unsupported_per_frame": 0.43
+        "confirmed_tracks_in_fov": 710,
+        "supported_by_lidar": 0.545,
+        "unsupported_per_frame": 0.73
       },
       "team_gpu": {
         "frames_with_target": 155,
@@ -236,19 +237,20 @@
         "az_spread_deg": 5.87,
         "az_within_3deg_of_bias": 0.252,
         "detections_per_frame": 1.53
-      }
+      },
+      "note": "rig set-up session: the camera was moved by hand and the LiDAR was turned ~20 deg against the radar and the camera (checked on the camera images, 2026-11-07: the radar azimuth is on the walker, the LiDAR's is ~20 deg right). Radar scores against the LiDAR target are not meaningful here."
     },
     "run_20261014_1326": {
       "ours_radar": {
         "frames_with_target": 203,
-        "detected": 0.65,
-        "az_bias_deg": 2.43,
-        "az_spread_deg": 8.08,
-        "az_within_3deg_of_bias": 0.31,
+        "detected": 0.837,
+        "az_bias_deg": 4.38,
+        "az_spread_deg": 1.57,
+        "az_within_3deg_of_bias": 0.735,
         "confirmed_track_on_target": 0.951,
-        "other_confirmed_tracks_per_frame": 1.4,
-        "confirmed_tracks_per_empty_frame": 1.86,
-        "detections_per_frame": 5.01
+        "other_confirmed_tracks_per_frame": 1.49,
+        "confirmed_tracks_per_empty_frame": 2.46,
+        "detections_per_frame": 5.35
       },
       "ours_lidar": {
         "sweeps_with_target": 366,
@@ -263,9 +265,9 @@
         "objects_per_sweep": 36.56
       },
       "ours_radar_vs_lidar": {
-        "confirmed_tracks_in_fov": 879,
-        "supported_by_lidar": 0.654,
-        "unsupported_per_frame": 0.72
+        "confirmed_tracks_in_fov": 963,
+        "supported_by_lidar": 0.572,
+        "unsupported_per_frame": 0.97
       },
       "team_gpu": {
         "frames_with_target": 203,

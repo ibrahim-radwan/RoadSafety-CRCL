@@ -13,8 +13,16 @@ Each item cost real debugging time. Read before changing the related code.
 - **The DCA1000 can come up throttled.** Power-cycle the radar + DCA1000; the
   watchdog stops such sessions.
 - **The LiDAR can be knocked out of alignment.** Check it faces forward.
+- **A round LiDAR shows no "forward".** The RS-Fairy's 0° is its encoder's,
+  and the cylinder sits in a round collar. The team mounted it "facing
+  forward" and it was 37° off; once it was 57° off. Mark the housing and
+  its collar, and check in the data.
 
 ## Radar
+- **Subtract a background coherently, not in dB.** Differencing dB static
+  maps lands on the walls' sidelobes (three positions read exactly +22°).
+  Subtracting the zero-Doppler channels (complex) before beamforming
+  leaves the reflector alone, even across sessions.
 - **The `.cfg` is documentation, not device configuration.** Resolve it per
   session through `radar_firmware.py`.
 - **The "mirrored azimuth" was a convention mix-up, not a bug.** The team's
@@ -33,6 +41,20 @@ Each item cost real debugging time. Read before changing the related code.
   gave a correction that generalised; the walker's did not.
 - **Two azimuth peaks per cell doubled the false tracks.** With the current
   calibration the beam has a split lobe ~13° away and only ~4 dB down.
+- **"Needs antenna calibration" was concluded too quickly (2026-11-07).**
+  The split beam was blamed on the calibration until a test showed the
+  error depends on the target's angle, which a per-channel calibration
+  cannot cause or fix. Before blaming a calibration, check that one
+  correction holds at every angle (estimate it on the left and right
+  targets separately, against a same-side noise control). Then suspect the
+  array model in the processing.
+- **The radar's array table was never checked against the data** (found
+  2026-11-07). Three TX positions and the elevation TX were wrong. Weeks of
+  "calibration" patches (the in-situ phase) only bent it into shape near
+  boresight. A layout can be measured from any session with a single
+  target and an angle reference: each channel's phase against sin(azimuth)
+  gives its position (`perception/estimate_array_layout.py`). Do it for any
+  new board or firmware chirp order.
 - **The DCA packet delay limits the frame rate:** 50 µs caps the stream at
   7.44 fps. Use 25 µs.
 - **I/Q order is I first.**
@@ -41,6 +63,14 @@ Each item cost real debugging time. Read before changing the related code.
 
 ## LiDAR
 - **Zero-range points:** filter `range > 0`.
+- **The RS-Fairy skips 16.5° once a second** (its 0–16.5°, 4.6 ms, no packet
+  loss). A wall there blinks at 1 Hz. Before blaming the decoder or the
+  network, look at the block azimuths: they jump from 359.6° to 16.1°.
+- **Fitting an extrinsic to nominal target positions absorbs the rig's own
+  turn.** On 2026-11-03 the floor marks gave 39.8° for the LiDAR, but the
+  camera, which sees the "centre" reflectors 1.6–1.9° to the right, gives
+  37.2°. Reference the yaw to a sensor on the rig (the camera), not to
+  the floor.
 - **One ground plane fails** on slopes and under roofs. The carport scene of
   freewalk_ref_02 made a single 13 × 8 m "object". Use local ground and drop
   overhead structures (see [05](05_lidar.md)).

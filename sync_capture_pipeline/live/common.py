@@ -9,7 +9,9 @@ A worker is a child process of web_control/server.py (web_control/liveview.py st
     stdin   control lines from the server (JSON objects, e.g. {"range_m": 20}).
     stderr  log lines (shown on the page under "Live view log").
 
-Live view never saves anything. A worker stops on SIGINT/SIGTERM, at its own --max-secs deadline,
+Live view saves nothing, except a calibration capture when the page asks for one (Capture below:
+"Save background" / "Save position", into <sessions-root>/calibration/<set>/; never into a
+recorded session). A worker stops on SIGINT/SIGTERM, at its own --max-secs deadline,
 when the server closes its stdin (server stopped or crashed) and when a write to the server fails
 (broken pipe): it can never outlive the server, which is what enforces "never at the same time as
 a recording".
@@ -187,3 +189,90 @@ class Background:
         if self.items is not None:
             return {"state": "collecting", "done": len(self.items), "of": self.n}
         return {"state": "off"}
+
+    def set(self, ref) -> None:
+        """Use `ref` as the background now (a saved calibration background, see Capture)."""
+        self.ref, self.items, self.t_ready = ref, None, time.monotonic()
+
+
+class Capture:
+    """A calibration capture: the page's "Save background" / "Save position" (2026-11-07). The ONLY
+    thing live view writes, and only on that request: the next `n_items` items of this worker go to
+    <dir>/<sensor>/ (the server makes <dir> = <sessions-root>/calibration/<set>/<name>/ and its
+    capture.json). The server sends {"capture": {"token": n, "kind": "background" | "position",
+    "dir": ..., "r_lo": ..., "r_hi": ...}} once; follow() starts on a new token, add() returns the
+    items when complete, and the worker writes them (in a thread, so the view keeps running) and
+    reports saved() or failed(). state() goes to the page."""
+
+    def __init__(self, sensor: str, n_items: int):
+        self.sensor, self.n = sensor, int(n_items)
+        self.token, self.spec, self.items = None, None, None
+        self._state = {"state": "off"}
+
+    def follow(self, msg) -> bool:
+        if not isinstance(msg, dict) or msg.get("token") is None or msg.get("token") == self.token:
+            return False
+        self.token, self.spec, self.items = msg["token"], dict(msg), []
+        self._state = {"state": "collecting", "done": 0, "of": self.n, "token": self.token,
+                       "kind": msg.get("kind"), "name": Path(str(msg.get("dir", ""))).name}
+        log(f"{self.sensor}: calibration capture '{self._state['name']}' ({msg.get('kind')}): collecting {self.n}")
+        return True
+
+    @property
+    def collecting(self) -> bool:
+        return self.items is not None
+
+    def add(self, item):
+        if self.items is None:
+            return None
+        self.items.append(item)
+        self._state["done"] = len(self.items)
+        if len(self.items) < self.n:
+            return None
+        items, self.items = self.items, None
+        self._state["state"] = "saving"
+        return items
+
+    def out_dir(self) -> Path:
+        d = Path(self.spec["dir"]) / self.sensor
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def saved(self, **result) -> None:
+        self._state = dict(self._state, state="saved", **result)
+        log(f"{self.sensor}: calibration capture '{self._state['name']}' saved")
+
+    def failed(self, text: str) -> None:
+        self._state = dict(self._state, state="error", error=str(text))
+        log(f"{self.sensor}: calibration capture '{self._state['name']}' FAILED: {text}")
+
+    def state(self) -> dict:
+        return dict(self._state)
+
+    def in_thread(self, fn) -> None:
+        """Run fn() (the writing) in a thread; any exception becomes failed()."""
+        def run():
+            try:
+                fn()
+            except Exception as exc:                  # shown on the page
+                import traceback
+                traceback.print_exc()
+                self.failed(exc)
+        threading.Thread(target=run, name=f"{self.sensor}-capture", daemon=True).start()
+
+
+def json_dump(path: Path, obj) -> None:
+    """JSON without NaN (the page cannot parse it)."""
+    def clean(o):
+        if isinstance(o, dict):
+            return {k: clean(v) for k, v in o.items()}
+        if isinstance(o, (list, tuple)):
+            return [clean(v) for v in o]
+        if isinstance(o, (np.floating, float)):
+            return None if not np.isfinite(o) else round(float(o), 4)
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.bool_):
+            return bool(o)
+        return o
+    Path(path).write_text(json.dumps(clean(obj), indent=1) + "\n")

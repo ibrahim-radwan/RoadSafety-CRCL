@@ -451,16 +451,21 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         rstat = QtWidgets.QCheckBox("static")
         rstat.setToolTip("stationary reflectors (zero Doppler; a corner reflector): grey squares, and the strongest "
                          f"{N_STATIC_ROWS} inside the range filter in the objects table. Untick 'moving only' to "
-                         "see the stationary scene in the map. Reliable within ~6-10 m; farther out many are "
-                         "sidelobe or multipath images until the antenna recalibration")
+                         "see the stationary scene in the map. Reliable within ~6-10 m; farther out some are "
+                         "multipath images")
         rstat.stateChanged.connect(lambda s_: setattr(srcs["radar"], "show_static", bool(s_)))
         rstat.setChecked(bool(getattr(args, "radar_static", False)))
         row.addWidget(rstat)
+        rmap = QtWidgets.QCheckBox("map")
+        rmap.setChecked(not getattr(args, "radar_no_map", False))
+        rmap.setToolTip("the range-azimuth power behind the points. Untick for points only (detections, "
+                        "stationary reflectors), like the team's FusionApp point-cloud views")
+        row.addWidget(rmap)
         rflat = QtWidgets.QCheckBox("z = 0")
         rflat.setChecked(True)
         rflat.setToolTip("draw radar points at z = 0 in 3D: the radar elevation is not verified")
         row.addWidget(rflat)
-        rctl.update(mode=rmode, thr=rthr, flat=rflat, moving=moving, static=rstat)
+        rctl.update(mode=rmode, thr=rthr, flat=rflat, moving=moving, static=rstat, map=rmap)
         want = getattr(args, "radar_points", "detections")
         rmode.setCurrentIndex([v_ for _, v_ in RADAR_POINTS].index(want))
         moving.stateChanged.connect(lambda s_: setattr(srcs["radar"], "moving_only", bool(s_)))
@@ -662,7 +667,8 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                             apply_views(force=True)
                     what = {"panorama": "panorama", "top360": "360°", "top": "forward"}[mode]
                     ms = "" if ld is None else f"  |  {ld['ms_total']:.0f} ms GPU"
-                    panels["lidar"].set(f"LiDAR {what}", f"{lid['n_shown']:,} pts  @ {fmt(lid['t'])}{ms}")
+                    gap = "  |  16.5\u00b0 gap filled from the previous sweep" if lid.get("filled") else ""
+                    panels["lidar"].set(f"LiDAR {what}", f"{lid['n_shown']:,} pts  @ {fmt(lid['t'])}{ms}{gap}")
                     show_obj = ld is not None and dctl["lidar_obj"].isChecked() and mode != "panorama"
                     bl = box_lines(ld["objects"]) if show_obj else {c: ([], []) for c in CLASSES}
                     for c, (xs, ys) in bl.items():
@@ -706,13 +712,20 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     rb[k_].setData([], [])
             mode_pts = rctl["mode"].currentData()
             if rad and changed("radar", (rad["k"], mode_pts, rctl["thr"].value(), dctl["tracks"].isChecked(),
-                                         rctl["static"].isChecked(), gate["lo"].value(), gate["hi"].value())):
+                                         rctl["static"].isChecked(), gate["lo"].value(), gate["hi"].value(),
+                                         rctl["map"].isChecked())):
                 from perception.radar import C as RC
                 sd = rad.get("static")
                 sd = sd[sd[:, RC["ghost"]] == 0] if sd is not None and len(sd) else np.zeros((0, 10), np.float32)
                 sd = sd[in_gate(sd[:, RC["range"]])]                  # no ghosts, inside the range filter
                 rb["static"].setData(sd[:, RC["y"]], sd[:, RC["x"]])
-                state["radar_static"] = sd[np.argsort(-sd[:, RC["power_db"]])][:N_STATIC_ROWS]
+                # the table's S rows: from the static map averaged over the last 2 s (steadier than
+                # one frame's cells), positions interpolated between cells
+                sa = rad.get("static_avg")
+                sa = sa[sa[:, RC["ghost"]] == 0] if sa is not None and len(sa) else np.zeros((0, 10), np.float32)
+                sa = sa[in_gate(sa[:, RC["range"]])]
+                state["radar_static"] = sa[np.argsort(-sa[:, RC["power_db"]])][:N_STATIC_ROWS]
+                state["radar_static_n"] = int(rad.get("static_avg_n") or 0)
                 bev = rad["bev"]
                 fin = np.isfinite(bev)
                 # colour from 3 dB above the noise floor, but at most 30 dB below the frame's peak: a near,
@@ -720,7 +733,10 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 hi = float(np.nanpercentile(bev, 99.9)) if fin.any() else 1.0
                 lo = max(float(np.nanmedian(bev)) + 3, hi - 30) if fin.any() else 0.0
                 hi = max(hi, lo + 15)
-                rb["img"].setImage(bev, autoLevels=False, levels=(lo, hi))
+                if rctl["map"].isChecked():
+                    rb["img"].setImage(bev, autoLevels=False, levels=(lo, hi))
+                else:                                            # points only
+                    rb["img"].setImage(np.full((2, 2), np.nan, np.float32), autoLevels=False, levels=(0, 1))
                 rb["img"].setRect(extent_r)     # re-apply: a "no data" placeholder may have set the scale
                 panels["radar_bev"].set("Radar BEV", f"frame {rad['k']}  @ {fmt(rad['t'])}  |  "
                                                      f"{srcs['radar'].ms_per_frame:.0f} ms GPU")
@@ -755,6 +771,14 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                     rb["pts"].setData(xyz[:, 1], xyz[:, 0], brush=pg.mkBrush(0, 230, 255, 200), size=3)
                     radar_pts = (xyz, cm.plasma(np.clip(val / 30.0, 0, 1)),
                                  f"raw: {len(xyz):,} cells > {rctl['thr'].value()} dB above floor")
+                if rctl["static"].isChecked() and len(sd):       # stationary reflectors in 3D too (grey)
+                    sx = np.c_[sd[:, RC["x"]], sd[:, RC["y"]], np.zeros(len(sd), np.float32)]
+                    sc = np.tile([0.78, 0.78, 0.78, 1.0], (len(sd), 1))
+                    if radar_pts is None:
+                        radar_pts = (sx, sc, f"{len(sd)} stationary reflectors (grey)")
+                    else:
+                        radar_pts = (np.r_[radar_pts[0], sx], np.r_[np.asarray(radar_pts[1])[:, :4], sc],
+                                     radar_pts[2] + f" + {len(sd)} stationary (grey)")
                 trs = rad["tracks"] if dctl["tracks"].isChecked() else []
                 rb["trk"].setData([t_[2] for t_ in trs], [t_[1] for t_ in trs])
                 accp = [t_[8] for t_ in trs if len(t_[8])]
@@ -782,7 +806,8 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 if rctl["static"].isChecked():          # strongest stationary reflectors (a corner reflector)
                     from perception.radar import C as RC
                     for i_, d_ in enumerate(state.get("radar_static", [])):
-                        rows.append(("radar", f"S{i_ + 1}", "stationary \u25a0", float(d_[RC["range"]]),
+                        rows.append(("radar", f"S{i_ + 1}", f"stationary \u25a0 {state.get('radar_static_n', 0)} fr",
+                                     float(d_[RC["range"]]),
                                      float(d_[RC["az_deg"]]), float(d_[RC["x"]]), float(d_[RC["y"]]), 0.0, 0.0,
                                      float(d_[RC["power_db"]]), RADAR_C))
 
@@ -894,10 +919,16 @@ def main() -> int:
                          "above a threshold")
     ap.add_argument("--radar-all", action="store_true",
                     help="start with 'moving only' off: the radar map shows the stationary scene (corner reflectors)")
+    ap.add_argument("--radar-no-map", action="store_true",
+                    help="radar: points only, no range-azimuth power behind them (like the FusionApp point clouds)")
     ap.add_argument("--radar-static", action="store_true",
                     help="radar: also show stationary reflectors (zero Doppler; experimental)")
+    ap.add_argument("--radar-layout", choices=("measured", "team"), default="measured",
+                    help="radar array layout: measured (calibration/radar_array.json, default) or the team's table "
+                         "(radar_config.py, with the .cfg calibration and the in-situ phase; for comparison: it splits "
+                         "the beam off boresight)")
     ap.add_argument("--no-rx-phase", action="store_true",
-                    help="radar: without the in-situ RX phase correction (calibration/radar_rx_phase.json)")
+                    help="radar, team layout: without the in-situ RX phase correction (calibration/radar_rx_phase.json)")
     ap.add_argument("--no-detect", action="store_true", help="LiDAR: no object detection (display only)")
     # testing / automation
     ap.add_argument("--screenshot", type=Path, help="save a screenshot after --screenshot-after s, then exit")
@@ -923,7 +954,7 @@ def main() -> int:
     if "camera" in sensors:
         srcs["camera"] = CameraSource(clock, s, a.camera_width)
     if "radar" in sensors:
-        srcs["radar"] = RadarSource(clock, s, bev_x, bev_y, rx_phase=not a.no_rx_phase)
+        srcs["radar"] = RadarSource(clock, s, bev_x, bev_y, rx_phase=not a.no_rx_phase, layout=a.radar_layout)
     if "lidar" in sensors:
         srcs["lidar"] = LidarSource(clock, s, offsets.get("lidar_ms", 0.0) / 1e3,
                                     view=dict(mode=a.lidar_view, range_m=a.lidar_range, color=a.lidar_color,

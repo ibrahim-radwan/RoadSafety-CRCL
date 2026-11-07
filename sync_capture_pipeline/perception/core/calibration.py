@@ -1,11 +1,18 @@
 """
-Radar channel calibration: the .cfg antenna calibration (antennaCalibParams) combined with the
-in-situ phase correction measured against the LiDAR (calibration/radar_rx_phase.json, written by
-perception/estimate_rx_phase.py).
+Radar array description and channel corrections.
 
-The in-situ correction is PROVISIONAL: the team owns the radar calibration, and their
-recalibration with the v2 images replaces it (radar_correction(..., in_situ=False), or remove
-the variant from the JSON file).
+MEASURED ARRAY (calibration/radar_array.json, perception/estimate_array_layout.py, 2026-11-07): the
+virtual-array layout of the board as measured from the data (phase slope against the LiDAR or camera
+azimuth, per channel), and per firmware variant the phase between the two AWR2243 chips (a constant
+plus a ramp in range: the slave samples ~0.4 us late). perception/radar.py uses it by default
+(layout="measured"), with neither the .cfg antennaCalibParams nor the in-situ phase: on the
+corner-reflector and plate sessions they made the measured layout worse.
+
+TEAM LAYOUT (layout="team"): the table in radar_config.py (_TX_AZ, _TX_EL, _RX_AZ), the .cfg
+antenna calibration (antennaCalibParams) and the in-situ phase correction measured against the LiDAR
+(calibration/radar_rx_phase.json, perception/estimate_rx_phase.py). The table does not match the
+board (docs/knowledge/03_radar_firmware_and_dca.md, "Off-axis azimuth"); it stays for the old
+chain's reproduction (radar_chain.py) and for comparisons. Both corrections are PROVISIONAL.
 """
 from __future__ import annotations
 
@@ -20,11 +27,39 @@ import numpy as np
 from .radar_config import RadarConfig, parse_calibration, parse_cfg_file
 
 RX_PHASE_FILE = Path(__file__).resolve().parents[2] / "calibration" / "radar_rx_phase.json"
+ARRAY_FILE = Path(__file__).resolve().parents[2] / "calibration" / "radar_array.json"
 
 
-def rx_phase_for(variant: str):
+def array_doc() -> dict:
+    """calibration/radar_array.json ({} when absent)."""
+    return json.loads(ARRAY_FILE.read_text()) if ARRAY_FILE.is_file() else {}
+
+
+def array_layout() -> dict:
+    """The measured board layout: chirp_tx_pos (per chirp, lambda/2 within a chip's group; None =
+    an elevated TX, not in the azimuth row), rx_chip, rx_pos (per RX), chip_offset (lambda/2 from
+    the master's group to the slave's). None when the file has no layout."""
+    return array_doc().get("layout")
+
+
+def array_for(variant: str):
+    """The inter-chip phase of a firmware variant: {"slave_phase_rad_per_m", "slave_phase_deg", ...};
+    None when it was not measured (the detector then combines the chips incoherently only)."""
+    return array_doc().get("variants", {}).get(variant) if variant else None
+
+
+def variant_of_cfg(cfg_path) -> str:
+    """The firmware variant of a processing .cfg (firmware/<variant>/cascade_<variant>.cfg), or None."""
+    name = Path(cfg_path).name
+    return name[len("cascade_"):-len(".cfg")] if name.startswith("cascade_") and name.endswith(".cfg") else None
+
+
+def rx_phase_for(variant: str, layout: str = "measured"):
     """The in-situ phase correction (deg) for a firmware variant: per RX (8) or per channel
-    [tx][rx] (6 x 8); None when there is none."""
+    [tx][rx] (6 x 8); None when there is none. It belongs to the TEAM layout: with the measured
+    layout (the default, when calibration/radar_array.json has one) it is None."""
+    if layout == "measured" and array_layout() is not None:
+        return None
     if not RX_PHASE_FILE.is_file():
         return None
     entry = json.loads(RX_PHASE_FILE.read_text()).get("variants", {}).get(variant)
@@ -63,5 +98,5 @@ def file_md5(p: Path) -> str:
     return hashlib.md5(Path(p).read_bytes()).hexdigest()[:12] if Path(p).is_file() else "none"
 
 
-__all__ = ["RX_PHASE_FILE", "RadarConfig", "apply_phase", "file_md5", "load_radar_config", "radar_correction",
-           "rx_phase_for"]
+__all__ = ["ARRAY_FILE", "RX_PHASE_FILE", "RadarConfig", "apply_phase", "array_doc", "array_for", "array_layout",
+           "file_md5", "load_radar_config", "radar_correction", "rx_phase_for", "variant_of_cfg"]

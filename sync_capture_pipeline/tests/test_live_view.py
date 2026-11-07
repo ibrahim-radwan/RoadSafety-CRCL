@@ -209,3 +209,71 @@ def test_worker_stops_when_server_goes_away():
     finally:
         if p.poll() is None:
             p.kill()
+
+
+def test_capture_names_are_checked(tmp_path):
+    lv = liveview.LiveView(sys.executable, None, calib_root=tmp_path)
+    assert "set name" in lv.capture("background", "../x")["error"]
+    assert "position name" in lv.capture("position", "calib_1", "a/b")["error"]
+    assert "reserved" in lv.capture("position", "calib_1", "background")["error"]
+    assert "not on" in lv.capture("position", "calib_1", "5m_left")["error"]
+    assert "kind" in lv.capture("delete", "calib_1", "x")["error"]
+    assert list(tmp_path.iterdir()) == []                        # nothing made for a refused capture
+
+
+def test_calibration_folder_is_not_a_session(tmp_path):
+    (tmp_path / server.CALIB_DIR / "calib_1").mkdir(parents=True)
+    (tmp_path / "run_1").mkdir()
+    assert [s["name"] for s in server.list_sessions(tmp_path)] == ["run_1"]
+
+
+@need_session
+def test_calibration_capture_writes_only_its_folder(tmp_path):
+    """Save background, then Save position (the same session plays both, so "found" is not
+    asserted): every worker writes its part into calibration/<set>/<name>/, the set reads back,
+    calib_reflector.py reads the captures, and nothing in the played session changes."""
+    pytest.importorskip("torch")
+    sensors = ["radar", "lidar"]
+    before = _snapshot(S)
+    lv = liveview.LiveView(sys.executable, S, max_secs=90, calib_root=tmp_path)
+    assert lv.start(sensors) == ""
+    try:
+        t_end = time.monotonic() + 60
+        while time.monotonic() < t_end and not all(lv.status()["sensors"][s]["seq"] >= 3 for s in sensors):
+            time.sleep(0.5)
+        for kind, name in (("background", None), ("position", "p1")):
+            r = lv.capture(kind, "calib_t", name, 1.0, 15.0)
+            assert "dir" in r, r
+            t_end = time.monotonic() + 40
+            while time.monotonic() < t_end:
+                caps = [lv.status()["sensors"][s]["header"].get("capture", {}) for s in sensors]
+                if all(c.get("token") == r["token"] and c.get("state") in ("saved", "error") for c in caps):
+                    break
+                time.sleep(0.3)
+            assert all(c.get("state") == "saved" for c in caps), caps
+        assert lv.capture("position", "calib_t", "p1")["error"].startswith("position 'p1' already exists")
+        d = tmp_path / "calib_t"
+        for f in ("background/radar/background_band.npy", "background/lidar/background_voxels.npy",
+                  "p1/radar/frames.npy", "p1/radar/reflector.json", "p1/lidar/sweeps.npz", "p1/lidar/reflector.json",
+                  "p1/capture.json"):
+            assert (d / f).is_file(), f
+        st = lv.calib_set("calib_t")
+        assert st["background"] and [p["name"] for p in st["positions"]] == ["p1"]
+        assert {"radar", "lidar"} <= set(st["positions"][0])
+        lv.control({"reflector_only": True})
+        t_end = time.monotonic() + 10
+        while time.monotonic() < t_end and not all(lv.status()["sensors"][s]["header"].get("reflector_only")
+                                                   for s in sensors):
+            time.sleep(0.3)
+        assert all(lv.status()["sensors"][s]["header"].get("reflector_only") for s in sensors)
+    finally:
+        lv.stop()
+        t_end = time.monotonic() + liveview.STOP_GRACE_S + 5
+        while lv.active() and time.monotonic() < t_end:
+            time.sleep(0.3)
+        lv.shutdown()
+    r = subprocess.run([sys.executable, str(PIPELINE / "calib_reflector.py"), "--set", str(tmp_path / "calib_t"),
+                        "--no-figure", "--no-camera"], capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    assert (tmp_path / "calib_t" / "reflector_summary.json").is_file()
+    assert _snapshot(S) == before, "a calibration capture changed files in the played session"

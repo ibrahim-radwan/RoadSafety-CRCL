@@ -153,8 +153,8 @@
   <section class="card" id="live">
     <h2>Live view – sensor alignment <span id="liveTimer" style="text-transform:none;letter-spacing:0"></span></h2>
     <div class="sub" style="color:var(--muted);font-size:14px;margin-bottom:10px">
-      Shows the sensors live; nothing is saved. Not available while recording, and recording is not
-      available while it is on. Switches itself off after 10 minutes.</div>
+      Shows the sensors live; nothing is saved, except calibration captures when you press Save. Not
+      available while recording, and recording is not available while it is on. Switches itself off after 10 minutes.</div>
     <div class="row">
       <div><label>Sensors</label>
         <div class="checks">
@@ -184,6 +184,25 @@
         <button id="btnBgTake" title="Record the empty scene for a few seconds (keep the rig still, reflector and people out of view). The reflector is then picked as what changed. Kept in memory only, never saved.">Take background</button>
         <button id="btnBgClear">Clear background</button>
         <span id="bgstate" style="color:var(--muted);font-size:14px"></span>
+      </div>
+      <div class="calib" style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:12px">
+        <b>Calibration capture</b> <span style="color:var(--muted);font-size:14px">– saves ~2 s of radar, LiDAR and
+          camera into <code>calibration/&lt;set&gt;/</code> on the SD card. First the empty scene, then each reflector position.</span>
+        <div class="row" style="align-items:flex-end;margin-top:8px">
+          <div><label for="cset">Set</label><input id="cset" autocomplete="off"></div>
+          <div><label for="cpos">Position name (rig's view: left = vehicle left)</label>
+            <input id="cpos" placeholder="e.g. 5m_1m_left" autocomplete="off"></div>
+          <button id="btnCapBg" title="Reflector and people out of the scene, rig still. Saved, and used as the background at once.">Save background</button>
+          <button id="btnCapPos" title="Place the reflector first. Saves ~2 s and finds the reflector as what changed from the saved background, inside the reflector search range.">Save position</button>
+          <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="ronly"
+            style="width:18px;height:18px">reflector only</label>
+        </div>
+        <div class="meta" id="capstate"></div>
+        <table class="refl" style="margin-top:6px">
+          <thead><tr><th>Position</th><th>LiDAR x / y / z (vehicle)</th><th>LiDAR az (own frame)</th><th>Radar range / az</th><th>Radar − LiDAR</th></tr></thead>
+          <tbody id="ctable"></tbody>
+        </table>
+        <div class="meta" id="cyaw"></div>
       </div>
       <table class="refl">
         <thead><tr><th id="reflHead">Strongest reflector</th><th>Range</th><th>Azimuth (+ left)</th><th>x / y</th><th></th></tr></thead>
@@ -406,7 +425,60 @@ $("btnStart").onclick = async () => {
     await post("/api/start", { name: $("name").value.trim(), note: $("note").value, secs: $("secs").value,
                                delay: $("delay").value, sensors, guide: $("g_stage3").checked ? "stage3" : null });
     $("g_stage3").checked = false;              // one-off: the next session is a plain recording again
-    $("name").value = suggestName();
+    // ── calibration capture ──
+function capText() {
+  const parts = [];
+  for (const s of ["radar", "lidar", "camera"]) {
+    const c = hdr(s) && hdr(s).capture;
+    if (!c || c.state === "off") continue;
+    const what = c.state === "collecting" ? `collecting ${c.done}/${c.of}` : c.state === "error" ? `ERROR ${c.error}` : c.state;
+    parts.push(`${s}: ${c.name} ${what}`);
+  }
+  return parts.join(" · ");
+}
+let calibSeen = 0;
+async function showCalib(force) {
+  const set = $("cset").value.trim();
+  if (!set || (!force && Date.now() - calibSeen < 2000)) return;
+  calibSeen = Date.now();
+  let r;
+  try { r = await getJSON("/api/calib/" + encodeURIComponent(set)); } catch (e) { return; }
+  const pos = (r.positions || []).slice().reverse();
+  const cell = (o, f) => (o && o.found ? f(o) : (o ? "not found" : "–"));
+  const rows = pos.map((p) => {
+    const l = p.lidar, rd = p.radar;
+    const d = l && l.found && rd && rd.found ? `${(rd.range - l.range >= 0 ? "+" : "") + f2(rd.range - l.range)} m, ${
+      (rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI >= 0 ? "+" : "") + f1(rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI)}°` : "–";
+    return `<tr><td><b>${p.name}</b></td><td>${cell(l, (o) => `${f2(o.x)} / ${f2(o.y)} / ${f2(o.z)} m (${f1(o.n_per_sweep)} pts)`)}</td>
+      <td>${cell(l, (o) => `${f1(o.own_az_deg)}°`)}</td><td>${cell(rd, (o) => `${f2(o.range)} m / ${f1(o.az_deg)}° (+${f1(o.rise_db)} dB)`)}</td><td>${d}</td></tr>`;
+  });
+  $("ctable").innerHTML = rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">${
+    r.background ? "background saved; no positions yet" : "no background saved in this set yet"}</td></tr>`;
+  const y = r.yaw_from_radar_boresight_deg;
+  $("cyaw").textContent = (r.background ? "Background saved " + (r.background.time || "") + ". " : "") +
+    (y ? `LiDAR yaw from the radar (positions within 5° of its boresight, n=${y.n}): ${y.mean.toFixed(1)}°. ` : "") +
+    `Folder: ${r.dir}. Full analysis: python calib_reflector.py --set ${r.dir}`;
+}
+async function capture(kind) {
+  $("lmsg").textContent = "";
+  try {
+    await post("/api/live/capture", { kind, set: $("cset").value.trim(), name: $("cpos").value.trim(),
+      r_lo: parseFloat($("gmin").value) || 0, r_hi: parseFloat($("gmax").value) || 20 });
+    if (kind === "position") $("cpos").value = "";
+    setTimeout(() => showCalib(true), 4000);
+  } catch (e) { $("lmsg").textContent = e.message; }
+}
+$("cset").value = "calib_" + new Date().toISOString().slice(0, 10).replace(/-/g, "");
+$("btnCapBg").onclick = () => capture("background");
+$("btnCapPos").onclick = () => capture("position");
+$("ronly").onchange = () => post("/api/live/control", { reflector_only: $("ronly").checked })
+  .catch((e) => { $("lmsg").textContent = e.message; });
+$("cset").onchange = () => {
+  post("/api/live/control", { calib_set: $("cset").value.trim() }).catch(() => {});
+  showCalib(true);
+};
+
+$("name").value = suggestName();
   } catch (e) { $("msg").textContent = e.message; }
   refresh();
 };
@@ -540,9 +612,11 @@ async function liveStateLoop() {
       if (!controlSynced) {               // another iPad (or a reload) may have changed them
         $("lrange").value = String(Math.round(liveState.control.range_m));
         $("lmap").value = liveState.control.radar_map;
+        $("ronly").checked = !!liveState.control.reflector_only;
         controlSynced = true;
       }
       showCaptions(); showLiveNumbers(); drawBev("lidar"); drawBev("radar");
+      $("capstate").textContent = capText(); showCalib(false);
       $("liveTimer").textContent = liveState.on ? (liveState.stopping ? "– stopping…" :
         `– ${fmtTime(liveState.remaining_s)} left`) : "";
       $("btnLiveStop").disabled = !liveState.on || liveState.stopping;
@@ -596,7 +670,8 @@ $("btnLive").onclick = async () => {
   $("lmsg").textContent = "";
   const sensors = ["radar", "camera", "lidar"].filter((k) => $("l_" + k).checked);
   try {
-    await post("/api/live/control", { range_m: $("lrange").value, radar_map: $("lmap").value });
+    await post("/api/live/control", { range_m: $("lrange").value, radar_map: $("lmap").value,
+      calib_set: $("cset").value.trim() || undefined });
     await post("/api/live/start", { sensors });
     liveBegin();
     $("live").scrollIntoView({ behavior: "smooth" });
@@ -614,6 +689,59 @@ for (const id of ["lrange", "lmap"]) {
   $(id).onchange = () => post("/api/live/control", { range_m: $("lrange").value, radar_map: $("lmap").value })
     .catch((e) => { $("lmsg").textContent = e.message; });
 }
+
+// ── calibration capture ──
+function capText() {
+  const parts = [];
+  for (const s of ["radar", "lidar", "camera"]) {
+    const c = hdr(s) && hdr(s).capture;
+    if (!c || c.state === "off") continue;
+    const what = c.state === "collecting" ? `collecting ${c.done}/${c.of}` : c.state === "error" ? `ERROR ${c.error}` : c.state;
+    parts.push(`${s}: ${c.name} ${what}`);
+  }
+  return parts.join(" · ");
+}
+let calibSeen = 0;
+async function showCalib(force) {
+  const set = $("cset").value.trim();
+  if (!set || (!force && Date.now() - calibSeen < 2000)) return;
+  calibSeen = Date.now();
+  let r;
+  try { r = await getJSON("/api/calib/" + encodeURIComponent(set)); } catch (e) { return; }
+  const pos = (r.positions || []).slice().reverse();
+  const cell = (o, f) => (o && o.found ? f(o) : (o ? "not found" : "–"));
+  const rows = pos.map((p) => {
+    const l = p.lidar, rd = p.radar;
+    const d = l && l.found && rd && rd.found ? `${(rd.range - l.range >= 0 ? "+" : "") + f2(rd.range - l.range)} m, ${
+      (rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI >= 0 ? "+" : "") + f1(rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI)}°` : "–";
+    return `<tr><td><b>${p.name}</b></td><td>${cell(l, (o) => `${f2(o.x)} / ${f2(o.y)} / ${f2(o.z)} m (${f1(o.n_per_sweep)} pts)`)}</td>
+      <td>${cell(l, (o) => `${f1(o.own_az_deg)}°`)}</td><td>${cell(rd, (o) => `${f2(o.range)} m / ${f1(o.az_deg)}° (+${f1(o.rise_db)} dB)`)}</td><td>${d}</td></tr>`;
+  });
+  $("ctable").innerHTML = rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">${
+    r.background ? "background saved; no positions yet" : "no background saved in this set yet"}</td></tr>`;
+  const y = r.yaw_from_radar_boresight_deg;
+  $("cyaw").textContent = (r.background ? "Background saved " + (r.background.time || "") + ". " : "") +
+    (y ? `LiDAR yaw from the radar (positions within 5° of its boresight, n=${y.n}): ${y.mean.toFixed(1)}°. ` : "") +
+    `Folder: ${r.dir}. Full analysis: python calib_reflector.py --set ${r.dir}`;
+}
+async function capture(kind) {
+  $("lmsg").textContent = "";
+  try {
+    await post("/api/live/capture", { kind, set: $("cset").value.trim(), name: $("cpos").value.trim(),
+      r_lo: parseFloat($("gmin").value) || 0, r_hi: parseFloat($("gmax").value) || 20 });
+    if (kind === "position") $("cpos").value = "";
+    setTimeout(() => showCalib(true), 4000);
+  } catch (e) { $("lmsg").textContent = e.message; }
+}
+$("cset").value = "calib_" + new Date().toISOString().slice(0, 10).replace(/-/g, "");
+$("btnCapBg").onclick = () => capture("background");
+$("btnCapPos").onclick = () => capture("position");
+$("ronly").onchange = () => post("/api/live/control", { reflector_only: $("ronly").checked })
+  .catch((e) => { $("lmsg").textContent = e.message; });
+$("cset").onchange = () => {
+  post("/api/live/control", { calib_set: $("cset").value.trim() }).catch(() => {});
+  showCalib(true);
+};
 
 $("name").value = suggestName();
 refresh(); loadSessions();

@@ -4,12 +4,12 @@
     {
       "id": "rig_2026-11-03",
       "valid_from": "2026-11-03T00:00:00",
-      "yaw_deg": 39.76,
+      "yaw_deg": 37.2,
       "tx_m": -0.03,
       "ty_m": -0.01,
       "z_note": "z is not shifted (the radar has no elevation for stationary targets; the LiDAR detector measures its own ground)",
-      "method": "2D rigid fit of the LiDAR corner-reflector position (background-subtracted) to the 13 nominal positions of calibration_dataset 2026-11-03 (2/3/5/8 m; names read from the reflector's side, *_left = vehicle right); residual 0.11 m mean, 0.33 m max. Radar on boresight agrees within +-3 deg; the team's manual fit (manual_calibration_result.yaml, not accepted_for_use) gives 38.6 deg.",
-      "measured": "2026-11-05",
+      "method": "Yaw referenced to the CAMERA (the rig's forward direction): camera azimuth of the corner reflector (top of the tripod, found by image difference from the background session; atan((cx - u) / fx), rectified intrinsics) minus its LiDAR azimuth in the LiDAR's own frame (background-subtracted voxels), 9 positions at 2-5 m of calibration_dataset 2026-11-03: +37.20 +- 0.39 deg (calib_reflector.py). Translation from the 2D rigid fit to the 13 nominal positions. The radar boresight reads 2.7 deg right of the camera on the same positions; the nominal positions give 39.76 deg (the rig was turned ~2.5 deg against the floor marks); the team's manual radar-based fit gave 38.6 deg.",
+      "measured": "2026-11-05, yaw revised 2026-11-07 (was 39.76, fitted to the nominal positions)",
       "provisional": "until the team's extrinsic calibration is accepted"
     }
   ]

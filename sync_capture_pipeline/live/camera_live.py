@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
 live/camera_live.py - the camera's live view: the ZED 2i's left image, scaled down, ~5 times a
-second. Nothing is written to disk (recording is never enabled).
+second. Nothing is written to disk (recording is never enabled), except a calibration capture on
+the page's request: CAPTURE_FRAMES full-resolution left images, CAPTURE_GAP_S apart, to
+<dir>/camera/frame_<i>.jpg, with the rectified left intrinsics in meta.json (common.Capture;
+calib_reflector.py finds the reflector in them and measures its azimuth).
 
 INPUT
     live            the ZED 2i at HD720 / 15 fps, no depth (the recorder's 1080p / 30 fps is not
@@ -15,9 +18,10 @@ from __future__ import annotations
 import argparse
 import time
 
-from common import Link, Rate, add_args, jpeg, log
+from common import Capture, Link, Rate, add_args, jpeg, json_dump, log
 
 WIDTH, HEIGHT = 640, 360
+CAPTURE_FRAMES, CAPTURE_GAP_S = 3, 0.6
 
 
 def main() -> int:
@@ -51,6 +55,11 @@ def main() -> int:
             return 1
         rt, mat, res = sl.RuntimeParameters(), sl.Mat(), sl.Resolution(WIDTH, HEIGHT)
         rate, period, next_send, fails = Rate(), 1.0 / max(0.2, a.hz), time.monotonic(), 0
+        cap, full, next_cap = Capture("camera", CAPTURE_FRAMES), sl.Mat(), 0.0
+        info = cam.get_camera_information().camera_configuration
+        lc = info.calibration_parameters.left_cam
+        intr = {"fx": float(lc.fx), "cx": float(lc.cx), "cy": float(lc.cy),
+                "w": int(info.resolution.width), "h": int(info.resolution.height)}
         while link.running():
             code = cam.grab(rt)
             if code == sl.ERROR_CODE.END_OF_SVOFILE_REACHED:
@@ -65,6 +74,22 @@ def main() -> int:
                 continue
             fails = 0
             now = time.monotonic()
+            if cap.follow(link.control.get("capture")):
+                next_cap = now
+            if cap.collecting and now >= next_cap:
+                next_cap = now + CAPTURE_GAP_S
+                cam.retrieve_image(full, sl.VIEW.LEFT)            # full resolution, rectified
+                done = cap.add((jpeg(full.get_data()[..., 2::-1], 92), now))
+                if done is not None:
+                    def write(done=done, spec=dict(cap.spec)):
+                        d = cap.out_dir()
+                        for i, (jpg, _) in enumerate(done):
+                            (d / f"frame_{i}.jpg").write_bytes(jpg)
+                        json_dump(d / "meta.json", {"intrinsics": intr, "t": [t for _, t in done],
+                                                    "kind": spec.get("kind"),
+                                                    "time_local": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+                        cap.saved()
+                    cap.in_thread(write)
             if now < next_send:                     # grab every frame, send hz of them
                 continue
             next_send = max(next_send + period, now)
@@ -72,7 +97,7 @@ def main() -> int:
             rgb = mat.get_data()[..., 2::-1]          # BGRA -> RGB
             rate.tick()
             link.send({"t": now, "w": WIDTH, "h": HEIGHT, "hz": round(rate.hz, 1),
-                       "fps": round(float(cam.get_current_fps()), 1)}, jpeg(rgb, 70))
+                       "fps": round(float(cam.get_current_fps()), 1), "capture": cap.state()}, jpeg(rgb, 70))
     except Exception as exc:
         import traceback
         traceback.print_exc()

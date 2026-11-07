@@ -103,7 +103,12 @@ The reference is held in the workers' memory only. The server forwards
 one-shot `{"background": "take" | "clear"}` controls and keeps none of them
 (`live/README.md`).
 
-- **Nothing is saved.**
+- **Nothing is saved, except calibration captures:** *Save background* /
+  *Save position* in the live card write ~2 s of every sensor to
+  `<sessions-root>/calibration/<set>/<name>/` (`/api/live/capture`,
+  `/api/calib/<set>`). That folder is not listed as a session, and no
+  recording may be called `calibration`. Details: `../live/README.md`,
+  "Calibration capture".
 - **Never at the same time as a recording:**
   - Start recording is off while live view is on.
   - Start live view is off while recording.

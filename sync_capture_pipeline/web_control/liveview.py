@@ -5,13 +5,18 @@ the page, and switches everything off after MAX_SECS.
 
 Workers are children of this server, linked by pipes (live/common.py): if the server stops or
 crashes, their stdin closes and their next write fails, so they stop too. A live view can
-therefore never outlive the server's lockout against recording (server.py). Nothing is saved.
+therefore never outlive the server's lockout against recording (server.py).
+
+Nothing is saved, except calibration captures on request (2026-11-07): "Save background" / "Save
+position" make <calib-root>/<set>/<name>/ with capture.json, and the workers write their next ~2 s
+of data into it (live/common.py Capture). calib_set() reads a set back for the page.
 """
 from __future__ import annotations
 
 import collections
 import json
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -27,6 +32,7 @@ SENSORS = ("radar", "camera", "lidar")
 WORKER = {s: LIVE_DIR / f"{s}_live.py" for s in SENSORS}
 MAX_SECS = 600.0
 STOP_GRACE_S = 8.0           # SIGINT, then SIGKILL after this (the radar sends STOP_RECORD first)
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$")     # calibration set and position names
 
 
 def stray_workers() -> list:
@@ -102,14 +108,16 @@ class Worker:
 class LiveView:
     """At most one live view; the lockout against recording is the server's (server.py)."""
 
-    def __init__(self, python: str, from_session: Path = None, max_secs: float = MAX_SECS):
+    def __init__(self, python: str, from_session: Path = None, max_secs: float = MAX_SECS, calib_root: Path = None):
         self.python, self.from_session, self.max_secs = python, from_session, float(max_secs)
+        self.calib_root = Path(calib_root) if calib_root else None     # calibration captures go here
         self.lock = threading.Lock()
         self.workers: dict = {}
         self.started = self.deadline = None
         self.stop_reason = None
-        self.control_state = {"range_m": 20.0, "radar_map": "static"}
+        self.control_state = {"range_m": 20.0, "radar_map": "static", "reflector_only": False}
         self._bg_n = 0                  # background take/clear tokens (one-shot, see control)
+        self._cap_n = 0                 # calibration capture tokens (one-shot, see capture)
         self.log = collections.deque(maxlen=400)
         self._stopping = False
 
@@ -191,6 +199,11 @@ class LiveView:
             ok["range_m"] = float(min(80.0, max(5.0, float(msg["range_m"]))))
         if msg.get("radar_map") in ("static", "moving"):
             ok["radar_map"] = msg["radar_map"]
+        if "reflector_only" in msg:
+            ok["reflector_only"] = bool(msg["reflector_only"])
+        if msg.get("calib_set") and self.calib_root is not None and NAME_RE.match(str(msg["calib_set"])):
+            # the workers use this set's saved background (if any) while it is the page's set
+            ok["use_background"] = str(self.calib_root / str(msg["calib_set"]) / "background")
         once = {}
         if msg.get("background") in ("take", "clear"):
             # one-shot: sent to the running workers only, never kept in control_state, so a new
@@ -203,6 +216,88 @@ class LiveView:
         for w in workers:
             w.control({**ok, **once})
         return {**ok, **once}
+
+    def capture(self, kind: str, set_name: str, name: str = None, r_lo: float = 1.0, r_hi: float = 15.0) -> dict:
+        """A calibration capture: makes <calib_root>/<set>/<name>/ (name "background" for a
+        background) with capture.json and sends the workers a one-shot token to write their next
+        ~2 s of data into it. Returns {"dir"} or {"error"}."""
+        if kind not in ("background", "position"):
+            return {"error": "kind must be background or position"}
+        if self.calib_root is None:
+            return {"error": "no calibration folder configured"}
+        name = "background" if kind == "background" else (name or "").strip()
+        set_name = (set_name or "").strip()
+        for what, v in (("set", set_name), ("position", name)):
+            if not NAME_RE.match(v):
+                return {"error": f"{what} name: letters, digits and _ . + - only (up to 64), not '{v}'"}
+        if kind == "position" and name == "background":
+            return {"error": "'background' is reserved for the empty scene"}
+        with self.lock:
+            workers = {s: w for s, w in self.workers.items() if w.alive() and s in ("radar", "lidar", "camera")}
+        if not workers:
+            return {"error": "live view is not on"}
+        d = self.calib_root / set_name / name
+        if d.exists() and kind == "position":
+            return {"error": f"position '{name}' already exists in set '{set_name}' - use a new name"}
+        if d.exists():                                  # a new background replaces the old one
+            import shutil
+            shutil.rmtree(d)
+        d.mkdir(parents=True)
+        lo, hi = float(r_lo), float(r_hi)
+        info = {"kind": kind, "set": set_name, "name": name, "time_local": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "sensors": sorted(workers), "r_lo": lo, "r_hi": hi,
+                "source": str(self.from_session) if self.from_session else "live",
+                "note": "live-view calibration capture; process with calib_reflector.py --set <set folder>"}
+        (d / "capture.json").write_text(json.dumps(info, indent=1) + "\n")
+        self._cap_n += 1
+        msg = {"capture": {"token": self._cap_n, "kind": kind, "dir": str(d), "r_lo": lo, "r_hi": hi}}
+        for w in workers.values():
+            w.control(msg)
+        self._log(f"[calibration capture {set_name}/{name} ({kind}) -> {d}]")
+        return {"dir": str(d), "token": self._cap_n}
+
+    def calib_sets(self) -> list:
+        if self.calib_root is None or not self.calib_root.is_dir():
+            return []
+        sets = [p for p in self.calib_root.iterdir() if p.is_dir() and NAME_RE.match(p.name)]
+        return [p.name for p in sorted(sets, key=lambda p: p.stat().st_mtime, reverse=True)]
+
+    def calib_set(self, set_name: str) -> dict:
+        """A set's captures with each sensor's reflector summary, and the LiDAR yaw estimates."""
+        if self.calib_root is None or not NAME_RE.match(set_name or ""):
+            return {"error": "bad set name"}
+        root = self.calib_root / set_name
+        out = {"set": set_name, "dir": str(root), "positions": [], "background": None}
+        if not root.is_dir():
+            return out
+
+        def read(p):
+            try:
+                return json.loads(p.read_text())
+            except (OSError, ValueError):
+                return None
+        for d in sorted((q for q in root.iterdir() if (q / "capture.json").is_file()), key=lambda q: q.stat().st_mtime):
+            cap = read(d / "capture.json") or {}
+            row = {"name": d.name, "kind": cap.get("kind"), "time": cap.get("time_local"),
+                   "saved": {s: (d / s / "meta.json").is_file() for s in cap.get("sensors", [])}}
+            for s in ("radar", "lidar"):
+                r = read(d / s / "reflector.json")
+                if r is not None:
+                    row[s] = {k: r.get(k) for k in ("found", "x", "y", "z", "range", "az_deg", "rise_db", "present",
+                                                     "n_per_sweep", "own_x", "own_y", "own_az_deg", "background")}
+            if cap.get("kind") == "background":
+                out["background"] = row
+            else:
+                out["positions"].append(row)
+        # LiDAR yaw from the radar (positions near its boresight only, the most robust; the radar azimuth
+        # off-axis is good since the measured array layout, 2026-11-07); calib_reflector.py also uses the camera
+        both = [r for r in out["positions"] if (r.get("radar") or {}).get("found") and (r.get("lidar") or {}).get("found")
+                and r["lidar"].get("own_az_deg") is not None]
+        bore = [r for r in both if abs(r["radar"]["az_deg"]) <= 5.0]
+        if bore:
+            d = [r["radar"]["az_deg"] - r["lidar"]["own_az_deg"] for r in bore]
+            out["yaw_from_radar_boresight_deg"] = {"mean": round(float(sum(d) / len(d)), 2), "n": len(d)}
+        return out
 
     def frame(self, sensor: str, after: int, timeout: float = 2.0):
         with self.lock:

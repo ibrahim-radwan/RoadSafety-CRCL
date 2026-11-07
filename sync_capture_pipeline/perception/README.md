@@ -26,11 +26,12 @@ See `docs/knowledge/01_status_and_roadmap.md`.
 - Capon, MUSIC, Bartlett;
 - the elevation map. |
 | `radar_chain.py` | `RadarChain`: the old chain's front end (`process_frame` stages 1–7 and 9) composed from those stages. It reproduces the old chain's frozen golden frames on both of its paths (`cfar="caso"` or `"os"`), at ~21 ms/frame; the old chain took ~100 ms (GPU path) or ~1 s (CPU path). |
-| `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. It runs on the GPU (PyTorch) in ~16 ms, built on the `radar_dsp.py` stages. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
+| `radar.py` | `RadarDetector`: one raw frame → range-Doppler and range-azimuth maps plus a detection list. Also (2026-11-07): `static_band` / `static_map_of` (the zero-Doppler channels, to subtract a background coherently before beamforming) and `detect_static_map` (the stationary detector on any map, e.g. a 2 s mean, with sub-cell interpolation); `refine_azimuth` (one static reflector's angle, coherent across both chips). `layout="measured"` (default, `../calibration/radar_array.json`) or `"team"` (the old table, for comparison). It runs on the GPU (PyTorch) in ~16 ms, built on the `radar_dsp.py` stages. Also `flag_multipath`, `cluster_detections`, `RADAR_TRACKER`. |
 | `lidar.py` | `LidarDetector`: one sweep → objects. Local ground, overhead structures removed, density-based clustering, oriented boxes, size class. ~23 ms. |
 | `tracking.py` | `Tracker`: a constant-velocity Kalman filter with Hungarian association and M-of-N confirmation; a **moving / static** state per track (displacement over 1.5 s, hysteresis 0.25–0.5 m/s; sensor frame: needs ego-motion compensation on a moving platform); prediction, gating and duplicate merging vectorised over all tracks (~2.5 ms with 45 LiDAR tracks). For radar, Doppler is an EKF measurement plus a consistency check. |
 | `track_features.py` | `TrackFeatures`: per radar track, motion-compensated **accumulation** of its detections (last 1 s) and a rolling **micro-Doppler** spectrogram at its cells → torso velocity, Doppler spread (limbs), cadence (experimental). Replaces the old single-subject `accumulate.py`/`microdoppler.py`. |
-| `estimate_rx_phase.py` | The in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. |
+| `estimate_array_layout.py` | **The radar's virtual-array layout and the phase between its two chips**, measured from sessions against the LiDAR (each channel's phase against sin azimuth); prints the positions per chip and chirp, writes the inter-chip phase to `../calibration/radar_array.json` (`--write`), and scores the detector with both layouts (`--test`). 2026-11-07. |
+| `estimate_rx_phase.py` | Team layout only: the in-situ radar phase correction against the LiDAR, written to `../calibration/radar_rx_phase.json`. Superseded by the measured layout. |
 | `baseline.py` | The reference: golden per-frame outputs (the old chain's, frozen; ours) and the scores of every reference session (`baseline/scores.json`); `compare` is the regression check. |
 | `../run_perception.py` | A whole session → `sync/perception_{radar,lidar}.npz` and `sync/perception.json` (scores). |
 
@@ -44,6 +45,8 @@ See `docs/knowledge/01_status_and_roadmap.md`.
 | `lidar_io.py` | `lidar.pcap`: packet index, LiDAR-to-monotonic clock, sweep timing, `decode_sweeps` (a whole session, in order, one driver) and `decode_parallel` (the same, several drivers on time chunks in worker processes; identical sweeps). |
 | `session.py` | `Session`: metadata, firmware variant and `.cfg`, offsets, radar/camera timelines, pairs, and the LiDAR walker track (`target_at`). |
 | `conventions.py` | The frame and sign conventions: world azimuth = − processing azimuth, v_r > 0 receding, the old chain's xyz to the pipeline frame. |
+| `extrinsic.py` | The LiDAR → vehicle transform per mounting (`calibration/lidar_extrinsic.json`). |
+| `reflector.py` | A corner reflector as the change from an empty-scene background (2026-11-07): LiDAR (new voxels, the persistent cell group) and radar (the change peak, interpolated), and the 2D rigid fit. Shared by the live view's calibration capture, the web server and `../calib_reflector.py`. |
 
 `radar_config.py` and `radar_io.py` came from the old chain (git history
 follows them).
@@ -52,7 +55,7 @@ follows them).
 conda activate rel_1_py_3_8
 python run_perception.py --session /mnt/sdcard/sessions/<name>          # ~3 min for 10 min of data (cached; ~6 min from a USB hard disk)
 python bench_gpu.py --session <s> [--json out.json]                    # per-part speed and GPU load (see Speed below)
-python perception/estimate_rx_phase.py --session <s1> [<s2> ...] [--write]
+python perception/estimate_array_layout.py --session <stage3_02> <stage3_03> [--write] [--test <s> ...]
 python -m pytest -q tests/test_perception.py
 ```
 
@@ -84,20 +87,33 @@ python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden fr
     beamformers, with their inputs.
   - **`golden_ours.npz`:** our detector (RD, RA and detections). After a
     deliberate change, re-create it with `baseline.py golden --session <s>`.
+    Last re-made 2026-11-07 for the measured array layout.
+- **Session notes** (`SESSION_NOTES` in `baseline.py`, printed under the
+  table): `run_20261014_1325`'s LiDAR is turned ~20° against the radar,
+  so its radar scores against the LiDAR target are not meaningful.
 
 ## Radar, per frame
 
-1. Calibration (the `.cfg`, times the in-situ correction), then the range FFT.
+1. The range FFT; then the slave chip's phase (a constant plus a ramp in
+   range, `calibration/radar_array.json`) is removed. No `.cfg` calibration
+   and no in-situ phase with the measured layout (2026-11-07).
 2. MTI, the Doppler FFT, and **TDM-MIMO Doppler compensation**: the 6 TX
    slots of a loop see a moving target at different phases.
-3. The uniform 38-position virtual array, then the azimuth FFT of every cell.
-   The detection map is each cell's angle-maximum power.
+3. **The measured virtual array** (2026-11-07): per chip one contiguous
+   group of 11 positions (chirps 0, 1, 2, 5 × 4 RX; chirps 3 and 4 are
+   elevated, not used), the two groups 19 apart. Each group's azimuth FFT
+   (Hann), the two powers added (incoherent: no fringes from the gap;
+   sidelobes ~20 dB down). The detection map is each cell's angle-maximum
+   power. (The team layout: the table's uniform 38 positions, one FFT.)
 4. CA-CFAR in dB (circular in Doppler), zero-Doppler band excluded, 3×3
    local maxima.
 5. Per detection:
-   - one azimuth peak with sub-bin interpolation;
+   - one azimuth peak with sub-bin interpolation, then refined coherently
+     across both chips: the fringe nearest the peak, if it beats the others
+     by 1 dB (`refine_gate_db`);
    - range interpolation;
-   - elevation from the TX5 pair phase (**unverified**).
+   - elevation: 0 with the measured layout (the elevated TX positions are
+     not measured yet); team layout: the TX5 pair phase (wrong TX).
 6. **Multipath ghosts flagged:**
    - images at n× range with n× radial velocity (n = 2, 3; radar → target →
      rig → target → radar);
@@ -123,8 +139,9 @@ python -m pytest -q tests/test_baseline.py tests/test_radar_dsp.py   # golden fr
      sidelobe prune per range row; up to 60 m; multipath images flagged.
    - LiDAR support is 82–100% within 6–10 m. Overall it is 80% indoors and
      55% outdoors (`freewalk_ref_02`). Beyond ~10 m many detections are
-     sidelobe images of strong reflectors, since this array's sidelobes are
-     only 5–10 dB down, until the antenna recalibration.
+     sidelobe images of strong reflectors (team layout: sidelobes only
+     5–10 dB down). With the measured layout the map's sidelobes are ~20 dB
+     down; the LiDAR support is to be re-scored.
    - A higher threshold makes it worse: real nearby objects have ~17 dB SNR,
      the artifacts more.
 10. **Per-track features** (`track_features.py`, 2026-10-26):
@@ -288,10 +305,13 @@ with graphs on and off:
 
 ## Limitations
 
-- The radar beam still has sidelobes only 5–10 dB down. That is calibration:
-  the team's recalibration with a reflector over a wide angle span supersedes
-  `radar_rx_phase.json`.
-- Radar elevation is not verified (z = 0 in the displays by default).
+- **Radar array layout:** measured from data (2026-11-07,
+  `docs/knowledge/03_radar_firmware_and_dca.md`, "Off-axis azimuth"), not
+  from the board's drawing. The team table (`core/radar_config.py`) stays
+  for `radar_chain.py` and comparisons. The inter-chip phase is measured for
+  `r075m_v2_8fps` only; other variants combine the chips incoherently.
+- **Radar elevation is off** (el = z = 0) with the measured layout, until the
+  elevated TX (chirps 3, 4) positions are measured.
 - Moving-target radar loses a person who stops or walks across the line of
   sight (zero Doppler). Radar tracks break at such moments, about 9 times a
   minute on freewalk_ref_02.

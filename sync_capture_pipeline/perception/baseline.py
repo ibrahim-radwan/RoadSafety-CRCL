@@ -50,8 +50,17 @@ sys.path.insert(0, str(PIPELINE))
 from perception.core.calibration import file_md5 as file_hash                 # noqa: E402
 from perception.core.session import Session                                    # noqa: E402
 
-# sessions used to measure calibration/radar_rx_phase.json: their radar scores are in-sample
+# sessions used to measure calibration/radar_array.json's inter-chip phase (and, before 2026-11-07,
+# radar_rx_phase.json): their radar scores are in-sample
 CALIBRATION_SESSIONS = {"stage3_02", "stage3_03"}
+# sessions whose LiDAR reference is turned against the radar: their LiDAR-referenced radar scores
+# measure the mounting, not the radar
+SESSION_NOTES = {
+    "run_20261014_1325": "rig set-up session: the camera was moved by hand and the LiDAR was turned ~20 deg "
+                         "against the radar and the camera (checked on the camera images, 2026-11-07: the "
+                         "radar azimuth is on the walker, the LiDAR's is ~20 deg right). Radar scores against "
+                         "the LiDAR target are not meaningful here.",
+}
 
 
 def git_commit() -> str:
@@ -82,7 +91,7 @@ def pick_frames(S: Path, n: int) -> list:
 
 
 def golden(S: Path, n: int):
-    from perception.radar import RX_PHASE_FILE, RadarDetector, rx_phase_for
+    from perception.radar import ARRAY_FILE, RX_PHASE_FILE, RadarDetector, rx_phase_for
     d = S / "sync" / "baseline"
     d.mkdir(exist_ok=True)
     frames = pick_frames(S, n)
@@ -103,7 +112,7 @@ def golden(S: Path, n: int):
     print(f"  ours: {int(n_d.sum())} detections -> golden_ours.npz")
     meta = {"session": S.name, "frames": frames, "git_commit": git_commit(), "created": time.strftime("%Y-%m-%d"),
             "cfg": sess.cfg_path.name, "firmware": variant,
-            "rx_phase_file_md5": file_hash(RX_PHASE_FILE),
+            "rx_phase_file_md5": file_hash(RX_PHASE_FILE), "array_file_md5": file_hash(ARRAY_FILE),
             "note": "golden_team_cpu/gpu: the old chain's process_frame without / with CuPy (OS / CASO "
                     "CFAR on range-Doppler), frozen 2026-10-25"}
     (d / "golden.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -146,14 +155,16 @@ def session_scores(S: Path) -> dict:
                                          np.degrees(np.arctan2(xyz[:, 1], xyz[:, 0])), track)
         out[key]["detections_per_frame"] = round(float(np.diff(c["start"]).mean()), 2)
     if S.name in CALIBRATION_SESSIONS:
-        out["note"] = "radar phase correction measured on this session: radar azimuth scores are in-sample"
+        out["note"] = "radar inter-chip phase measured on this session: radar azimuth scores are in-sample"
+    if S.name in SESSION_NOTES:
+        out["note"] = SESSION_NOTES[S.name]
     return out
 
 
 def all_scores(sessions) -> dict:
-    from perception.radar import RX_PHASE_FILE
+    from perception.radar import ARRAY_FILE, RX_PHASE_FILE
     return {"git_commit": git_commit(), "created": time.strftime("%Y-%m-%d"),
-            "rx_phase_file_md5": file_hash(RX_PHASE_FILE),
+            "rx_phase_file_md5": file_hash(RX_PHASE_FILE), "array_file_md5": file_hash(ARRAY_FILE),
             "metrics": "see run_perception.py: detected = a detection within 0.6 m range and 10 deg of the "
                        "LiDAR walker; az_spread = median |err - bias|; team_* = the old chain's filtered "
                        "clouds (cpu: OS-CFAR, gpu: CASO on range-Doppler)",
@@ -181,6 +192,9 @@ def print_table(cur: dict, base: dict = None):
             delta = "" if bv is None or bv == v else f" ({v - bv:+.3g})"
             cells.append(f"{v:>10.3g}{delta:12s}")
         print(f"{s:20s} " + " ".join(cells))
+    for s, sc in cur["sessions"].items():
+        if sc.get("note"):
+            print(f"  note {s}: {sc['note']}")
 
 
 def main() -> int:

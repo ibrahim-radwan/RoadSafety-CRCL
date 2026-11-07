@@ -37,8 +37,10 @@ def test_ours_reproduces_golden(S):
     from perception.baseline import file_hash
     g = np.load(S / "sync" / "baseline" / "golden_ours.npz")
     meta = json.loads((S / "sync" / "baseline" / "golden.json").read_text())
-    if meta["rx_phase_file_md5"] != file_hash(RX_PHASE_FILE):
-        pytest.skip("calibration/radar_rx_phase.json changed since the golden files were made: re-create them")
+    from perception.radar import ARRAY_FILE
+    if meta["rx_phase_file_md5"] != file_hash(RX_PHASE_FILE) or meta.get("array_file_md5") != file_hash(ARRAY_FILE):
+        pytest.skip("calibration/radar_rx_phase.json or radar_array.json changed since the golden files were made: "
+                    "re-create them (perception/baseline.py golden)")
     variant, _ = radar_firmware.session_variant(S)
     det = RadarDetector(radar_firmware.cfg_for_variant(variant), rx_phase_deg=rx_phase_for(variant))
     rows = list(csv.DictReader((S / "sync" / "radar_timeline.csv").open()))

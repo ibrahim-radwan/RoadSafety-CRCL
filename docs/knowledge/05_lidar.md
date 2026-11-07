@@ -22,7 +22,22 @@
   **zero-range points**; filter `range > 0`. About 92k returns per sweep are
   valid. About 44% of valid returns are within 1 m on the bench rig (mount and
   surroundings).
-- Every 10th sweep has 132,288 points with no loss; that's firmware behaviour.
+- **Every 10th sweep has 132,288 points: the sensor skips a sector**
+  (measured 2026-11-07).
+  - Once a second, for 4.6 ms, the RS-Fairy sends no data. The block
+    azimuth jumps from 359.6° to 16.1°, and the packet counter runs on with
+    no gap, so nothing is lost on the network.
+  - The sector is fixed at 0–16.5° of the packet azimuth: LiDAR-frame
+    azimuth −16.5..0° (+ left). Per-channel angle offsets spread the missing
+    returns over about −27..0°.
+  - It is the same in every session checked, back to 2026-10-11.
+  - On the 2026-11-03 rig (yaw +37°) the gap is at vehicle +14..+40°.
+    There a wall drops from ~6,700 to ~200 returns, one sweep in ten: the
+    team's "wall that comes and goes".
+  - The replay fills it for display only, from the previous sweep
+    (`replay/sources.py` `_fill_gap`). Detection and saved outputs use the
+    sweep as recorded.
+  - Not yet asked: whether RoboSense can turn it off.
 
 ## Driver and Python wrapper
 
@@ -57,10 +72,26 @@
   records the transform in `sync/alignment.json` and uses its yaw for the
   boresight selection.
   - Before 2026-11-03: facing forward, like the radar (identity).
-  - **From 2026-11-03: yawed +39.8° to the left of the radar**, t =
-    (−0.03, −0.01) m. Fitted to the team's 13 corner-reflector positions,
-    residual 0.11 m. On that rig a reflector straight ahead is at LiDAR
-    azimuth −39°.
+  - **From 2026-11-03: yawed +37.2° to the left of the camera**, t =
+    (−0.03, −0.01) m. On that rig a reflector straight ahead is at LiDAR
+    azimuth −37 to −39°.
+    - **The yaw is referenced to the camera** (2026-11-07,
+      `calib_reflector.py`): camera azimuth of the reflector (tripod top,
+      by image difference) minus its LiDAR azimuth. 9 positions at 2–5 m
+      give 37.2° ± 0.4°.
+    - Before that, 39.76° came from a fit to the 13 nominal positions
+      (residual 0.11 m). That fit absorbed the rig's own ~2.5° turn
+      against the floor marks.
+    - The radar on boresight gives ~35° (it reads 2.7° right of the
+      camera); the team's manual fit gave 38.6°.
+  - **The 0° direction is the sensor's own** (its encoder), not something
+    on the round housing. The decoder takes azimuth from the packets and
+    applies the per-channel corrections; there is no offset of ours. "Mounted
+    facing forward" by eye means nothing on a cylinder in a round collar:
+    mark the housing and the collar.
+  - **What it sees on the 2026-11 rig:** returns from −15° to +88° in
+    elevation; the floor (1.07 m below it) only from 3.7 m ahead; 32% of the
+    returns come from the camera mount within 0.3 m above it.
   - The reflector is not the LiDAR's brightest return (10–120 against 255
     for people, hi-vis vests and near objects). Find it by difference from
     an empty-scene recording (the live view's *Take background*).

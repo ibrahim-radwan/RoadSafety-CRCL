@@ -1,0 +1,63 @@
+{
+  "note": "Measured virtual-array layout of the cascaded AWR2243 board, and the phase between its two chips per firmware variant. Read by perception/core/calibration.py; used by perception/radar.py (layout='measured', the default). Written by perception/estimate_array_layout.py. The team layout in perception/core/radar_config.py does not match the board (docs/knowledge/03_radar_firmware_and_dca.md, 'Off-axis azimuth').",
+  "layout": {
+    "chirp_tx_pos": [
+      4,
+      2,
+      0,
+      null,
+      null,
+      7
+    ],
+    "chirp_tx_pos_note": "lambda/2, per chirp (chirp = loop * 6 + tx), within a chip's group; null = an elevated TX (chirps 3 and 4: their phase follows the target's elevation), not in the azimuth row. Measured relative to chirp 0: 0, -2, -4, (elevated), (elevated), +3.",
+    "rx_chip": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+    ],
+    "rx_pos": [
+      0,
+      1,
+      2,
+      3,
+      0,
+      1,
+      2,
+      3
+    ],
+    "chip_offset": 19,
+    "chip_offset_note": "lambda/2 from the master chip's group (RX0-3) to the slave's (RX4-7). Each chip's group is 11 contiguous positions (0..10); the gap between them is 8.",
+    "elevated_chirps_approx": {
+      "3": {
+        "az_pos_rel_chirp0": 10.0,
+        "phase_per_inverse_range_rad_m": -16.5
+      },
+      "4": {
+        "az_pos_rel_chirp0": 5.75,
+        "phase_per_inverse_range_rad_m": -10.0
+      },
+      "note": "approximate, from the plate sessions; elevation is not computed from them yet"
+    },
+    "measured": "2026-11-07, stage3_01-03 + freewalk_ref_02 (LiDAR azimuth); checked on calibration_dataset 2026-11-03 (camera azimuth)"
+  },
+  "variants": {
+    "r075m_v2_8fps": {
+      "slave_phase_rad_per_m": 0.356,
+      "slave_phase_deg": -11.0,
+      "coherence": 0.485,
+      "chip_offset_fitted": 19.7,
+      "snapshots": 990,
+      "sessions": [
+        "stage3_02",
+        "stage3_03"
+      ],
+      "measured": "2026-11-07",
+      "provisional": "measured in situ (LiDAR azimuth); a corner-reflector measurement can replace it"
+    }
+  }
+}

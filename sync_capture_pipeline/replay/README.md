@@ -82,6 +82,10 @@ apply at once, even while paused.
     (measured by the detector) to 3 m above it;
   - **intensity**: reflectivity;
   - **density**: point count.
+- **The RS-Fairy skips 16.5° once a second** (every 10th sweep; its own
+  0–16.5°, see `docs/knowledge/05_lidar.md`). A wall there blinked. The
+  views fill that sector **for display only** from the previous sweep, and
+  the panel title says "gap filled". Detection uses the sweep as recorded.
 - **Hide <** (default **0.5 m**) hides returns from the LiDAR's own mount and
   the vehicle body. On the desk bench this was **69% of all points**. Set it
   to 0 to see everything; nothing is discarded, only hidden.
@@ -110,16 +114,30 @@ while all sensors replay):
 **Radar** (`perception/radar.py`, ~16 ms per frame on its own, ~30–50 ms
 while all sensors replay). Per frame:
 
-1. CFAR on the range-Doppler map after coherent beamforming.
-2. One azimuth per detection.
-3. TDM-MIMO Doppler compensation.
-4. The in-situ phase correction (`calibration/radar_rx_phase.json`;
-   `--no-rx-phase` turns it off).
+1. The **measured array layout** (2026-11-07, `calibration/radar_array.json`):
+   each radar chip's antennas beamformed, the two chips' powers added
+   (the map's sidelobes ~20 dB down).
+2. CFAR on the range-Doppler map.
+3. One azimuth per detection, refined coherently across both chips.
+4. TDM-MIMO Doppler compensation.
 5. Multipath ghosts flagged.
 6. Doppler-aware tracking: `R<n>`.
 
+`--radar-layout team` shows the old processing for comparison: the team's
+antenna table, the `.cfg` calibration and the in-situ phase
+(`calibration/radar_rx_phase.json`; `--no-rx-phase` turns it off). Its beam
+is split off boresight. The terminal prints which layout is in use.
+
 The BEV shows detections as dots coloured by radial velocity (blue
 approaching, red receding). Multipath ghosts are hollow grey dots.
+
+**Points only** (2026-11-07, the team's request after FusionApp's point-cloud
+views): untick **map** in the Radar group (or `--radar-no-map`). The BEV then
+shows only the points: detections, and stationary reflectors with *static*.
+With *static*, the stationary reflectors also appear in the 3D view, in
+grey. FusionApp's points come from Capon beamforming; ours from the FFT with
+the measured layout (`docs/knowledge/03_radar_firmware_and_dca.md`,
+"Off-axis azimuth").
 
 **Tracks** appear in the table and as labels. LiDAR tracks are marked
 **moving** (▶ in the table, bright label) or **static** (■, grey label), from
@@ -134,11 +152,17 @@ over.
 **Static radar reflectors** (experimental, off by default): the *static*
 check box in the Radar group, or `--radar-static`. These are zero-Doppler
 detections, drawn as grey squares. They are reliable within ~6–10 m; farther
-out many are sidelobe or multipath images until the antenna recalibration.
+out some are multipath images (sidelobe images were frequent with the team
+layout; the measured layout's sidelobes are ~20 dB down).
 See `perception/README.md`.
 
 - The strongest 3 inside the range filter are listed in the objects table
   as `S1..S3`, with range, azimuth, x / y and their **absolute power** in dB.
+  - **They come from the stationary map averaged over the last 2 s** (16
+    frames, mean power; restarted at a seek), positions interpolated
+    between cells (2026-11-07). One frame's single cells blinked for a
+    reflector near the thresholds. The class column shows how many frames
+    went in; the grey squares stay per frame.
   That is the number the live view's reflector table shows (~120–150 dB):
   uncalibrated, 0 dB = 10⁻¹² in FFT units, so only differences mean
   anything.
@@ -178,7 +202,7 @@ radar elevation is not verified (see the radar topic page).
   to +3°); that is the team's extrinsic calibration.
 - **LiDAR points are shown in the vehicle (radar) frame** (2026-11-06), with
   the session's mounting (`calibration/lidar_extrinsic.json`, recorded in
-  `sync/alignment.json`). On the 2026-11-03 rig the LiDAR is turned +39.8°
+  `sync/alignment.json`). On the 2026-11-03 rig the LiDAR is turned +37.2°
   to the left of the radar. Sessions before that date use identity.
   Sessions aligned before 2026-11-06 pick the mounting by their start date
   until they are re-aligned.
@@ -281,8 +305,8 @@ keyframe.
 **Radar.**
 
 - `perception/radar.RadarDetector` builds the products and detections in one
-  pass on the GPU (PyTorch). It uses the repo's config, channel geometry and
-  antenna calibration (`perception/core/radar_config.py`).
+  pass on the GPU (PyTorch). It uses the firmware's `.cfg` (waveform) and the
+  measured array layout (`calibration/radar_array.json`).
 - A prefetch thread reads frames ahead of the clock.
 - `RadarProcessor` (the older, products-only processor) is kept unchanged for
   the session report.
@@ -307,10 +331,12 @@ keyframe.
   azimuth is positive to the right (the team's convention), and the pipeline
   frame is y left. The conversion is a sign flip. It is not a mirror error in
   the team's code (see `docs/knowledge/03_radar_firmware_and_dca.md`).
-- **Radar angular focusing is still weak.** The in-situ phase correction
-  halves the azimuth spread against the LiDAR (5.95° → 2.43° on
-  freewalk_ref_02), but sidelobes stay only ~5–10 dB below the peak. A
-  person still shows a faint arc. The team's recalibration should fix it.
+- **Radar azimuth** (measured layout, 2026-11-07): ~1–2° spread against the
+  LiDAR on a walker, ~0.4° on a corner reflector, at every angle tested
+  (−18° to +14°). Before, with the team table, the beam was split and 5–16°
+  off away from boresight.
+- **Radar elevation is off** (z = 0): the elevated transmitters' positions
+  are not measured yet.
 - **Radar–LiDAR yaw:** a few degrees, different per mounting; there is no
   extrinsic calibration yet.
 - **LiDAR size classes are heuristics** (see above).

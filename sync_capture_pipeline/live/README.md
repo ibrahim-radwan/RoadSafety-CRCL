@@ -2,7 +2,8 @@
 
 Watch the three sensors live on the iPad page (`web_control/`) while you
 align them: the radar–LiDAR–camera extrinsic calibration. **Nothing is
-saved.** Added 2026-10-31.
+saved, except a calibration capture when you press *Save background* or
+*Save position*** (2026-11-07, below). Added 2026-10-31.
 
 **Opening the page:** live view is part of the iPad page
 (`web_control/`). The easiest way to reach it, anywhere, is the Jetson's
@@ -57,7 +58,7 @@ range window you set on the page:
    - Both are marked on the views.
 4. *Clear background* returns to the strongest return.
 
-- **Memory only:**
+- **Take background is memory only** (*Save background* below keeps one):
   - The server forwards one-shot `take:<n>` / `clear:<n>` tokens and keeps
     none, so a new live view starts without a background.
   - Nothing is written. `tests/test_live_view.py` checks that no file of
@@ -68,6 +69,52 @@ range window you set on the page:
   - LiDAR: the reflector at 3 and 5 m is picked within 0.1 m of its true
     position. At 8 m it has too few returns.
   - Radar: right on boresight; off-axis limited by the azimuth calibration.
+
+**Calibration capture** (2026-11-07; the team's request: save
+synchronised radar and LiDAR frames for the empty background and each
+reflector position, reflector points only):
+
+1. Set name (default `calib_<date>`). With the reflector and people out of
+   the scene, rig still: **Save background**.
+2. Place the reflector, enter a position name (rig's view: left = vehicle
+   left), **Save position**. Repeat.
+
+- **Each press saves ~2 s from every running sensor** into
+  `<sessions-root>/calibration/<set>/<name>/` (`capture.json`, written by
+  the server; ~85 MB per position):
+
+  | Folder | Files |
+  |---|---|
+  | `radar/` | `frames.npy` (16 raw frames, int16 as the `.bin` files), `t.npy` (CLOCK_MONOTONIC at receipt), `meta.json`. A background also has `background_band.npy` (the mean zero-Doppler channels, complex) and `background_ref.npy` (its own frame-to-frame residual); these are per virtual channel, so a background saved before the measured array layout (2026-11-07: 32 channels instead of 40) is refused with a message: save it again. A position also has `reflector.json` (its `az_deg` refined coherently across both radar chips, `az_deg_incoherent` the map's peak) and `reflector_points.npz`. |
+  | `lidar/` | `sweeps.npz` (20 sweeps in the LiDAR's own frame, with counts and t), `meta.json` (the extrinsic used). A background also has `background_voxels.npy`. A position also has `reflector.json` (vehicle frame, plus its own-frame position) and `reflector_points.npz`. |
+  | `camera/` | `frame_0..2.jpg` (full-size left, 0.6 s apart), `meta.json` (rectified left intrinsics) |
+
+- **Synchronised:** one press starts all workers together, and every
+  frame carries its time. For a still reflector, exact pairing does not
+  matter.
+- **The reflector** (`perception/core/reflector.py`) is what changed from
+  the set's saved background (else from a *Take background* in memory),
+  inside the reflector search range:
+  - **LiDAR:** new voxels; the cell group present in ≥ 30% of the sweeps
+    with the most returns (people move, the reflector does not); its points
+    within 0.45 m; height window −0.9..2.5 m (the 2026-11 floor is 1.1 m
+    below the LiDAR).
+  - **Radar:** each frame's zero-Doppler channels minus the background's
+    mean, **coherently** (complex), then beamformed. Walls and their
+    sidelobes cancel. The largest rise ≥ 10 dB above the background's own
+    residual, interpolated.
+- **Reflector only** (tick): the LiDAR view draws only new returns, and the
+  radar's stationary map draws the coherent change.
+- The page lists the set's positions: LiDAR x / y / z and own-frame
+  azimuth, radar range / azimuth, and the difference. When the server sends
+  the set (`calib_set`), the workers load its saved background at once.
+- **Process a set:** `python calib_reflector.py --set <set folder>`. It
+  gives the camera-referenced LiDAR yaw, the per-frame reflector points of
+  both sensors, and a figure.
+- **Tested** by playing the team's `background` and `5m_center` sessions
+  through live view (`tests/test_live_view.py` captures into a temporary
+  folder, and checks the played session is unchanged). **Not yet with the
+  live sensors.**
 
 **The LiDAR is drawn in the vehicle (radar) frame** with the newest mounting
 in `calibration/lidar_extrinsic.json` (with `--from-session`, that session's
@@ -130,8 +177,9 @@ web_control/server.py ── liveview.LiveView ──┬─ live/radar_live.py  
     by a one-frame slot that the newest frame overwrites. The receive thread
     never waits on processing; frames in between are dropped.
   - STOP_RECORD is sent on every exit path.
-  - Processing: `RadarDetector(..., rx_phase_deg=<in-situ>)`
-    `.process(raw, moving_only=True, static=True)`, about 8 ms of GPU per
+  - Processing: `RadarDetector(...)` with the measured array layout
+    (`calibration/radar_array.json`, 2026-11-07; the log line says so)
+    `.process(raw, moving_only=True, static=True)`, about 8–9 ms of GPU per
     frame, 30–60 ms with the rendering.
 - **LiDAR** (`lidar_live.py`): our rs_driver wrapper on the live sockets,
   with the recorder's `rs_driver/config/config.yaml` (`split_angle: 180`).

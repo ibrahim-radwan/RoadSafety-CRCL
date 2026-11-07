@@ -57,18 +57,23 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
                                 conventions, GPU lock; numpy only), radar_dsp.py (signal-processing stages, PyTorch),
                                 radar_chain.py (the old chain's front end on them), radar.py (detector:
                                 CFAR, TDM comp, multipath flags), lidar.py (local ground, objects),
-                                tracking.py, estimate_rx_phase.py, baseline.py (reference); README.md
+                                tracking.py, estimate_array_layout.py (radar array, measured), estimate_rx_phase.py
+                                (team layout only), baseline.py (reference); README.md
   run_perception.py             our detection + tracking over a session -> sync/perception_*.npz, scores
+  calib_reflector.py            corner reflector as change from a background (LiDAR, radar, camera) per position,
+                                from live-view calibration captures or sessions; camera-referenced LiDAR yaw
   bench_gpu.py                  processing speed and GPU load per part (frames in RAM), for optimisation work
   timing_consistency.py         range-based timing check per window (geometry-biased; see 07)
   radar_firmware.py             which firmware recorded a session -> which .cfg
   board_health.py               Jetson temperatures
   check_radar_frames.py         radar stale-word / range-time check
   calibration/stage3_offsets.json   the offsets in use (applied by align_session by default)
-  calibration/radar_rx_phase.json   in-situ radar phase correction (provisional, until the team's recalibration)
+  calibration/radar_array.json      the radar's virtual-array layout + inter-chip phase, MEASURED (2026-11-07; used by default)
+  calibration/radar_rx_phase.json   in-situ radar phase correction (team layout only; superseded, see 03)
   calibration/lidar_extrinsic.json  LiDAR -> vehicle (radar) transform per mounting (provisional, until the team's)
   web_control/                  Flask iPad control (systemd service, port 8080)
-  live/                         live view workers (radar, LiDAR, camera -> JPEG + numbers to the web page; no saving)
+  live/                         live view workers (radar, LiDAR, camera -> JPEG + numbers to the web page; saves only
+                                calibration captures on request, into <sessions-root>/calibration/<set>/)
   replay/                       PyQt/pyqtgraph replay: one window, 6 panels, live detection (camera in its own process)
   tests/                        pytest (needs the reference sessions; skips when absent)
   handover/                     briefs sent to the Windows firmware-build agent
@@ -117,7 +122,7 @@ docs/                           knowledge base + new-board setup
   y **left**, z up. LiDAR points are turned into it right after decoding,
   with the session's mounting from `calibration/lidar_extrinsic.json`
   (`perception/core/extrinsic.py`; identity before 2026-11-03, when the
-  LiDAR was found yawed +39.8°). Bird's-eye views draw forward up and
+  LiDAR was found yawed +37.2°, camera-referenced). Bird's-eye views draw forward up and
   vehicle-left on the left, like the camera image.
 - **Radar azimuth:** the team's processing azimuth is positive to the
   **right** (their convention; it is not a mirror error). World azimuth

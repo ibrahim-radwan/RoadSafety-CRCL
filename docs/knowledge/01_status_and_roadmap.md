@@ -147,12 +147,14 @@ What the baseline showed:
   `NOTES_FOR_TEAM.md` ("Your corner-reflector sessions"):
   - The scene names are given from the reflector's side: `*_left` is the
     vehicle's right.
-  - On this mounting the LiDAR is yawed **+39.8°** (to the left) from the
-    radar and camera: 13 positions, residual 0.11 m. The team's manual fit
-    gives 38.6°.
+  - On this mounting the LiDAR is yawed **+37.2°** (to the left) from the
+    camera (camera-referenced, 2026-11-07). The first fit, 39.8° to the 13
+    nominal positions, absorbed the rig's ~2.5° turn against the floor
+    marks. The team's manual fit gives 38.6°.
   - Radar range is accurate (+0.1 m). Radar azimuth is within ±3° on
-    boresight but 5–13° off at 0.5–1.5 m to the side; that needs the team's
-    antenna calibration.
+    boresight but 5–13° off at 0.5–1.5 m to the side. Cause: our
+    virtual-array table, not the antenna calibration; fixed with the
+    measured layout (2026-11-07, see below).
   - AR1 is not usable for calibration: the radar barely sees the reflector
     there.
   - Replay changes made for this (2026-11-05):
@@ -183,6 +185,65 @@ What the baseline showed:
       radar right on boresight.
     - `tests/test_live_view.py` takes and clears a background and checks
       that the session's files are unchanged.
+
+- **Team's follow-up questions of 2026-11-06 (answered 2026-11-07,**
+  `NOTES_FOR_TEAM.md` "Your follow-up questions"):
+  - **Yaw revised to 37.2°, referenced to the camera.** All 17 sessions on
+    the team's drive were re-aligned; AR1's report and perception were
+    rebuilt.
+  - **Radar off-axis azimuth: our array table was wrong, not the antenna
+    calibration (found after the owner's challenge; fixed 2026-11-07).**
+    - The `.cfg` calibration barely matters (0.85 vs 0.82 with none) and the
+      error depended on the target's angle (left vs right 0.57–0.60, same
+      side 0.99): no per-channel calibration can fix that.
+    - **Measured layout** (`perception/estimate_array_layout.py`,
+      `calibration/radar_array.json`): per chip, chirps 0, 1, 2, 5 at 4, 2,
+      0, 7 λ/2 (the table: 0, 4, 7, 11 and chirp 5 elevated); chirps 3, 4
+      elevated; RX as in the table; the slave's phase +0.356 rad/m, −11°.
+    - **Processing** (`perception/radar.py` `layout="measured"`, default):
+      per-chip beams added incoherently (sidelobes ~20 dB down), the angle
+      refined coherently across chips; no `.cfg` calibration, no in-situ
+      phase; elevation 0 for now. `layout="team"` keeps the old one
+      (`--radar-layout team` in the replay).
+    - **Result:** 11-03 corner reflector − camera −2.4° ± 0.37° at all 9
+      positions at 2–5 m (before: outliers to 16°); walker spread vs LiDAR
+      1.8° instead of 2.7°, > 5° off 12% instead of 36% (freewalk_ref_02).
+      Details in 03, "Off-axis azimuth".
+    - Tests: `tests/test_array_layout.py` (synthetic targets, −40..+40°).
+      Baseline re-made 2026-11-07: `golden_ours.npz` on the three golden
+      sessions and `perception/baseline/scores.json`. Radar detected
+      +0.08…+0.32 on every reference session except `run_20261014_1325`,
+      where the LiDAR was turned ~20° against the radar and the camera
+      (set-up session; checked on the camera images).
+  - **Open, ours, before the team's email reply:**
+    - the processing-module checks;
+    - the replay for calibration sessions: clear, reliable display for the
+      team. The owner holds the email until these are done;
+    - radar elevation (the elevated TX positions);
+    - the inter-chip phase of the other firmware variants.
+  - **Their manual calibration file was never used** by any code.
+  - **The blinking wall** is the RS-Fairy skipping 0–16.5° once a second.
+    The replay fills it for display only.
+  - **Live view calibration capture:**
+    - *Save background* / *Save position* write raw radar, LiDAR (own
+      frame) and camera to `<sessions-root>/calibration/<set>/<name>/`,
+      with the reflector found as a coherent / voxel change, and a
+      *reflector only* view.
+    - `calib_reflector.py` processes captures and recorded sessions, and
+      gives the camera-referenced yaw.
+    - Tested by playing the team's sessions through live view; **not yet
+      with the live sensors.**
+  - **Replay:**
+    - the `S1..S3` rows use a 2 s mean of the static map, interpolated
+      between cells (they blinked: one cell of one frame);
+    - a radar *map* tick for points only (FusionApp-like);
+    - stationary points in 3D.
+  - **Still to do:**
+    - ask RoboSense about the skipped sector;
+    - Capon for the static map (FusionApp's sharper points), possibly;
+    - run the reference-session regression (the Elements drive was
+      absent again). The `_front` refactor (`_static_stats`) must stay
+      bit-identical: `test_speed_paths` covers it on a session.
 
 - **Live view (2026-10-31): working on the rig (team's report,
   2026-11-05).** Over the Jetson's hotspot, the team set up the page, ran
@@ -251,8 +312,9 @@ What the baseline showed:
   - the radar–LiDAR yaw differs per mounting;
   - the elevation bias.
   
-  Our in-situ correction (`calibration/radar_rx_phase.json`) is provisional
-  until their recalibration.
+  Our in-situ correction (`calibration/radar_rx_phase.json`) was a patch.
+  2026-11-07: the split beam came from our array table; the measured layout
+  replaces both (03, "Off-axis azimuth").
 - **The old chain's CuPy and CPU paths differed** (CASO vs OS CFAR on
   range-Doppler). Reported to the team. The chain is retired;
   `RadarChain(cfar=...)` reproduces either.
@@ -268,8 +330,8 @@ What the baseline showed:
     riding data to validate;
   - **radar stationary reflectors** (zero Doppler; experimental, opt-in in
     the replay). LiDAR support is 82–100% within 6–10 m, and 55% overall
-    outdoors: beyond that, sidelobe and multipath images dominate until the
-    antenna recalibration.
+    outdoors with the team layout: beyond that, sidelobe and multipath
+    images dominated. To be re-scored with the measured layout.
 - Next for detection:
   - a learned LiDAR classifier (walls now break into more pieces, ~37 objects
     per sweep; the moving/static flag helps tell road users from structure);

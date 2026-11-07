@@ -326,7 +326,7 @@ class RadarSource(Source):
     name_ = "radar"
     PREFETCH = 12                       # frames read ahead (slow disks: NTFS/FUSE, USB)
 
-    def __init__(self, clock, session: Path, bev_x, bev_y, moving_only=True, rx_phase=True):
+    def __init__(self, clock, session: Path, bev_x, bev_y, moving_only=True, rx_phase=True, layout="measured"):
         super().__init__(clock)
         sys.path.insert(0, str(PIPELINE))
         from perception.radar import RadarDetector, rx_phase_for
@@ -335,14 +335,15 @@ class RadarSource(Source):
         self.timeline = sess.radar
         self.t, self.files = self.timeline.t, self.timeline.files
         variant, how = sess.firmware
-        rx = rx_phase_for(variant) if rx_phase else None
-        print(f"[radar] firmware {variant} ({how}); in-situ RX phase correction: "
-              f"{'on' if rx is not None else 'off'}")
-        self.proc = RadarDetector(sess.cfg_path, rx_phase_deg=rx)
+        rx = rx_phase_for(variant, layout=layout) if rx_phase else None
+        self.proc = RadarDetector(sess.cfg_path, rx_phase_deg=rx, layout=layout)
+        print(f"[radar] firmware {variant} ({how}); array layout {layout} (inter-chip phase "
+              f"{'on' if self.proc.coherent else 'off'}); in-situ RX phase correction: {'on' if rx is not None else 'off'}")
         self.bev_ri, self.bev_ai, self.bev_valid = bev_lookup(self.proc, bev_x, bev_y)
         self.timing_source = sess.alignment.get("radar", {}).get("timing_source", "")
         self.moving_only = moving_only
         self.show_static = False             # stationary-reflector detections (experimental), on request
+        self.static_avg_frames = 16          # the S rows: static map averaged over the last 2 s (8 fps)
         self.ms_per_frame = 0.0
         # Raw point cloud: one point per range-azimuth cell (world azimuth = - processing azimuth), z = 0
         az = np.radians(world_azimuth(self.proc.az_axis))
@@ -376,6 +377,7 @@ class RadarSource(Source):
         try:                                     # any failure, startup included, shows as self.error
             self.prefetch.start()
             k_done, mode, gen = -1, None, None
+            st_hist = []
             while not self.stop_evt.is_set():
                 k = int(np.searchsorted(self.t, self.clock.now(), side="right")) - 1
                 self.prefetch.want(k)
@@ -391,6 +393,7 @@ class RadarSource(Source):
                 if gen != self.clock.seek_gen or k < k_done or k > k_done + 8:
                     tracker.reset()                     # a jump: tracks start over
                     feats.reset()
+                    st_hist = []                        # ... and the static average
                 gen = self.clock.seek_gen
                 raw = self.prefetch.get(k)
                 t0 = time.perf_counter()
@@ -406,10 +409,22 @@ class RadarSource(Source):
                 tracks = [(tr.id, tr.x[0], tr.x[1], tr.x[2], tr.x[3], float(tr.payload or 0.0), tr.hits,
                            fs.get(tr.id), feats.accumulated(tr.id, tk, tr.x[2:]))
                           for tr in tracker.reported()]
+                st_avg, n_avg = None, 0
+                if self.show_static and "static_map" in out:
+                    # the S rows: stationary reflectors of the mean POWER of the last 2 s of static maps
+                    # (one frame's cells come and go when a reflector is near the threshold)
+                    if k != k_done:
+                        st_hist = (st_hist + [out["static_map"].clone()])[-self.static_avg_frames:]
+                    if st_hist:
+                        p_ = torch.stack(st_hist)
+                        top = p_.max(dim=0).values
+                        mean = top + 10 * torch.log10(torch.mean(10 ** ((p_ - top) / 10), dim=0))
+                        st_avg, n_avg = self.proc.detect_static_map(mean), len(st_hist)
                 self.ms_per_frame = (time.perf_counter() - t0) * 1e3
                 k_done, mode = k, self.moving_only
                 self.publish({"t": float(self.t[k]), "k": k, "rd": rd, "bev": bev, "ra": ra, "det": det,
-                              "tracks": tracks, "static": out.get("static_detections")})
+                              "tracks": tracks, "static": out.get("static_detections"),
+                              "static_avg": st_avg, "static_avg_n": n_avg})
         except Exception as exc:
             import traceback
             traceback.print_exc()
@@ -584,17 +599,63 @@ class LidarSource(Source):
                 det = self._detect(sweep)
             except Exception as exc:            # detection must never stop the replay
                 self.error = f"lidar detection: {exc}"
-        rgb, extent, shown = render_lidar(sweep[1], view, None if det is None else det["ground_z"])
+        p, filled = self._fill_gap(sweep)
+        rgb, extent, shown = render_lidar(p, view, None if det is None else det["ground_z"])
         # Raw points for the 3D view: valid returns only (the RS-Fairy fills
         # no-return directions with zero range), beyond the near filter.
-        p = sweep[1]
         ok = np.isfinite(p[:, 3]) & (p[:, 3] > max(0.05, float(view["near_m"])))
-        lab = None if det is None or det.get("point_label") is None else det["point_label"][ok]
+        lab = None
+        if det is not None and det.get("point_label") is not None:
+            lab = det["point_label"]
+            if filled:                               # filled points have no detector label
+                lab = np.r_[lab, np.zeros(filled, lab.dtype)]
+            lab = lab[ok]
         with self.vlock:
             self.points = (sweep[0], np.ascontiguousarray(p[ok, :5]), lab,
                            None if det is None else det["ground_z"])
         return {"t": sweep[0], "rgb": rgb, "n_shown": shown, "ext": extent, "mode": view["mode"],
-                "version": view["version"], "det": det}
+                "version": view["version"], "det": det, "filled": filled}
+
+    GAP_AZ = (-30.0, 3.0)       # LiDAR-frame azimuth window (deg, + left) around the sector the RS-Fairy skips
+
+    def _own_az(self, p: np.ndarray) -> np.ndarray:
+        """Azimuth (deg, -180..180) of vehicle-frame points in the LiDAR's own frame."""
+        e = self.ext
+        x, y = p[:, 0] - e.get("tx_m", 0.0), p[:, 1] - e.get("ty_m", 0.0)
+        return (np.degrees(np.arctan2(y, x)) - e.get("yaw_deg", 0.0) + 180.0) % 360.0 - 180.0
+
+    def _fill_gap(self, sweep):
+        """(points to DRAW, n filled). The RS-Fairy stops measuring for 4.6 ms once a second, so every
+        10th sweep lacks 16.5 deg of its scan just right of the LiDAR's 0 deg (132,288 points instead
+        of 138,240; no packet is lost: its counter runs on; with the per-channel angle offsets the
+        returns are missing over ~-27..0 deg). Walls there blink at 1 Hz. For display only, the
+        previous sweep's returns in that window whose (0.5 deg azimuth x 1 deg elevation) cell this
+        sweep has no return in are drawn too, when that is a real gap (>= 20% of the window, >= 4
+        deg); detection and every saved output use the sweep as recorded."""
+        p = sweep[1]
+        with self.slock:
+            prev = [w for w in self.sweeps if w[0] < sweep[0]]
+        if not prev:
+            return p, 0
+        q = prev[-1][1]
+        lo, hi = self.GAP_AZ
+
+        def cells(a):                                 # (0.5 deg azimuth x 1 deg elevation) cell per return
+            v = a[a[:, 3] > 0]
+            az = self._own_az(v)
+            k = (az >= lo) & (az < hi)
+            v, az = v[k], az[k]
+            el = np.degrees(np.arcsin(np.clip(v[:, 2] / v[:, 3], -1.0, 1.0)))
+            return v, (np.floor((az - lo) / 0.5).astype(np.int64) * 200 + np.floor(el + 100).astype(np.int64))
+        (mine, cm_), (theirs, ct) = cells(p), cells(q)
+        if len(theirs) < 200 or len(mine) > 0.7 * len(theirs):
+            return p, 0                               # no gap: this sweep has (about) as many returns there
+        missing = ~np.isin(ct, cm_)                   # their cells this sweep has no return in
+        az_bins = np.unique(ct[missing] // 200)
+        if len(az_bins) < 8 or missing.mean() < 0.2:  # not the skipped sector (< 4 deg missing)
+            return p, 0
+        theirs = theirs[missing]
+        return np.concatenate([p, theirs]), len(theirs)
 
     def get_points(self):
         """(time, N x 5 [x, y, z, range, intensity], point labels or None, ground z or None)

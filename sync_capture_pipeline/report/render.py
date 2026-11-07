@@ -135,7 +135,7 @@ def observations(D) -> list:
         obs.append("Radar azimuth: the radar processing's own angle is positive to the RIGHT (the team's convention); "
                    "everything in this report is in the pipeline frame, azimuth and y positive to the LEFT, as the "
                    "LiDAR (perception/core/conventions.py; verified on freewalk_ref_02 against camera and LiDAR). "
-                   "The TX/RX → azimuth table is not yet calibrated.")
+                   "The radar uses the measured array layout (calibration/radar_array.json, 2026-11-07).")
     b = D["log"]["board"]
     if len(b):
         obs.append(f"Jetson junction temperature {b[:, 0].min():.1f}–{b[:, 0].max():.1f} °C.")
@@ -231,8 +231,9 @@ def build(D) -> str:
               fig_html(F.range_overlay(D), "Range of the moving target seen by radar (strongest moving return "
                        "above its range bin's floor) and LiDAR (single-target track), on the common time base.") +
               '<div class="caveat">Radar bird\'s-eye views use the current processing\'s azimuth with its sign '
-              'mirrored (verified against camera and LiDAR on freewalk_ref_02). The TX/RX → azimuth table and '
-              'antenna calibration are not yet verified, so radar angles are indicative only.</div>' +
+              'mirrored (verified against camera and LiDAR on freewalk_ref_02), with the measured array layout '
+              '(2026-11-07): ~1-2 deg against the LiDAR on a walker, ~0.4 deg on a corner reflector. Without '
+              'TDM Doppler compensation here, a moving target\'s angle is less precise.</div>' +
               fig_html(F.snapshots(D), "Paired snapshots at six moments: camera frame, LiDAR sweep (top view, "
                        "−1.2…2.2 m height), radar bird's-eye view and radar range–Doppler map, all for the same "
                        "radar frame. Circle: the LiDAR target. Δ: time difference to the radar frame. Radar BEV colour "
