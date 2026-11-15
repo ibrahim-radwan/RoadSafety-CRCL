@@ -138,6 +138,28 @@ What the baseline showed:
   was recorded with `r075m_v2_8fps`. The replay README's note that it is
   degraded seems to refer to an older recording of the same name.
 
+## Altos V4 radar under evaluation (since 2026-11-15)
+
+The team is looking at an Altos V4 imaging radar, as a possible replacement
+for the TI radar or an extra sensor. It outputs a processed point cloud, not
+raw ADC data.
+
+**Done:**
+- First contact on `ibrahim-desktop`.
+- A stdlib Python recorder and a checker: `altos_standalone_capture/`.
+- 30 s recorded at 15 fps with no losses.
+
+**Open:**
+- Check axis signs against the reflector.
+- Record on the rig.
+- Integrate into `capture_session.py` and `align_session.py`, with a Stage 3
+  offset.
+- PTP, which needs a decision from the owner.
+- The team's decision on replacement. It depends on whether they need raw
+  radar data.
+
+See `altos_standalone_capture/README.md`.
+
 ## Open items and ideas
 
 - **Now (2026-11-07): waiting for the team's pilot from the wheeler.** The
