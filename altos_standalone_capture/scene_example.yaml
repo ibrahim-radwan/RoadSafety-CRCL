@@ -1,0 +1,29 @@
+# Scene file for analyse_altos.py: the room and any targets, measured with a tape.
+#
+# All distances in metres, from the centre of the radar's front face.
+# The radar must be LEVEL and point along the room's long side; its axes
+# are x forward, y LEFT, z up (vehicle-style).
+#
+# Copy this file, fill it in, and give it to the recorder
+#   python record_altos_raw.py --duration 30 --label "plate 2m" --scene my_scene.yaml
+# (it is saved in the session as scene.yaml), or to the analysis
+#   python analyse_altos.py dataset/altos_session_<stamp> --scene my_scene.yaml
+
+radar:
+  height: 0.80        # radar centre above the floor
+
+room:                 # distance from the radar to each surface, straight along its axes
+  front: 3.40         # wall ahead
+  back: 0.30          # wall behind the radar
+  left: 1.20          # wall on the radar's left
+  right: 1.60         # wall on the radar's right
+  ceiling: 1.65       # from the radar's centre up to the ceiling
+
+tolerance: 0.15       # a point this close to a surface counts as on it
+
+targets:              # optional: what was placed for this recording (delete the list if none)
+  - name: plate
+    x: 2.00           # ahead of the radar
+    y: 0.00           # + to the radar's left, - to its right
+    z: 0.00           # + above the radar's centre height, - below
+    radius: 0.25      # points within this distance of (x, y, z) belong to the target

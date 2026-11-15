@@ -1,6 +1,7 @@
 # ── Recordings and data (never in git; ~112 GB per hour of recording) ─────────
 sync_capture_pipeline/sessions/
 **/dataset/
+altos_standalone_capture/settings_backups/
 *.svo2
 *.svo
 *.pcap

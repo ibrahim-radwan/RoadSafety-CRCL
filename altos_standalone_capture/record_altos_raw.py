@@ -249,7 +249,13 @@ def main() -> int:
     ap.add_argument("--queue-items", type=int, default=100_000)
     ap.add_argument("--min-free-gb", type=float, default=2.0)
     ap.add_argument("--first-packet-timeout", type=float, default=5.0)
+    ap.add_argument("--label", default="", help="what this recording is, e.g. 'plate 2m ahead' (saved in metadata)")
+    ap.add_argument("--scene", type=Path,
+                    help="scene file (room and targets, see scene_example.yaml) copied into the session "
+                         "as scene.yaml for analyse_altos.py")
     a = ap.parse_args()
+    if a.scene and not a.scene.exists():
+        raise SystemExit("No scene file %s" % a.scene)
 
     settings = read_radar_settings(a.radar_ip)
     install = settings.get("install")
@@ -268,6 +274,8 @@ def main() -> int:
 
     session = a.session_dir or out_root / ("altos_session_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
     session.mkdir()
+    if a.scene:
+        shutil.copy2(a.scene, session / "scene.yaml")
 
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
@@ -287,6 +295,7 @@ def main() -> int:
     mono0, real0 = clock_pair()
     status = settings.get("status", {})
     meta = {
+        "label": a.label,
         "sensor": status.get("machine_name", "Altos V4"),
         "serial": status.get("serial_num"), "firmware": status.get("firmware_ver"),
         "radar_ip": a.radar_ip, "host_ip": a.host_ip, "group": group, "port": port,
@@ -334,9 +343,10 @@ def main() -> int:
             sf.flush()
             cf.flush()
             prev = cur
-            print("%6.0fs | %3d frames/s | %5d pkt/s | %5.0f pts/frame | lost %d | incomplete %d | %6.2f MB"
-                  % (now - t_start, d[1], d[0], d[2] / d[1] if d[1] else 0.0,
-                     asm.missing_ids, asm.incomplete, pcap.bytes / 1e6), flush=True)
+            print("%6.0fs | %3d frames/s | %5d pkt/s | %5.0f pts/frame | lost %d | incomplete %d | "
+                  "restarts %d | %6.2f MB" % (now - t_start, d[1], d[0], d[2] / d[1] if d[1] else 0.0,
+                                              asm.missing_ids, asm.incomplete, asm.restarts,
+                                              pcap.bytes / 1e6), flush=True)
 
             if rx.error or wstate.get("error"):
                 error = "receiver/writer failed: %s" % (rx.error or wstate["error"])
@@ -372,6 +382,7 @@ def main() -> int:
         "frames": asm.frames, "frames_lost": asm.missing_ids, "frames_incomplete": asm.incomplete,
         "last_frame_cut_by_stop": asm.truncated_end,
         "out_of_order_packets": asm.out_of_order,
+        "radar_restarts": asm.restarts,
         "points": rx.points,
         "queue_drops": rx.queue_drops,
         "kernel_udp_drops": kdrops,
@@ -383,8 +394,9 @@ def main() -> int:
 
     print("\n%s: %s" % ("Finalized" if meta["complete"] else "INCOMPLETE", session))
     print("  %d frames, %d packets, %d points | frames lost %d | incomplete %d | last frame cut by stop %d | "
-          "queue drops %d | kernel drops %d" % (asm.frames, rx.packets, rx.points, asm.missing_ids,
-                                                asm.incomplete, asm.truncated_end, rx.queue_drops, kdrops))
+          "radar restarts %d | queue drops %d | kernel drops %d" % (
+              asm.frames, rx.packets, rx.points, asm.missing_ids, asm.incomplete, asm.truncated_end,
+              asm.restarts, rx.queue_drops, kdrops))
     print("  %.2f MB in %s s" % (pcap.bytes / 1e6, meta["duration_s"]))
     if error:
         print("  ERROR: %s" % error)

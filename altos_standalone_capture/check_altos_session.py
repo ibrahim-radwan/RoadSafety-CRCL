@@ -69,9 +69,9 @@ def main() -> int:
         print("Recorder complete=%s, error=%s" % (meta.get("complete"), meta.get("error")))
 
     print("\nFrames   %d from %d packets | id %d..%d | lost (id gaps) %d | incomplete %d | "
-          "late packets %d | bad packets %d | last frame cut by stop %d" % (
+          "late packets %d | bad packets %d | last frame cut by stop %d | radar restarts %d" % (
               n, packets, d["frame_id"][0], d["frame_id"][-1], asm.missing_ids, asm.incomplete,
-              asm.out_of_order, asm.bad_packets, asm.truncated_end))
+              asm.out_of_order, asm.bad_packets, asm.truncated_end, asm.restarts))
     dur = host[-1] - host[0]
     if n > 1:
         dh = np.diff(host) * 1e3
@@ -112,8 +112,8 @@ def main() -> int:
         np.savez_compressed(out, **d)
         print("\nWrote %s" % out)
 
-    ok = asm.incomplete == 0 and asm.missing_ids == 0 and asm.bad_packets == 0
-    print("\n%s" % ("PASS" if ok else "CHECK: frames were lost or incomplete"))
+    ok = asm.incomplete == 0 and asm.missing_ids == 0 and asm.bad_packets == 0 and asm.restarts == 0
+    print("\n%s" % ("PASS" if ok else "CHECK: frames were lost or incomplete, or the radar restarted"))
     return 0 if ok else 2
 
 

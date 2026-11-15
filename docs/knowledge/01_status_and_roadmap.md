@@ -147,10 +147,17 @@ raw ADC data.
 **Done:**
 - First contact on `ibrahim-desktop`.
 - A stdlib Python recorder and a checker: `altos_standalone_capture/`.
+- A 3D viewer, live or replay (`view_altos.py`).
+- A settings switch (`altos_settings.py`). Every change restarts the radar.
+- A room analysis against tape measurements (`analyse_altos.py`).
+- First numbers: threshold 0 gives ~55% more points than the default;
+  150m_1 gives more points than 150m_0; the threshold is not a plain SNR cut.
 - 30 s recorded at 15 fps with no losses.
 
 **Open:**
-- Check axis signs against the reflector.
+- The small-room tests (README): no reflector or LiDAR available,
+  so it's a foil corner reflector or a plate, and the tape measure.
+- Check axis signs.
 - Record on the rig.
 - Integrate into `capture_session.py` and `align_session.py`, with a Stage 3
   offset.

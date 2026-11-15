@@ -80,7 +80,7 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   legacy/                       superseded originals, kept for reference
   sessions/                     OLD eMMC recordings (git-ignored)
 camera_standalone_capture/ZED_2i_Sensor/   ZED recorder (recorder.py, config.yaml)
-altos_standalone_capture/                  Altos V4 radar (under evaluation): point-cloud recorder + checker, V4 format
+altos_standalone_capture/                  Altos V4 radar (under evaluation): recorder, checker, 3D viewer, settings switch, room analysis
 lidar_standalone_capture/                  LiDAR raw recorder + checker
   rs_driver/                    RoboSense rs_driver (third-party, modified; see its NOTICE.md)
     python_wrapper_2/           our pybind11 wrapper (robosense_lidar.cpp, lidar.py)

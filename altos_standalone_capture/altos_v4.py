@@ -136,7 +136,14 @@ class FrameAssembler:
     a later frame arrives first (the frame is then incomplete). Counts frame
     IDs that never appeared (whole frames lost) and incomplete frames. A last
     frame cut off by the end of the recording is counted in truncated_end,
-    not as incomplete."""
+    not as incomplete.
+
+    frame_id starts again from 0 when the radar restarts, which it does
+    after a settings change (seen 2026-11-15: a ~1.5 s gap, then ids from
+    0). A step back of more than RESTART_STEP frames is counted as a
+    restart, not as a late packet."""
+
+    RESTART_STEP = 30          # 2 s at 15 fps; a late packet is at most a frame or two old
 
     def __init__(self):
         self.current: Optional[Frame] = None
@@ -146,6 +153,7 @@ class FrameAssembler:
         self.truncated_end = 0
         self.missing_ids = 0
         self.out_of_order = 0
+        self.restarts = 0
         self.bad_packets = 0
 
     def feed(self, pkt: bytes, t_ns: int) -> List[Frame]:
@@ -161,10 +169,14 @@ class FrameAssembler:
         if cur is None:
             if self.last_id is not None:
                 step = (h.frame_id - self.last_id) & 0xFFFFFFFF
-                if step == 0 or step > 0x7FFFFFFF:
+                back = (self.last_id - h.frame_id) & 0xFFFFFFFF
+                if step > 0x7FFFFFFF and back > self.RESTART_STEP:
+                    self.restarts += 1       # radar restarted: ids begin again
+                elif step == 0 or step > 0x7FFFFFFF:
                     self.out_of_order += 1   # late packet of a closed frame
                     return done
-                self.missing_ids += step - 1
+                else:
+                    self.missing_ids += step - 1
             cur = self.current = Frame(h, t_ns)
             self.last_id = h.frame_id
         cur.add(h, pkt[HEADER_BYTES:], t_ns)
@@ -235,39 +247,52 @@ def frame_points(f: Frame) -> List[Tuple[float, float, float, float, float]]:
     return [POINT.unpack_from(data, k) for k in range(0, len(data) - POINT_BYTES + 1, POINT_BYTES)]
 
 
-def frames_to_arrays(frames):
-    """Frames -> numpy arrays for analysis.
+def points_array(payload: bytes):
+    """Point bytes -> ((N, 8) float32 points, (N,) bool valid).
 
-    Returns a dict:
-        points     (N, 8) float32: range, doppler, azimuth, elevation, snr, x, y, z
-                   (vehicle-style axes: x forward, y left, z up; z = -raw)
-        valid      (N,) bool: all five sent fields are finite (see NaN note above)
-        frame_idx  (N,) int32: index into the per-frame arrays
-        frame_id, t_host_first_ns, t_host_last_ns, radar_time, n_points, complete
-    """
+    Columns: range, doppler, azimuth, elevation, snr, x, y, z, with
+    vehicle-style axes (x forward, y left, z up; z = -raw). valid: all five
+    sent fields are finite (see the NaN note above)."""
     import numpy as np
 
-    rows, idx = [], []
-    fid, t0, t1, rt, npts, comp = [], [], [], [], [], []
-    for i, f in enumerate(frames):
-        raw = np.frombuffer(f.payload(), dtype="<f4").reshape(-1, 5)
-        rows.append(raw)
-        idx.append(np.full(len(raw), i, dtype=np.int32))
-        fid.append(f.frame_id)
-        t0.append(f.t_first_ns)
-        t1.append(f.t_last_ns)
-        rt.append(f.radar_time)
-        npts.append(len(raw))
-        comp.append(f.complete)
-    raw = np.concatenate(rows) if rows else np.zeros((0, 5), np.float32)
+    raw = np.frombuffer(payload, dtype="<f4")
+    raw = raw[: len(raw) // 5 * 5].reshape(-1, 5)
     r, az, el = raw[:, 0], raw[:, 2], raw[:, 3]
     with np.errstate(invalid="ignore"):
         xyz = np.stack([r * np.cos(el) * np.cos(az),
                         r * np.cos(el) * np.sin(az),
                         -r * np.sin(el)], axis=1)
+    return (np.concatenate([raw, xyz.astype(np.float32)], axis=1),
+            np.isfinite(raw).all(axis=1))
+
+
+def frames_to_arrays(frames):
+    """Frames -> numpy arrays for analysis.
+
+    Returns a dict:
+        points     (N, 8) float32: see points_array()
+        valid      (N,) bool
+        frame_idx  (N,) int32: index into the per-frame arrays
+        frame_id, t_host_first_ns, t_host_last_ns, radar_time, n_points, complete
+    """
+    import numpy as np
+
+    rows, oks, idx = [], [], []
+    fid, t0, t1, rt, npts, comp = [], [], [], [], [], []
+    for i, f in enumerate(frames):
+        pts, ok = points_array(f.payload())
+        rows.append(pts)
+        oks.append(ok)
+        idx.append(np.full(len(pts), i, dtype=np.int32))
+        fid.append(f.frame_id)
+        t0.append(f.t_first_ns)
+        t1.append(f.t_last_ns)
+        rt.append(f.radar_time)
+        npts.append(len(pts))
+        comp.append(f.complete)
     return {
-        "points": np.concatenate([raw, xyz.astype(np.float32)], axis=1),
-        "valid": np.isfinite(raw).all(axis=1),
+        "points": np.concatenate(rows) if rows else np.zeros((0, 8), np.float32),
+        "valid": np.concatenate(oks) if oks else np.zeros(0, bool),
         "frame_idx": np.concatenate(idx) if idx else np.zeros(0, np.int32),
         "frame_id": np.asarray(fid, dtype=np.uint32),
         "t_host_first_ns": np.asarray(t0, dtype=np.int64),
