@@ -168,6 +168,10 @@ instead.
 
 ## Install as a service (starts at boot)
 
+**After every `git pull` on the rig, restart it:** `sudo systemctl restart capture-web`.
+The service keeps running the code it started with, so until the restart the page and the
+server are the old version (for example, without the Altos checkbox).
+
 Install it with the setup script, as the user who should run it
 (normally `jetson`), from `sync_capture_pipeline/`. Add `--hotspot` for
 the Wi-Fi hotspot:

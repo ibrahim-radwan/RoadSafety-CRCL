@@ -1,36 +1,160 @@
 # Notes for the research team
 
 The current state of the system, and what to know when recording and
-processing. Updated 2026-11-07. Earlier versions of this file are in git
+processing. Updated 2026-11-17. Earlier versions of this file are in git
 history.
 
 ## What to do now
 
 1. **Pull the latest `main`** on the rig and on the processing machines.
-   Then re-run, on every session you have:
+   On the rig, then restart the web page's service
+   (`sudo systemctl restart capture-web`), or the iPad page stays on the old
+   version. Then re-run, on every session you have:
    `python make_report.py --session <s>` and
    `python run_perception.py --session <s>`.
    The radar and LiDAR outputs have changed (see "New since your
    questions").
-2. **Mark the LiDAR's housing and its collar** so that any turn shows. The
+2. **Connect the Altos V4 radar to the rig** as a fourth sensor: follow
+   "Connecting the Altos to the rig" in the next section, step by step.
+3. **Mark the LiDAR's housing and its collar** so that any turn shows. The
    housing can turn in its collar.
-3. **Record a calibration set on the wheeler, as mounted.** Record the empty
+4. **Record a calibration set on the wheeler, as mounted.** Record the empty
    scene first, as a session named `background`. Then record the reflector
    positions in the same folder, without moving the vehicle. If anything is
-   remounted later, record a new set.
-4. **Record a 10–15 minute pilot and share it with us before collecting at
-   scale.** It should contain:
+   remounted later, record a new set. Mount the Altos before recording the
+   set, so it is in the set too.
+5. **Record a 10–15 minute pilot, with all four sensors, and share it with
+   us before collecting at scale.** It should contain:
    - the calibration set;
-   - about a minute of someone walking in front of the stopped wheeler (a
-     timing check);
+   - about a minute of someone walking towards and away from the stopped
+     wheeler (a timing check; for the Altos it also sets its time offset);
    - a ride at mixed speeds;
    - a few stops.
-5. **We check the pilot and send feedback or corrections:** data health,
-   sync and calibration on the vehicle, and detection on real roads. Then
+6. **We check the pilot and send feedback or corrections:** data health,
+   sync and calibration on the vehicle, detection on real roads, and the
+   Altos's time offset, which we add to the offsets file. Then
    you record more and share it, and we keep feeding back.
 
 Meanwhile, please try the live view's calibration capture on the rig. So
 far it is tested only on playback.
+
+## The Altos V4 radar (fourth sensor)
+
+An imaging radar recorded alongside the TI radar, LiDAR and camera. It
+sends a **processed point cloud**: its own detections, each with range,
+Doppler, azimuth, elevation and SNR. There is no raw ADC data.
+
+**Connection and power**
+
+- **Power:** the **15 V / 4 A** adaptor; the 1.5 A one is too weak. It
+  boots in 10–20 s.
+- **Network:** its harness's media converter, then a second USB-Ethernet
+  adapter on the Jetson. It keeps its factory addresses: radar
+  192.168.3.10, Jetson 192.168.3.1. These don't overlap the TI radar's
+  (192.168.33.x), the LiDAR's (192.168.34.x) or the Wi-Fi.
+- **Its web page** (on a machine on that network):
+  http://192.168.3.10:3000.
+
+**Connecting the Altos to the rig (once)**
+
+On the rig's Jetson, in a terminal, from the repository folder:
+
+1. **Update and restart the page.** Run `git pull`, then
+   `sudo systemctl restart capture-web`. Reload the iPad page: the sensor
+   checkboxes now include **Altos radar**. If the Jetson's Wi-Fi is the
+   hotspot, connect it to the internet for the pull first
+   (`docs/knowledge/02_hardware_and_network.md`, "Wi-Fi for the iPad").
+2. **Plug it in.**
+   - The Altos's connector goes to its harness.
+   - The harness's RJ45 goes to a second USB-Ethernet adapter, into any
+     free USB port on the Jetson.
+   - The harness's power jack goes to the **15 V / 4 A** adaptor.
+   - Wait 20 s for it to boot.
+3. **Find the new adapter's MAC address:** `ip -br link`. It is the
+   interface that was not there before, often named `enx…`. The LiDAR's
+   adapter is 00:0E:C6:BC:78:54.
+4. **Give the Jetson its address on that adapter.** Put the MAC from
+   step 3 in place of `<MAC>`:
+
+   ```bash
+   sudo nmcli con add type ethernet con-name "altos-usb-eth" ifname "" \
+        802-3-ethernet.mac-address <MAC> ipv4.method manual ipv4.addresses 192.168.3.1/24 \
+        ipv4.never-default yes ipv6.method ignore
+   sudo nmcli con up altos-usb-eth
+   ```
+
+   The profile is tied to that adapter, so it comes back by itself after
+   every reboot. Nothing about the TI radar, the LiDAR or the Wi-Fi changes.
+5. **Check it answers.**
+   - `ip -br addr` lists 192.168.3.1 on the new adapter.
+   - `curl -s http://192.168.3.10:3000/status` prints `"machine_name":"Altos V4"`.
+6. **Check its settings.** `curl -s http://192.168.3.10:3000/install`
+   should show `"profile":"150m_1"`, `"fps_limit":null`,
+   `"sync_mode":"FreeRunning"` and `threshold_coeff` `0.0`. If not, set
+   them:
+
+   ```bash
+   python altos_standalone_capture/altos_settings.py --profile 150m_1 --threshold 0 --fps-limit off
+   ```
+
+7. **Mount it.**
+   - Facing forward, level, rigid, close to the TI radar.
+   - Note where it sits relative to the TI radar (offset in cm, any turn):
+     it is needed for the calibration.
+8. **Check it live.** On the iPad, tick **Altos radar** in *Live view* and
+   start it. The Altos panel shows points, about 15 frames/s, and moving
+   people in blue or red.
+9. **Make a 30 s test recording** with all four sensors ticked.
+   - The Altos card should read about **15 frames/s, 0 lost, 0 restarts**.
+   - `check_session` should say **PASS**.
+   - Then go on with the calibration set and the pilot (steps 4–5 above).
+
+If the session refuses to start with "Altos radar does not answer": check
+its power, its connector, and that 192.168.3.1 is on its adapter
+(steps 4–5).
+
+**Settings in use:** profile `150m_1`, threshold coefficient `0` (the most
+points), no FPS limit (15 frames/s), free running.
+
+- In a room this gives about 170 points per frame, against about 110 at the
+  default threshold.
+- **Don't change its settings while recording.** Every change restarts it:
+  a 1–2 s gap, and its frame numbers start again. The session check
+  reports a restart as a failure.
+
+**Recording and the page**
+
+- **Recording:** "Altos radar" is a checkbox, ticked by default. It starts
+  and stops with the LiDAR and camera. The session doesn't start if the
+  Altos doesn't answer; untick it to record without it.
+- **Status card:** frames/s (normally 15), points per frame, lost frames
+  and restarts.
+- **Live view:** an Altos top view, an Altos row in the reflector table,
+  and Altos data in calibration captures (`<set>/<position>/altos/`).
+
+**After recording**
+
+- `check_session.py` checks it.
+- `align_session.py` puts it on the common clock and adds it to
+  `pairs.csv`.
+- The HTML report has an Altos section.
+- The replay has an Altos panel (`--sensors` includes `altos`).
+
+**Not calibrated yet**
+
+- **Mounting:** its points are in its **own** frame (x forward, y left, z
+  up). The Altos's place in the vehicle frame is part of your extrinsic
+  calibration.
+- **Time offset:** its processing delay (under 60 ms per its spec) is still
+  in its times.
+  - We measure it from your pilot's walking minute (the report's Altos
+    timing check) and add it to `calibration/stage3_offsets.json` as
+    `altos_ms`.
+  - After you pull that, re-run `make_report.py` on the sessions recorded
+    so far: offsets are applied when a session is aligned, never to the raw
+    data.
+- **Signs:** the Doppler and elevation signs follow the vendor's documents;
+  they're not yet checked against a target.
 
 ## Your questions of 2026-11-06
 
@@ -148,6 +272,8 @@ camera: range, speed, timing and angle conventions.
 - **LiDAR points** are turned into the vehicle frame right after decoding,
   with the mounting in `calibration/lidar_extrinsic.json`. Each session
   records the transform it used in `sync/alignment.json`.
+- **"radar"** in sensor lists, flags and file names is the TI radar; the
+  Altos is always **"altos"**.
 
 **Radar**
 
@@ -167,6 +293,22 @@ camera: range, speed, timing and angle conventions.
   Sweeps are split behind the vehicle, so the forward view is never cut.
 - Every 10th sweep lacks a 16.5° sector (question 5).
 
+**Altos V4**
+
+- Recorded raw to `altos/altos.pcap`. `altos/metadata.json` holds the
+  radar's settings at the start of the session.
+- `sync/altos_points.npz` (written by `align_session.py`) holds every point:
+  - `points`, one row per point: range (m), Doppler (m/s, > 0 = moving
+    away), azimuth (rad, + left), elevation (rad, raw sign: + down), SNR
+    (linear), then x, y, z (m; x forward, y left, z up; the Altos's own
+    frame);
+  - `valid`: false for the few points the radar sends with missing (NaN)
+    values (well under 1%);
+  - `frame`: the point's row in `sync/altos_timeline.csv`;
+  - `t_ref`: each frame's time.
+- Radial speeds wrap at ±45 m/s.
+- 15 frames/s. Indoors, 70–280 points per frame; the maximum is 12,000.
+
 **Camera (ZED 2i)**
 
 - Recorded as lossless H.264 SVO2; images are extracted offline.
@@ -177,8 +319,13 @@ camera: range, speed, timing and angle conventions.
 
 - Timing offsets (applied automatically): radar +12.65 ms, camera
   +23.34 ms, relative to the LiDAR.
-- `sync/pairs.csv`: one row per radar frame, with the nearest camera frame
-  and LiDAR sweep and their time errors; rows in a gap are flagged.
+- `sync/pairs.csv`: one row per radar frame, with the nearest camera
+  frame, LiDAR sweep and Altos frame (`altos_frame`, `t_altos`,
+  `altos_error_ms`) and their time errors. Rows in a gap are flagged
+  (`camera_gap`, `lidar_gap`, `altos_gap`).
+- **Altos times:** each frame's arrival on the Jetson, smoothed. Its
+  processing delay is not yet removed (see the Altos section). Paired with
+  the radar frames, the Altos is within ±33 ms.
 - `make_report.py` aligns a session, writes `pairs.csv` and the HTML report.
 
 **Detections (`run_perception.py --session <s>`)**, in `sync/`:
