@@ -480,6 +480,64 @@ class RadarSource(Source):
             self.error = f"radar: {exc}"
 
 
+# ── Altos V4 ────────────────────────────────────────────────────────────────
+class AltosSource(Source):
+    """The Altos V4 radar's point cloud (sync/altos_points.npz and altos_timeline.csv, written by
+    align_session.py; times t_ref, offsets included). Publishes, for the frame the clock reached:
+        t, k     frame time and index (row of altos_timeline.csv)
+        pts      the valid points of the last `trail` frames, (N, 9) float32: range, doppler (+ away),
+                 azimuth rad, elevation rad (raw, + down), snr, x, y, z (the Altos's OWN frame: x
+                 forward, y left, z up; its mounting is not applied), age in frames (0 = newest)
+        n_new    points in the newest frame
+    """
+    name_ = "altos"
+
+    def __init__(self, clock, session: Path, trail: int = 3):
+        super().__init__(clock)
+        d = np.load(session / "sync" / "altos_points.npz")
+        self.t = np.asarray(d["t_ref"], dtype=float)
+        valid = d["valid"]
+        pts, fr = d["points"][valid], d["frame"][valid]
+        order = np.argsort(fr, kind="stable")
+        self.pts, fr = pts[order], fr[order]
+        self.starts = np.searchsorted(fr, np.arange(len(self.t) + 1))
+        self.trail = int(trail)
+        self.moving_only = False
+
+    def span(self):
+        return float(self.t[0]), float(self.t[-1])
+
+    def frame(self, k: int) -> np.ndarray:
+        return self.pts[self.starts[k]:self.starts[k + 1]]
+
+    def run(self):
+        try:
+            done = None
+            while not self.stop_evt.is_set():
+                k = int(np.searchsorted(self.t, self.clock.now(), side="right")) - 1
+                key = (k, self.trail, self.moving_only)
+                if key == done:
+                    time.sleep(0.005)
+                    continue
+                done = key
+                if k < 0:
+                    self.publish(None)
+                    continue
+                parts = []
+                for age in range(min(self.trail, k + 1)):
+                    q = self.frame(k - age)
+                    if self.moving_only:
+                        q = q[np.abs(q[:, 1]) >= 0.3]
+                    parts.append(np.c_[q, np.full(len(q), age, np.float32)])
+                p = np.concatenate(parts) if parts else np.zeros((0, 9), np.float32)
+                self.publish({"t": float(self.t[k]), "k": k, "pts": p.astype(np.float32),
+                              "n_new": int(self.starts[k + 1] - self.starts[k])})
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            self.error = f"altos: {exc}"
+
+
 # ── LiDAR ───────────────────────────────────────────────────────────────────
 # ── LiDAR view rendering ────────────────────────────────────────────────────
 LIDAR_VIEWS = ("top", "top360", "panorama")

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-replay_session.py — replay a 3-sensor session in real time, on one clock,
-with our GPU detection and tracking live on the radar and the LiDAR.
+replay_session.py — replay a session (TI radar, camera, LiDAR, Altos V4) in
+real time, on one clock, with our GPU detection and tracking live on the radar
+and the LiDAR.
 
-One window, six panels (each can be maximised: double-click its title, its
-button, or keys 1-6; Esc restores):
+One window, six panels, seven with the Altos (each can be maximised:
+double-click its title, its button, or keys 1-7; Esc restores):
 
     Camera          the ZED left image (SVO2 decoded on the GPU by the ZED SDK)
     LiDAR           bird's-eye (forward / 360) or panorama, filling the panel;
@@ -14,6 +15,11 @@ button, or keys 1-6; Esc restores):
                     detections (colour = radial velocity, hollow = multipath
                     ghost), confirmed tracks (R<n>)
     Range-Doppler   range vs radial velocity
+    Altos           the Altos V4 radar's point cloud (sync/altos_points.npz) on the
+                    same metric window, in its OWN frame (its mounting is not
+                    calibrated): the frame the clock reached plus the previous
+                    ones (trail, fainter); blue approaching, red receding, grey
+                    still. "in 3D" also draws them in the LiDAR 3D view.
     Objects         confirmed tracks of both sensors (range, azimuth + left,
                     x / y), and with "static" ticked the strongest stationary
                     radar reflectors (S<n>, absolute power in dB)
@@ -41,7 +47,7 @@ Requires: python align_session.py --session <s>   (writes sync/)
 KEYS    space play/pause   left/right: previous/next radar frame
         [ ] slower/faster  s: save a screenshot   m: radar moving/all
         b: background subtraction on/off (with --background)
-        1-6 maximise a panel, Esc / 0 restore all
+        1-7 maximise a panel, Esc / 0 restore all
 
 USAGE (conda env)
     python replay/replay_session.py --session sessions/run05
@@ -72,14 +78,16 @@ from matplotlib import cm
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
-from sources import (LIDAR_COLORS, LIDAR_VIEWS, CameraSource, LidarSource, RadarSource,  # noqa: E402
+from sources import (LIDAR_COLORS, LIDAR_VIEWS, AltosSource, CameraSource, LidarSource, RadarSource,  # noqa: E402
                      ReplayClock, load_csv, top_extent)
 
 RANGE_MIN, RANGE_MAX = 1.0, 80.0             # view range and range filter limits (m)
 N_STATIC_ROWS = 3                             # strongest stationary radar reflectors listed in the objects table
 LIDAR_NEAR = [0.0, 0.3, 0.5, 1.0, 2.0]
 SPEEDS = [0.25, 0.5, 1.0, 2.0]
-RADAR_C, LIDAR_C, CAMERA_C = (42, 120, 214), (235, 104, 52), (27, 175, 122)   # report palette
+RADAR_C, LIDAR_C, CAMERA_C, ALTOS_C = (42, 120, 214), (235, 104, 52), (27, 175, 122), (237, 161, 0)   # report palette
+ALTOS_MOVING_V = 0.3                          # |Doppler| at or above this: a moving Altos point (m/s)
+ALTOS_RGB = {"still": (150, 155, 165), "toward": (80, 150, 255), "away": (255, 90, 70)}
 RADAR_POINTS = [("detections (CFAR + tracking)", "detections"), ("raw (all range-azimuth cells)", "raw"),
                 ("off", "off")]
 
@@ -335,6 +343,15 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         items["radar_rd"] = dict(plot=p, img=img, line=rd_line, dets=rd_dets)
         panels["radar_rd"] = Panel("radar_rd", "Range-Doppler", w, toggle_max)
         bottom.addWidget(panels["radar_rd"].frame)
+    if "altos" in sensors:
+        w, p, img, fov, tgt = bev_plot()
+        img.hide()                                       # points only: no map behind them
+        apts = pg.ScatterPlotItem(size=6, pen=None)
+        apts.setZValue(12)
+        p.addItem(apts)
+        items["altos"] = dict(plot=p, img=img, fov=fov, tgt=tgt, pts=apts, widget=w, refm=p._refm, labels=[])
+        panels["altos"] = Panel("altos", "Altos", w, toggle_max)
+        bottom.addWidget(panels["altos"].frame)
     table = QtWidgets.QTableWidget(0, 10)
     table.setHorizontalHeaderLabels(["sensor", "id", "class", "range m", "az ° (+L)", "x m", "y m (+L)",
                                      "speed m/s", "v_r m/s", "dB"])
@@ -348,7 +365,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
     table.setFocusPolicy(QtCore.Qt.NoFocus)
     panels["objects"] = Panel("objects", "Objects", table, toggle_max)
     bottom.addWidget(panels["objects"].frame)
-    for sp, sizes in ((top, [5, 5, 5]), (bottom, [5, 5, 3])):
+    for sp, sizes in ((top, [5, 5, 5]), (bottom, [5] * (bottom.count() - 1) + [3])):
         sp.setChildrenCollapsible(False)
         sp.setSizes([s * 100 for s in sizes[:sp.count()]])
     vsplit.setSizes([560, 400])
@@ -369,7 +386,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         return ("top" if mode == "panorama" else mode), float(R), w_ / h_, w_
 
     def apply_views(force=False):
-        for key in ("lidar", "radar_bev"):
+        for key in ("lidar", "radar_bev", "altos"):
             if key not in items:
                 continue
             mode, R, asp, px = view_for(key)
@@ -384,7 +401,8 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
             p_.disableAutoRange()
             p_.setRange(xRange=(y0, y1), yRange=(x0, x1), padding=0)
             rr = x1 if mode == "top" else x1
-            c, sn = np.cos(np.radians(85)) * rr * 1.5, np.sin(np.radians(85)) * rr * 1.5
+            half = 75 if key == "altos" else 85                    # the Altos's field of view is +-75 deg
+            c, sn = np.cos(np.radians(half)) * rr * 1.5, np.sin(np.radians(half)) * rr * 1.5
             items[key]["fov"].setData([sn, 0, -sn], [c, 0, c])
         if "radar_rd" in items:
             R = lidar_ctl["range_m"].value() if "range_m" in lidar_ctl else args.lidar_range
@@ -393,14 +411,14 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
 
     # ── event strip: where the gaps are; click to jump ──────────────────
     ev, evp = _plot(pg)
-    ev.setFixedHeight(54)
+    ev.setFixedHeight(72 if "altos" in sensors else 54)
     evp.hideAxis("left")
     ev.setMouseEnabled(x=False, y=False)
-    evp.setYRange(-0.2, 2.2, padding=0)
+    evp.setYRange(-0.2, 3.2 if "altos" in sensors else 2.2, padding=0)
     span = clock.t1 - clock.t0
     margin = 0.09 * span                          # labels live left of t = 0
     evp.setXRange(-margin, span, padding=0)
-    marks = {"camera_gap": ([], CAMERA_C, 0), "lidar_gap": ([], LIDAR_C, 1)}
+    marks = {"camera_gap": ([], CAMERA_C, 0), "lidar_gap": ([], LIDAR_C, 1), "altos_gap": ([], ALTOS_C, 2)}
     for pr in pairs.values():
         for f in (pr.get("flags") or "").split(";"):
             if f in marks:
@@ -409,13 +427,14 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         if xs:
             evp.plot(np.repeat(xs, 3), np.tile([row_ + 0.05, row_ + 0.95, np.nan], len(xs)),
                      pen=pg.mkPen(col, width=1), connect="finite")
-    for text, col, y in (("camera gaps", CAMERA_C, 0.5), ("LiDAR gaps", LIDAR_C, 1.5)):
+    for text, col, y in (("camera gaps", CAMERA_C, 0.5), ("LiDAR gaps", LIDAR_C, 1.5)) + \
+            ((("Altos gaps", ALTOS_C, 2.5),) if "altos" in sensors else ()):
         lab = pg.TextItem(text, color=col, anchor=(0, 0.5))
         lab.setPos(-margin, y)
         evp.addItem(lab)
     if srcs.get("radar") is not None and getattr(srcs["radar"], "timing_source", "").startswith("NOMINAL"):
         lab = pg.TextItem("radar times NOMINAL (DCA backlog)", color=RADAR_C, anchor=(1, 0.5))
-        lab.setPos(clock.t1 - clock.t0, 2.0)
+        lab.setPos(clock.t1 - clock.t0, 3.0 if "altos" in sensors else 2.0)
         evp.addItem(lab)
     cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen((220, 220, 220), width=1))
     evp.addItem(cursor)
@@ -540,6 +559,27 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         moving.stateChanged.connect(lambda s_: setattr(srcs["radar"], "moving_only", bool(s_)))
         if getattr(args, "radar_all", False):
             moving.setChecked(False)              # the whole scene, stationary reflectors included
+    actl = {}
+    if "altos" in srcs:
+        row = group("Altos")
+        row.addWidget(QtWidgets.QLabel("trail"))
+        atrail = QtWidgets.QSpinBox()
+        atrail.setRange(1, 15)
+        atrail.setValue(int(getattr(args, "altos_trail", 3)))
+        atrail.setSuffix(" fr")
+        atrail.setToolTip("frames drawn together (15 = 1 s); older ones fainter. Its point cloud is sparse")
+        atrail.valueChanged.connect(lambda v_: setattr(srcs["altos"], "trail", int(v_)))
+        row.addWidget(atrail)
+        amov = QtWidgets.QCheckBox("moving only")
+        amov.setToolTip(f"only points with |Doppler| >= {ALTOS_MOVING_V} m/s")
+        amov.stateChanged.connect(lambda s_: setattr(srcs["altos"], "moving_only", bool(s_)))
+        row.addWidget(amov)
+        a3d = QtWidgets.QCheckBox("in 3D")
+        a3d.setChecked(True)
+        a3d.setToolTip("draw the Altos points in the LiDAR 3D view too, as if the two were co-located "
+                       "(the Altos's mounting is not calibrated)")
+        row.addWidget(a3d)
+        actl.update(trail=atrail, moving=amov, in3d=a3d)
     bgbox = None
     if getattr(args, "background", None) is not None:
         row = group("Background")
@@ -646,7 +686,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
         keys[QtCore.Qt.Key_M] = lambda: rctl["moving"].setChecked(not rctl["moving"].isChecked())
     if bgbox is not None:
         keys[QtCore.Qt.Key_B] = lambda: bgbox.setChecked(not bgbox.isChecked())
-    for i, k in enumerate(pkeys[:6]):
+    for i, k in enumerate(pkeys[:9]):
         keys[getattr(QtCore.Qt, f"Key_{i + 1}")] = (lambda kk=k: toggle_max(kk))
     for k, fn in keys.items():
         QtWidgets.QShortcut(QtGui.QKeySequence(k), win, activated=fn)
@@ -701,7 +741,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 if 0 <= jj < len(track["t"]) and abs(track["t"][jj] - t) < 0.15 and np.isfinite(track["r"][jj]):
                     tgt = (float(track["r"][jj]), float(track["az"][jj]))
                     break
-        for key in ("lidar", "radar_bev"):
+        for key in ("lidar", "radar_bev", "altos"):
             if key in items:
                 pano = key == "lidar" and srcs["lidar"].view["mode"] == "panorama"
                 if tgt and not pano:
@@ -923,6 +963,40 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                                      float(d_[RC["az_deg"]]), float(d_[RC["x"]]), float(d_[RC["y"]]), 0.0, 0.0,
                                      float(d_[RC["power_db"]]), RADAR_C))
 
+        # Altos
+        alt = srcs["altos"].get() if "altos" in srcs else None
+        altos_3d = None
+        if "altos" in srcs:
+            it = items["altos"]
+            key_a = None if alt is None else (alt["k"], alt["pts"].shape, gate["lo"].value(), gate["hi"].value())
+            if changed("altos", key_a):
+                if alt:
+                    p_ = alt["pts"]
+                    p_ = p_[in_gate(p_[:, 0])]
+                    v_, age = p_[:, 1], p_[:, 8].astype(int)
+                    kind = np.where(v_ <= -ALTOS_MOVING_V, 1, np.where(v_ >= ALTOS_MOVING_V, 2, 0))
+                    names = ("still", "toward", "away")
+                    cache = state.setdefault("altos_brush", {})
+                    brushes = []
+                    for k_, a_ in zip(kind, age):
+                        b_ = cache.get((k_, a_))
+                        if b_ is None:
+                            b_ = cache[(k_, a_)] = pg.mkBrush(*ALTOS_RGB[names[k_]], int(235 * (1 - 0.6 * min(a_, 5) / 5)))
+                        brushes.append(b_)
+                    it["pts"].setData(p_[:, 6], p_[:, 5], brush=brushes, size=np.where(age == 0, 7, 5))
+                    rgba = np.array([ALTOS_RGB[names[k_]] + (255,) for k_ in kind], np.float32) / 255.0
+                    rgba[:, 3] = 1 - 0.6 * np.minimum(age, 5) / 5
+                    state["altos_3d"] = (p_[:, 5:8].copy(), rgba)
+                    n_mov = int((np.abs(v_[age == 0]) >= ALTOS_MOVING_V).sum())
+                    panels["altos"].set("Altos (own frame)", f"frame {alt['k']}  @ {fmt(alt['t'])}  |  {alt['n_new']} "
+                                        f"pts newest ({n_mov} moving)  |  {len(p_)} shown, trail "
+                                        f"{actl['trail'].value()}")
+                else:
+                    it["pts"].setData([], [])
+                    state["altos_3d"] = None
+                    panels["altos"].set("Altos", "no data at this time")
+            altos_3d = state.get("altos_3d") if actl["in3d"].isChecked() else None
+
         # the corner reflector in both sensors (calibration sessions, with a background)
         if rad is not None:
             rad = dict(rad, reflector=state.get("radar_reflector") if rctl.get("static") is not None
@@ -953,6 +1027,10 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 v3.show_objects(ld["objects"], cols3, ld["tracks"] if dctl["tracks"].isChecked() else [])
             else:
                 v3.show_objects(None, None, [])
+            if altos_3d is not None:
+                v3.show_altos(altos_3d[0], altos_3d[1], size=6)
+            else:
+                v3.show_altos(None, None)
             if radar_pts is not None:
                 xyz = radar_pts[0]
                 if rctl.get("flat") is not None and rctl["flat"].isChecked():
@@ -994,7 +1072,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 flag = f" <b style='color:#ff6b6b'>[{pr['flags']}]</b>" if pr["flags"] else ""
                 lines.append(f"radar frame {rad['k']}: camera frame {pr['camera_frame_index']} "
                              f"({float(pr['camera_error_ms'] or 0):+.1f} ms), LiDAR sweep {pr['lidar_sweep']} "
-                             f"({float(pr['lidar_error_ms'] or 0):+.1f} ms){flag}")
+                             f"({float(pr['lidar_error_ms'] or 0):+.1f} ms)" +
+                             (f", Altos frame {pr['altos_frame']} ({float(pr['altos_error_ms'] or 0):+.1f} ms)"
+                              if pr.get("altos_frame") not in (None, "") else "") + flag)
         if now - state["rate_t"] >= 1.0:
             for name, src in srcs.items():
                 state["last_rates"][name] = (src.produced - state["rate_n"].get(name, src.produced)) / (now - state["rate_t"])
@@ -1012,7 +1092,7 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
                 QtCore.QTimer.singleShot(0, apply_views)
             return False
     rf = _Resize(win)
-    for key in ("lidar", "radar_bev"):
+    for key in ("lidar", "radar_bev", "altos"):
         if key in items:
             items[key]["widget"].installEventFilter(rf)
 
@@ -1026,7 +1106,9 @@ def build_window(session: Path, sensors: list, clock: ReplayClock, srcs: dict, p
 def main() -> int:
     ap = argparse.ArgumentParser(description="Replay a 3-sensor session")
     ap.add_argument("--session", type=Path, required=True)
-    ap.add_argument("--sensors", default="camera,lidar,radar", help="comma list: any of camera,lidar,radar")
+    ap.add_argument("--sensors", default="camera,lidar,radar,altos",
+                    help="comma list: any of camera,lidar,radar,altos (radar = the TI radar)")
+    ap.add_argument("--altos-trail", type=int, default=3, help="Altos frames drawn together (1-15)")
     ap.add_argument("--start", type=float, default=0.0, help="start time (s from session start)")
     ap.add_argument("--speed", type=float, default=1.0, choices=SPEEDS)
     ap.add_argument("--bev-range", type=float, default=80.0,
@@ -1043,7 +1125,7 @@ def main() -> int:
     ap.add_argument("--lidar-near", type=float, default=0.5, choices=LIDAR_NEAR,
                     help="hide returns nearer than this (mount, vehicle body)")
     ap.add_argument("--play", action="store_true", help="start playing immediately")
-    ap.add_argument("--maximise", choices=["camera", "lidar", "lidar3d", "radar_bev", "radar_rd", "objects"],
+    ap.add_argument("--maximise", choices=["camera", "lidar", "lidar3d", "radar_bev", "radar_rd", "altos", "objects"],
                     help="start with this panel maximised")
     ap.add_argument("--lidar-3d", action="store_true", help=argparse.SUPPRESS)   # 3D is a panel now: always shown
     ap.add_argument("--radar-points", default="detections", choices=["detections", "raw", "off"],
@@ -1090,6 +1172,10 @@ def main() -> int:
     sensors = [x.strip() for x in a.sensors.split(",") if x.strip()]
     meta = json.loads((s / "session.json").read_text())
     sensors = [x for x in sensors if x in meta.get("sensors", [])]
+    if "altos" in sensors and not (s / "sync" / "altos_points.npz").is_file():
+        print(f"no {s}/sync/altos_points.npz (aligned before the Altos was supported?): re-run align_session.py "
+              f"to see the Altos")
+        sensors.remove("altos")
     if not sensors:
         raise SystemExit("none of the requested sensors are in this session")
     offsets = json.loads((s / "sync" / "alignment.json").read_text()).get("offsets", {}) \
@@ -1109,6 +1195,8 @@ def main() -> int:
                                     view=dict(mode=a.lidar_view, range_m=a.lidar_range, color=a.lidar_color,
                                               near_m=a.lidar_near), background=a.background)
         srcs["lidar"].detect = not a.no_detect
+    if "altos" in sensors:
+        srcs["altos"] = AltosSource(clock, s, trail=a.altos_trail)
     spans = [src.span() for src in srcs.values()]
     clock.t0, clock.t1 = min(x[0] for x in spans), max(x[1] for x in spans)
     clock.seek(clock.t0 + a.start)

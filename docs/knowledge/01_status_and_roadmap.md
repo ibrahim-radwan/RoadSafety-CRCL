@@ -162,6 +162,8 @@ and keeps its factory addresses (02).
   - `check_session.py`: an Altos section.
   - `align_session.py`: capture times (07), `sync/altos_timeline.csv`,
     `sync/altos_points.npz`, and the Altos columns of `pairs.csv`.
+  - Replay: an Altos panel (trail, Doppler colours, optional 3D overlay) and an
+    "Altos gaps" row; tested on Altos-only sessions.
   - Report: an Altos section, with Altos rows, panels and columns in the
     timeline, intervals, pairing, velocity check, range overlay and
     snapshots.
@@ -185,7 +187,7 @@ and keeps its factory addresses (02).
   - run the report and set `altos_ms` from its Altos velocity check.
 - Calibrate the Altos's mounting relative to the vehicle frame; its points
   are in its own frame. That is the team's calibration.
-- The replay (`replay/`) does not show the Altos yet.
+
 - PTP, which needs a decision from the owner.
 - The team's decision on replacement. It depends on whether they need raw
   radar data.

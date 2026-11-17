@@ -1,10 +1,12 @@
 # Session replay
 
-Replays a three-sensor session in real time, with every sensor on one clock,
-and runs our GPU detection and tracking live on the radar and the LiDAR
-(`../perception/`). It can show all three sensors or any one of them.
+Replays a session in real time, with every sensor on one clock, and runs our
+GPU detection and tracking live on the radar and the LiDAR (`../perception/`).
+It shows the TI radar, camera, LiDAR and, since 2026-11-17, the Altos V4 radar,
+or any of them alone (`--sensors`).
 
-One window, six panels (2026-10-24; the 3D view used to be a separate window):
+One window, six panels, or seven with the Altos (2026-10-24; the 3D view used
+to be a separate window):
 
 | Panel | What it shows | Source |
 |---|---|---|
@@ -13,9 +15,19 @@ One window, six panels (2026-10-24; the 3D view used to be a separate window):
 | LiDAR 3D | The same sweep as an orbitable point cloud, 3D boxes, radar points | same |
 | Radar BEV | Range-azimuth power on the **same forward window** as the LiDAR; detections; tracks `R<n>` | radar `.bin`, `perception/radar.py` (GPU) |
 | Range-Doppler | Range vs radial velocity (+ = receding), detections | same |
+| Altos | The Altos V4 point cloud on the same forward window. Each point is one of its detections, in its **own** frame (the mounting is not calibrated). Blue approaching, red receding, grey still (\|Doppler\| < 0.3 m/s). The current frame plus a trail of earlier ones, fainter | `sync/altos_points.npz` and its times (`align_session.py`) |
 | Objects | Confirmed tracks of both sensors: range, azimuth (+ left), x / y, speed, radial velocity; with *static* ticked, the strongest stationary radar reflectors (`S<n>`, absolute power in dB) | the trackers, the stationary-reflector detector |
 
-- **Maximise a panel:** double-click its title, its ⤢ button, or keys **1–6**
+- **Altos controls** (the "Altos" group): **trail**, 1–15 frames shown
+  together (default 3, or `--altos-trail`); **moving only**; **in 3D**, which
+  also draws the Altos points in the LiDAR 3D view, as if the two sensors
+  were co-located. The status line gives the Altos frame paired with the
+  radar frame on screen, and its time error. The gap strip has an "Altos
+  gaps" row. A session aligned before the Altos was supported needs
+  `align_session.py` again; the replay says so.
+  - Tested on Altos-only sessions (2026-11-17). Not yet tested with the
+    other sensors, including the 3D overlay: no 4-sensor session exists yet.
+- **Maximise a panel:** double-click its title, its ⤢ button, or keys **1–7**
   (in the order above). **Esc** or **0** restores. `--maximise <panel>` at
   start.
 - **Resize** with the splitters between panels; the bird's-eye views re-fit.

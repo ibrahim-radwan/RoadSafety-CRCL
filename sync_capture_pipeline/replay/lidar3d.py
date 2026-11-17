@@ -68,6 +68,9 @@ class Lidar3DView:
         self.view.addItem(self.target)
         self.radar = gl.GLScatterPlotItem(size=6.0, pxMode=True)     # radar points (raw, detections, filtered)
         self.view.addItem(self.radar)
+        self.altos = gl.GLScatterPlotItem(size=6.0, pxMode=True)     # Altos V4 points (its own frame)
+        self.altos.setGLOptions("translucent")
+        self.view.addItem(self.altos)
         self._texts = []                                             # pooled track-ID labels
         self._pts = self._lab = None
         self._key = None
@@ -118,6 +121,14 @@ class Lidar3DView:
             r, az = target
             self.target.setData(pos=np.array([[r * np.cos(np.radians(az)), r * np.sin(np.radians(az)),
                                                self.ground_z + 1.0]], dtype=np.float32))
+
+    def show_altos(self, xyz, rgba, size=6.0):
+        """Altos V4 points, drawn as if co-located with the LiDAR (the Altos's mounting is not calibrated)."""
+        if xyz is None or not len(xyz):
+            self.altos.setData(pos=np.zeros((0, 3), np.float32))
+            return
+        self.altos.setData(pos=np.ascontiguousarray(xyz, dtype=np.float32),
+                           color=np.ascontiguousarray(rgba, dtype=np.float32), size=float(size))
 
     def show_radar(self, xyz, rgba, size=6.0):
         """Radar points in the LiDAR frame (radar assumed co-located with the LiDAR)."""
