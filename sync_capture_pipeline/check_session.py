@@ -1,5 +1,5 @@
 """
-check_session.py — validate a 3-sensor capture_session.py session.
+check_session.py — validate a capture_session.py session (TI radar, camera, LiDAR, Altos V4).
 
 Run it on return, BEFORE the next session. A clean exit is the condition
 for keeping the data. (The radar + D455 version is in legacy/.)
@@ -10,7 +10,9 @@ WHAT THIS ANSWERS
          radar  - every .bin exactly one frame, losses and alignment
          camera - SVO2 finalized and verified, frame ledger, dropped frames
          LiDAR  - PCAP readable, packet counter continuous, counts agree
-    3. Do camera and LiDAR cover the whole radar recording on
+         Altos  - PCAP readable, frames rebuilt, frame ids continuous, no
+                  incomplete frames, no radar restart, counts agree
+    3. Do camera, LiDAR and Altos cover the whole radar recording on
        CLOCK_MONOTONIC (so every radar frame CAN be paired)?
 
 WHAT THIS DOES NOT DO
@@ -33,7 +35,10 @@ import csv
 import json
 import statistics as st
 import struct
+import sys
 from pathlib import Path
+
+ALTOS_DIR = Path(__file__).resolve().parent.parent / "altos_standalone_capture"
 
 FRAME_BYTES = 256 * 64 * 48 * 4      # radar frame, r075m
 ADC_BYTES = 1456                     # radar payload per packet
@@ -93,7 +98,7 @@ def check_manifest(s: Path, r: Report) -> list:
     for name in sensors:
         if meta.get("exit_codes", {}).get(name) != 0:
             r.fail(f"{name} recorder exit code {meta.get('exit_codes', {}).get(name)}")
-    if str(meta.get("stop_reason", "")).startswith(("startup", "lidar", "camera", "free", "radar exited")):
+    if str(meta.get("stop_reason", "")).startswith(("startup", "lidar", "camera", "altos", "free", "radar exited")):
         r.fail(f"session ended abnormally: {meta.get('stop_reason')}")
     return sensors
 
@@ -268,9 +273,70 @@ def check_lidar(s: Path, r: Report, a) -> dict:
     return {"t0": t0 / 1e9, "t1": t1 / 1e9} if t0 else {}
 
 
+# ── Altos V4 ────────────────────────────────────────────────────────────────
+def check_altos(s: Path, r: Report, a) -> dict:
+    r.section("5 Altos V4 radar")
+    meta = load_json(s / "altos" / "metadata.json")
+    if not meta:
+        r.fail("altos/metadata.json missing")
+        return {}
+    inst = ((meta.get("radar_settings") or {}).get("install") or [{}])[0]
+    r.line(f"recorder    : complete={meta.get('complete')}  error={meta.get('error')}  "
+           f"duration {meta.get('duration_s')} s")
+    r.line(f"settings    : profile {inst.get('profile')}, threshold "
+           f"{(inst.get('rpvb_control_overrides') or {}).get('threshold_coeff', 'default')}, "
+           f"fps limit {inst.get('fps_limit') or 'off'}, firmware {meta.get('firmware')}")
+    if not meta.get("complete"):
+        r.fail(f"Altos recording incomplete: {meta.get('error')}")
+    pcap = s / "altos" / "altos.pcap"
+    if not pcap.is_file():
+        r.fail("altos.pcap missing")
+        return {}
+    if str(ALTOS_DIR) not in sys.path:
+        sys.path.insert(0, str(ALTOS_DIR))
+    import altos_v4 as av                          # stdlib only, like this checker
+    asm = av.FrameAssembler()
+    packets, frames = 0, []
+    try:
+        for t_ns, pkt in av.read_pcap(pcap):
+            packets += 1
+            for f in asm.feed(pkt, t_ns):
+                frames.append((f.t_first_ns, f.n_points))
+        frames.extend((f.t_first_ns, f.n_points) for f in asm.flush())
+    except ValueError as exc:
+        r.fail(f"altos.pcap unreadable: {exc}")
+        return {}
+    r.line(f"PCAP        : {pcap.stat().st_size / 1e6:.1f} MB, {packets} packets, {len(frames)} frames rebuilt")
+    if packets != meta.get("packets"):
+        r.fail(f"PCAP has {packets} packets, the recorder counted {meta.get('packets')}")
+    if not frames:
+        r.fail("no Altos frames recorded")
+        return {}
+    n = len(frames) + asm.missing_ids
+    pct = 100 * (asm.missing_ids + asm.incomplete) / max(1, n)
+    r.line(f"frames      : lost {asm.missing_ids}, incomplete {asm.incomplete} ({pct:.3f}%), radar restarts "
+           f"{asm.restarts}, bad packets {asm.bad_packets}, kernel drops {meta.get('kernel_udp_drops')}")
+    if asm.missing_ids or asm.incomplete:
+        (r.fail if pct > a.max_altos_loss_pct else r.warn)(
+            f"{asm.missing_ids} Altos frames lost and {asm.incomplete} incomplete ({pct:.3f}%)")
+    if asm.restarts:
+        r.fail(f"the Altos radar restarted {asm.restarts} time(s) during the session (a settings change or a "
+               f"power dip): a gap, and its frame ids started again")
+    t = [x[0] / 1e9 for x in frames]
+    gaps = [b - a_ for a_, b in zip(t, t[1:])]
+    if gaps:
+        med = st.median(gaps)
+        pts = sorted(x[1] for x in frames)
+        r.line(f"cadence     : {1 / med:.2f} fps, longest gap {max(gaps) * 1e3:.0f} ms; points per frame median "
+               f"{pts[len(pts) // 2]}")
+        if max(gaps) > 0.5:
+            r.warn(f"Altos stream paused for {max(gaps):.1f} s")
+    return {"t0": t[0], "t1": t[-1]}
+
+
 # ── coverage ────────────────────────────────────────────────────────────────
 def check_coverage(r: Report, radar: dict, others: dict) -> None:
-    r.section("5 Coverage (CLOCK_MONOTONIC)")
+    r.section("6 Coverage (CLOCK_MONOTONIC)")
     if not radar:
         r.line("no radar timing - skipped")
         return
@@ -293,6 +359,8 @@ def main() -> int:
                     help="fail above this %% of dropped camera frames (below: warning)")
     ap.add_argument("--max-lidar-loss-pct", type=float, default=0.1,
                     help="fail above this %% of lost LiDAR packets (below: warning)")
+    ap.add_argument("--max-altos-loss-pct", type=float, default=0.5,
+                    help="fail above this %% of lost or incomplete Altos frames (below: warning)")
     a = ap.parse_args()
     s = a.session
 
@@ -307,6 +375,8 @@ def main() -> int:
         spans["camera"] = check_camera(s, r, a)
     if "lidar" in sensors:
         spans["lidar"] = check_lidar(s, r, a)
+    if "altos" in sensors:
+        spans["altos"] = check_altos(s, r, a)
     check_coverage(r, radar, spans)
 
     sizes = sum(p.stat().st_size for p in s.rglob("*") if p.is_file())

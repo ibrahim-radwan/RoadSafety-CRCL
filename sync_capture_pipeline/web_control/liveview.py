@@ -28,7 +28,7 @@ import psutil
 
 PIPELINE = Path(__file__).resolve().parent.parent
 LIVE_DIR = PIPELINE / "live"
-SENSORS = ("radar", "camera", "lidar")
+SENSORS = ("radar", "camera", "lidar", "altos")       # radar = the TI cascade; altos = the Altos V4
 WORKER = {s: LIVE_DIR / f"{s}_live.py" for s in SENSORS}
 MAX_SECS = 600.0
 STOP_GRACE_S = 8.0           # SIGINT, then SIGKILL after this (the radar sends STOP_RECORD first)
@@ -233,7 +233,7 @@ class LiveView:
         if kind == "position" and name == "background":
             return {"error": "'background' is reserved for the empty scene"}
         with self.lock:
-            workers = {s: w for s, w in self.workers.items() if w.alive() and s in ("radar", "lidar", "camera")}
+            workers = {s: w for s, w in self.workers.items() if w.alive() and s in SENSORS}
         if not workers:
             return {"error": "live view is not on"}
         d = self.calib_root / set_name / name
@@ -280,11 +280,12 @@ class LiveView:
             cap = read(d / "capture.json") or {}
             row = {"name": d.name, "kind": cap.get("kind"), "time": cap.get("time_local"),
                    "saved": {s: (d / s / "meta.json").is_file() for s in cap.get("sensors", [])}}
-            for s in ("radar", "lidar"):
+            for s in ("radar", "lidar", "altos"):
                 r = read(d / s / "reflector.json")
                 if r is not None:
                     row[s] = {k: r.get(k) for k in ("found", "x", "y", "z", "range", "az_deg", "rise_db", "present",
-                                                     "n_per_sweep", "own_x", "own_y", "own_az_deg", "background")}
+                                                     "n_per_sweep", "own_x", "own_y", "own_az_deg", "background",
+                                                     "snr_db", "n_per_frame")}
             if cap.get("kind") == "background":
                 out["background"] = row
             else:

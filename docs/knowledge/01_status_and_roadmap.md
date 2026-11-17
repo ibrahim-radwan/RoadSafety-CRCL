@@ -138,11 +138,12 @@ What the baseline showed:
   was recorded with `r075m_v2_8fps`. The replay README's note that it is
   degraded seems to refer to an older recording of the same name.
 
-## Altos V4 radar under evaluation (since 2026-11-15)
+## Altos V4 radar: the fourth sensor (since 2026-11-15)
 
-The team is looking at an Altos V4 imaging radar, as a possible replacement
-for the TI radar or an extra sensor. It outputs a processed point cloud, not
-raw ADC data.
+An Altos V4 imaging radar. It outputs a processed point cloud, not raw ADC
+data. **Decided 2026-11-17: an additional sensor**, recorded alongside the TI
+radar, LiDAR and camera. It connects through a second USB-Ethernet adapter
+and keeps its factory addresses (02).
 
 **Done:**
 - First contact on `ibrahim-desktop`.
@@ -153,14 +154,38 @@ raw ADC data.
 - First numbers: threshold 0 gives ~55% more points than the default;
   150m_1 gives more points than 150m_0; the threshold is not a plain SNR cut.
 - 30 s recorded at 15 fps with no losses.
+- **Pipeline integration (2026-11-17):**
+  - `capture_session.py`: the Altos starts and stops with the LiDAR and
+    camera, after a preflight; `--no-altos` leaves it out.
+  - Web page: an Altos checkbox for recording and live view, a status card,
+    a live panel and calibration captures (`live/altos_live.py`).
+  - `check_session.py`: an Altos section.
+  - `align_session.py`: capture times (07), `sync/altos_timeline.csv`,
+    `sync/altos_points.npz`, and the Altos columns of `pairs.csv`.
+  - Report: an Altos section, with Altos rows, panels and columns in the
+    timeline, intervals, pairing, velocity check, range overlay and
+    snapshots.
+- **Tested here:**
+  - the launcher, with the Altos replayed on this machine;
+  - check and alignment on Altos-only and synthetic radar + Altos sessions;
+  - the live worker and calibration capture from a recording;
+  - the report's Altos figures on stand-in data;
+  - `tests/test_altos.py`.
+- **Not yet run:** a real 4-sensor session on the rig, and the full report
+  on one (the reference drive wasn't attached).
 
 **Open:**
 - The small-room tests (README): no reflector or LiDAR available,
   so it's a foil corner reflector or a plate, and the tape measure.
 - Check axis signs.
-- Record on the rig.
-- Integrate into `capture_session.py` and `align_session.py`, with a Stage 3
-  offset.
+- On the rig:
+  - create the `altos-usb-eth` network profile (NEW_BOARD_SETUP section 6;
+    needs the owner's go-ahead);
+  - record a 4-sensor session with someone walking;
+  - run the report and set `altos_ms` from its Altos velocity check.
+- Calibrate the Altos's mounting relative to the vehicle frame; its points
+  are in its own frame. That is the team's calibration.
+- The replay (`replay/`) does not show the Altos yet.
 - PTP, which needs a decision from the owner.
 - The team's decision on replacement. It depends on whether they need raw
   radar data.

@@ -30,6 +30,7 @@
 | Radar | 90.6 GB/h |
 | LiDAR | 17.5 GB/h |
 | Camera | 3.9 GB/h |
+| Altos V4 | ~0.3 GB/h (a 3–4 m room, 2026-11-15; the launcher budgets 1 GB/h; at most ~13 GB/h at its 12,000-point maximum) |
 | **Total** | **~112 GB/h (31 MB/s)** |
 
 The card holds about 8 h; the eMMC holds about 4 h of camera.

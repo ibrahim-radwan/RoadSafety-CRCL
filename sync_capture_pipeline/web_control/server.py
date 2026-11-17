@@ -19,7 +19,7 @@ WHAT IT DOES
 
 LIVE VIEW (liveview.py, ../live/)
     For extrinsic alignment: the camera's left image, the LiDAR top view and
-    the radar's range-azimuth map with detections, a few times a second,
+    the radar's range-azimuth map with detections and the Altos's top view, a few times a second,
     scaled down for the Wi-Fi. Nothing is saved. Live view and recording
     NEVER run at the same time: each start is refused while the other runs
     (one lock in create_app), and live view switches itself off after 10
@@ -74,6 +74,9 @@ COUNTDOWN_RE = re.compile(r"Starting in (\d+) s")
 RADAR_RE = re.compile(r"\[radar\]\s+t\+\s*(\d+)s\s+([\d,]+) pkt/s")
 CAMERA_RE = re.compile(r"\[camera\] (\d+) frames \| observed ([\d.]+) FPS \| SDK ([\d.]+) FPS.*\| gaps (\d+)")
 LIDAR_RE = re.compile(r"\[lidar\]\s+(\d+)s \| msop\s+(\d+)/s \| imu\s+(\d+)/s \| lost (\d+) \| queue (\d+) \|\s+([\d.]+) MB")
+ALTOS_RE = re.compile(r"\[altos\]\s+(\d+)s \|\s+(\d+) frames/s \|\s+(\d+) pkt/s \|\s+(\d+) pts/frame \| lost (\d+) \| "
+                      r"incomplete (\d+) \| restarts (\d+) \|\s+([\d.]+) MB")
+SENSORS = ("radar", "camera", "lidar", "altos")      # radar = the TI cascade; altos = the Altos V4
 # Known failure signatures in the session log -> what to check in the field.
 HINTS = [
     (("is not mounted - insert the SD card",),
@@ -86,6 +89,9 @@ HINTS = [
      "then start a new session"),
     (("no MSOP packets",),
      "no LiDAR data - check the LiDAR power and the USB-Ethernet adapter (LiDAR at 192.168.34.200)"),
+    (("Altos radar does not answer", "no packets from 192.168.3.10", "Cannot join 224.1.2.4"),
+     "no Altos radar data - check its power (15 V, 4 A adaptor), its connector and its USB-Ethernet adapter "
+     "(radar at 192.168.3.10, this Jetson 192.168.3.1)"),
     (("ZED SDK sees 0 cameras", "CAMERA NOT DETECTED"),
      "camera not detected - unplug and replug the ZED USB cable, then start again"),
     (("free space below", "not enough space"),
@@ -101,6 +107,7 @@ PHASES = [
     ("Starting in ", "countdown"),
     ("starting lidar", "starting"),
     ("starting camera", "starting"),
+    ("starting altos", "starting"),
     ("starting radar", "starting radar"),
     ("[radar]   START_RECORD: OK", "recording"),
     ("stopping radar", "stopping"),
@@ -154,6 +161,12 @@ class Session:
             if m:
                 self.sensors["lidar"] = {"t": now, "msop_s": int(m.group(2)), "imu_s": int(m.group(3)),
                                          "lost": int(m.group(4)), "mb": float(m.group(6))}
+            m = ALTOS_RE.search(line)
+            if m:
+                self.sensors["altos"] = {"t": now, "fps": int(m.group(2)), "pkt_s": int(m.group(3)),
+                                         "pts": int(m.group(4)), "lost": int(m.group(5)),
+                                         "incomplete": int(m.group(6)), "restarts": int(m.group(7)),
+                                         "mb": float(m.group(8))}
             # Operator timing (from the log, ~0.2 s resolution; guidance only).
             m = COUNTDOWN_RE.search(line)
             if m:
@@ -167,7 +180,8 @@ class Session:
                                                and self.ready >= self.n_other)):
                 self.rec_start = now
             if self.rec_start is not None and self.rec_end is None and any(
-                    k in line for k in ("stopping radar", "radar stopped", "stopping lidar", "stopping camera")):
+                    k in line for k in ("stopping radar", "radar stopped", "stopping lidar", "stopping camera",
+                                        "stopping altos")):
                 self.rec_end = now
             if "stop reason :" in line:
                 self.result = {"stop_reason": line.split("stop reason :", 1)[1].strip()}
@@ -198,7 +212,7 @@ class Session:
             return f"session '{name}' already exists - choose a new name"
         cmd = [self.launcher_python, "-u", str(LAUNCHER), "--out", str(out), "--secs", str(secs),
                "--delay", str(delay), "--note", note]
-        for s in ("radar", "camera", "lidar"):
+        for s in SENSORS:
             if s not in sensors:
                 cmd.append(f"--no-{s}")
         if self.camera_stage and "camera" in sensors:
@@ -381,7 +395,8 @@ class FiniteJSON(DefaultJSONProvider):
         return super().dumps(finite(obj), **kwargs)
 
 
-RECORDING_SCRIPTS = ("capture_session.py", "dca_capture_radar_sync.py", "record_lidar_raw.py", "recorder.py")
+RECORDING_SCRIPTS = ("capture_session.py", "dca_capture_radar_sync.py", "record_lidar_raw.py", "recorder.py",
+                     "record_altos_raw.py")
 
 
 def recording_processes() -> list:
@@ -433,7 +448,7 @@ def create_app(session: Session, live: liveview.LiveView = None) -> Flask:
             delay = float(body.get("delay") or 0)
         except ValueError:
             return jsonify(error="duration and delay must be numbers"), 400
-        sensors = [s for s in body.get("sensors", ["radar", "camera", "lidar"]) if s in ("radar", "camera", "lidar")]
+        sensors = [s for s in body.get("sensors", list(SENSORS)) if s in SENSORS]
         if not sensors:
             return jsonify(error="select at least one sensor"), 400
         guide = "stage3" if body.get("guide") == "stage3" else None

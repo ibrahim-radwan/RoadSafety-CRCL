@@ -3,7 +3,9 @@
 Conventions, the same in every figure:
   - sensor identity: radar = blue, LiDAR = orange, camera = aqua (the first
     three slots of the reference categorical palette, validated all-pairs in
-    light mode); always with a text label, never colour alone;
+    light mode), Altos V4 radar = yellow (slot 4; validated against its
+    neighbours only, so it is never one of more than three series in one
+    scatter plot); always with a text label, never colour alone;
   - magnitude (heatmaps): one-hue blue ramp, light -> dark;
   - time axis: seconds since the first radar frame;
   - bird's-eye views: forward up, vehicle-left on the LEFT (as in the camera image);
@@ -23,7 +25,7 @@ import numpy as np                                  # noqa: E402
 
 SURFACE = "#fcfcfb"
 INK, INK2, MUTED, GRID = "#0b0b0b", "#52514e", "#8a8984", "#e4e3df"
-RADAR, LIDAR, CAMERA = "#2a78d6", "#eb6834", "#1baf7a"
+RADAR, LIDAR, CAMERA, ALTOS = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
 SEQ = LinearSegmentedColormap.from_list("blue_ramp", [SURFACE, "#cde2fb", "#86b6ef", "#3987e5",
                                                       "#256abf", "#184f95", "#0d366b"])
 
@@ -57,16 +59,19 @@ def _per_second(t, t0, t1):
 
 # ── overview ────────────────────────────────────────────────────────────────
 def timeline(D):
-    R, L, C = D["radar"], D["lidar"], D["camera"]
+    R, L, C, A = D["radar"], D["lidar"], D["camera"], D.get("altos")
     lg = D["log"]
     t_end = D["duration"]
-    fig, ax = plt.subplots(5, 1, figsize=(11, 8.6), sharex=True,
-                           gridspec_kw={"height_ratios": [1.3, 1, 1, 1, 0.9]})
+    na = 1 if A is not None else 0
+    fig, ax = plt.subplots(5 + na, 1, figsize=(11, 8.6 + 1.5 * na), sharex=True,
+                           gridspec_kw={"height_ratios": [1.3 + 0.3 * na, 1, 1, 1] + [1] * na + [0.9]})
     # coverage strips
     a = ax[0]
     a.grid(False)
     rows = [("Radar frames", RADAR, _rel(D, R["t"])), ("LiDAR sweeps", LIDAR, _rel(D, L["sweep_t"])),
             ("Camera frames", CAMERA, _rel(D, C["t_ref"][np.isfinite(C["t_ref"])]))]
+    if A is not None:
+        rows.append(("Altos frames", ALTOS, _rel(D, A["t"])))
     for k, (name, col, t) in enumerate(rows):
         y = 2 - k
         a.hlines(y, t.min(), t.max(), color=col, lw=7, alpha=0.85)
@@ -78,10 +83,14 @@ def timeline(D):
     if nob.any() and len(L["sweep_t"]) == len(nob):
         # sweeps without boresight points have no boresight time: use the sweep's own time
         a.vlines(_rel(D, np.asarray(L["sweep_t"])[nob]), 0.65, 1.35, color=INK, lw=1)
+    if A is not None:
+        gap = np.diff(A["t"]) > 0.15                        # > 2 frame periods: Altos frames missing
+        if gap.any():
+            a.vlines(_rel(D, A["t"][1:][gap]), -1.35, -0.65, color=INK, lw=1)
     a.set_yticks([])
-    a.set_ylim(-0.7, 2.7)
+    a.set_ylim(-0.7 - na, 2.7)
     a.set_title("Coverage  (black ticks: camera gaps on the camera row; LiDAR sweeps with no points in the "
-                "radar boresight on the LiDAR row)")
+                "radar boresight on the LiDAR row" + ("; Altos frames missing on the Altos row)" if A is not None else ")"))
     # radar packets/s (receiver's per-second count, from radar start)
     # the receiver counts seconds from its first data packet = the first radar frame
     rp = lg["radar_pps"]
@@ -99,15 +108,23 @@ def timeline(D):
     ax[3].plot(_rel(D, L["stats_t"]), L["stats_msop"], color=LIDAR, drawstyle="steps-mid")
     ax[3].set_ylabel("LiDAR\nMSOP packets/s")
     ax[3].set_ylim(bottom=0)
+    # Altos frames per second
+    if A is not None:
+        ta = _rel(D, A["t"])
+        s_, c_ = _per_second(ta, ta.min(), ta.max())
+        ax[4].plot(s_[1:-1] + 0.5, c_[1:-1], color=ALTOS, drawstyle="steps-mid")
+        ax[4].set_ylabel("Altos\nframes/s")
+        ax[4].set_ylim(0, max(17, c_.max() + 2))
     # board temperature (5 s samples from radar start; approximate time)
     b = lg["board"]
+    bx = ax[4 + na]
     if len(b) > 1:
         # first sample = preflight; then every 5 s from the start of the run loop (≈ radar start)
         t_radar_start = D["meta"]["clocks"].get("radar_start", {}).get("monotonic_ns")
         off = (t_radar_start / 1e9 - D["t0"]) if t_radar_start else 0.0
-        ax[4].plot(off + 5.0 * np.arange(len(b) - 1), b[1:, 0], color=INK2)
-    ax[4].set_ylabel("Jetson Tj\n°C")
-    ax[4].set_xlabel("time since first radar frame (s)")
+        bx.plot(off + 5.0 * np.arange(len(b) - 1), b[1:, 0], color=INK2)
+    bx.set_ylabel("Jetson Tj\n°C")
+    bx.set_xlabel("time since first radar frame (s)")
     fig.align_ylabels(ax)
     fig.tight_layout(h_pad=0.6)
     return png(fig)
@@ -115,17 +132,20 @@ def timeline(D):
 
 # ── synchronisation ─────────────────────────────────────────────────────────
 def intervals(D):
-    R, L, C = D["radar"], D["lidar"], D["camera"]
-    fig, ax = plt.subplots(1, 3, figsize=(11, 2.8))
+    R, L, C, A = D["radar"], D["lidar"], D["camera"], D.get("altos")
+    fig, ax = plt.subplots(1, 3 + (A is not None), figsize=(11 + 3 * (A is not None), 2.8))
     dr = np.diff(R["t_arrival"]) * 1e3
     tc = np.sort(C["t_rx"])
     dc = np.diff(tc) * 1e3
     tlt = np.array([float(r["t_ref"]) if r["t_ref"] not in ("", "nan") else np.nan for r in L["timeline"]])
     tlt = tlt[np.isfinite(tlt)]
     dl = np.diff(tlt) * 1e3
-    for a, d, col, name, nom in [(ax[0], dr, RADAR, "Radar frame interval (arrival)", 125),
-                                 (ax[1], dc, CAMERA, "Camera frame interval (host receipt)", 1000 / 30),
-                                 (ax[2], dl, LIDAR, "LiDAR sweep interval (boresight time)", 100)]:
+    panels = [(ax[0], dr, RADAR, "Radar frame interval (arrival)", 125),
+              (ax[1], dc, CAMERA, "Camera frame interval (host receipt)", 1000 / 30),
+              (ax[2], dl, LIDAR, "LiDAR sweep interval (boresight time)", 100)]
+    if A is not None:
+        panels.append((ax[3], np.diff(A["t_arrival"]) * 1e3, ALTOS, "Altos frame interval (arrival)", 1000 / 15))
+    for a, d, col, name, nom in panels:
         d = d[np.isfinite(d)]
         if len(d):
             lo, hi = np.percentile(d, [0.1, 99.9])
@@ -143,8 +163,12 @@ def pairing(D):
     ce = np.array([float(p["camera_error_ms"]) if p["camera_error_ms"] else np.nan for p in P])
     le = np.array([float(p["lidar_error_ms"]) if p["lidar_error_ms"] else np.nan for p in P])
     tr = _rel(D, D["radar"]["t"])
-    fig, ax = plt.subplots(2, 2, figsize=(11, 4.6), gridspec_kw={"width_ratios": [1, 2.2]})
-    for k, (e, col, name, half) in enumerate([(ce, CAMERA, "Camera", 1000 / 60), (le, LIDAR, "LiDAR", 50)]):
+    rows = [(ce, CAMERA, "Camera", 1000 / 60), (le, LIDAR, "LiDAR", 50)]
+    if D.get("altos") is not None:
+        ae = np.array([float(p["altos_error_ms"]) if p.get("altos_error_ms") else np.nan for p in P])
+        rows.append((ae, ALTOS, "Altos", 1000 / 30))
+    fig, ax = plt.subplots(len(rows), 2, figsize=(11, 2.3 * len(rows)), gridspec_kw={"width_ratios": [1, 2.2]})
+    for k, (e, col, name, half) in enumerate(rows):
         ok = np.isfinite(e)
         ax[k, 0].hist(e[ok], bins=80, color=col)
         for s in (-half, half):
@@ -155,15 +179,18 @@ def pairing(D):
             ax[k, 1].axhline(s, color=INK2, lw=0.8)
         ax[k, 1].set_title(f"{name} pairing error over time  (lines: ± half a {name.lower()} period)")
         ax[k, 1].set_ylabel("ms")
-    ax[1, 0].set_xlabel("ms")
-    ax[1, 1].set_xlabel("time since first radar frame (s)")
+    ax[-1, 0].set_xlabel("ms")
+    ax[-1, 1].set_xlabel("time since first radar frame (s)")
     fig.tight_layout()
     return png(fig)
 
 
-def velocity_check(D):
-    V = D["vel_timing"]
-    R, L = D["radar"], D["lidar"]
+def velocity_check(D, which="radar"):
+    """which = "radar" (the TI radar) or "altos": the same check for either radar."""
+    V = D["vel_timing"] if which == "radar" else D.get("altos_vel_timing") or []
+    R, L = (D["radar"] if which == "radar" else D["altos"]), D["lidar"]
+    COL = RADAR if which == "radar" else ALTOS
+    NAME = "Radar" if which == "radar" else "Altos"
     fig, ax = plt.subplots(1, 2, figsize=(11, 3.2), gridspec_kw={"width_ratios": [1, 1.6]})
     ok = [v for v in V if v.get("status") == "ok"]
     x = [(v["start"] + v["end"]) / 2 for v in ok]
@@ -172,11 +199,11 @@ def velocity_check(D):
     outside = [v for v in ok if abs(v["residual_ms"]) > lim]
     if inside:
         ax[0].errorbar([(v["start"] + v["end"]) / 2 for v in inside], [v["residual_ms"] for v in inside],
-                       yerr=[min(v["sigma_ms"], 2 * lim) for v in inside], fmt="o", color=RADAR, ms=5, lw=1.2,
+                       yerr=[min(v["sigma_ms"], 2 * lim) for v in inside], fmt="o", color=COL, ms=5, lw=1.2,
                        capsize=2, mec=SURFACE, mew=1.5)
     for v in outside:
         y = 0.94 * lim * np.sign(v["residual_ms"])
-        ax[0].plot((v["start"] + v["end"]) / 2, y, "^" if y > 0 else "v", color=RADAR, ms=7, mec=SURFACE, mew=1.5)
+        ax[0].plot((v["start"] + v["end"]) / 2, y, "^" if y > 0 else "v", color=COL, ms=7, mec=SURFACE, mew=1.5)
         ax[0].annotate(f"{v['residual_ms']:+.0f}", ((v["start"] + v["end"]) / 2, y), xytext=(6, 0),
                        textcoords="offset points", va="center", fontsize=7, color=INK2)
     for v in V:
@@ -184,8 +211,8 @@ def velocity_check(D):
             ax[0].axvspan(v["start"], v["end"], color=GRID, alpha=0.6, lw=0)
     ax[0].axhline(0, color=INK2, lw=0.8)
     ax[0].set_ylim(-lim, lim)
-    ax[0].set_title("Radar − LiDAR timing residual per 30 s window")
-    ax[0].set_ylabel("ms (Stage 3 offsets applied)")
+    ax[0].set_title(f"{NAME} − LiDAR timing residual per 30 s window")
+    ax[0].set_ylabel("ms (offsets applied)")
     ax[0].set_xlabel("window centre (s)   grey: not enough radial motion")
     # best window: velocity overlay
     best = min(ok, key=lambda v: v["sigma_ms"]) if ok else None
@@ -194,7 +221,7 @@ def velocity_check(D):
         w0, w1 = best["start"], best["end"]
         tr = _rel(D, R["t"])
         s = (tr >= w0) & (tr < w1)
-        a.plot(tr[s], R["vel"][s], color=RADAR, label="radar Doppler velocity at the LiDAR target range")
+        a.plot(tr[s], R["vel"][s], color=COL, label=f"{NAME} Doppler velocity at the LiDAR target range")
         tl = _rel(D, L["track_t"])
         sl = (tl >= w0) & (tl < w1) & np.isfinite(L["track_r"])
         if sl.sum() > 7:
@@ -458,23 +485,35 @@ def camera_imu(D):
 
 # ── cross-sensor ────────────────────────────────────────────────────────────
 def range_overlay(D):
-    R, L = D["radar"], D["lidar"]
-    fig, ax = plt.subplots(figsize=(11, 3.4))
+    R, L, A = D["radar"], D["lidar"], D.get("altos")
+    fig, axs = plt.subplots(1 + (A is not None), 1, figsize=(11, 3.4 * (1 + (A is not None))), sharex=True,
+                            squeeze=False)
+    ax = axs[0, 0]
     ax.plot(_rel(D, L["track_t"]), L["track_r"], ".", ms=1.2, color=LIDAR, label="LiDAR target (nearest surface)")
     ax.plot(_rel(D, R["t"]), R["dominant_range"], ".", ms=1.2, color=RADAR, label="radar strongest moving return")
     ax.set_ylabel("range (m)")
-    ax.set_xlabel("time since first radar frame (s)")
     ax.set_title("Range of the moving target: radar vs LiDAR (paired times, Stage 3 offsets applied)")
     ax.legend(loc="upper right", markerscale=6)
+    if A is not None:                                   # a panel of its own: at most two series per plot
+        b = axs[1, 0]
+        b.plot(_rel(D, L["track_t"]), L["track_r"], ".", ms=1.2, color=LIDAR, label="LiDAR target (nearest surface)")
+        b.plot(_rel(D, A["t"]), A["target_range"], ".", ms=1.2, color=ALTOS,
+               label="Altos moving points at the LiDAR target (median range)")
+        b.set_ylabel("range (m)")
+        b.set_title("Range of the moving target: Altos vs LiDAR")
+        b.legend(loc="upper right", markerscale=6)
+    axs[-1, 0].set_xlabel("time since first radar frame (s)")
     fig.tight_layout()
     return png(fig)
 
 
 def snapshots(D):
-    R, L, C = D["radar"], D["lidar"], D["camera"]
+    R, L, C, A = D["radar"], D["lidar"], D["camera"], D.get("altos")
     idx = D["snap_radar_idx"]
     n = len(idx)
-    fig, ax = plt.subplots(n, 4, figsize=(12, 2.9 * n), gridspec_kw={"width_ratios": [1.45, 1, 1, 1]})
+    nc = 4 + (A is not None)
+    fig, ax = plt.subplots(n, nc, figsize=(12 + 2.6 * (A is not None), 2.9 * n),
+                           gridspec_kw={"width_ratios": [1.45, 1, 1, 1] + [1] * (A is not None)})
     ax = np.atleast_2d(ax)
     bx, by = R["bev_x"], R["bev_y"]
     for row, i in enumerate(idx):
@@ -524,6 +563,25 @@ def snapshots(D):
             a3.set_xlabel("range (m)", fontsize=7)
             a3.set_ylabel("m/s", fontsize=7)
             a3.grid(False)
+        if A is not None:
+            a4 = ax[row, 4]
+            sa = A["snaps"].get(i)
+            if sa is not None and len(sa["xyz_v_snr"]):
+                q = sa["xyz_v_snr"].astype(float)
+                mv = np.abs(q[:, 3]) >= A["moving_v"]
+                a4.scatter(q[~mv, 1], q[~mv, 0], s=4, color=MUTED, lw=0, label="still")
+                a4.scatter(q[mv, 1], q[mv, 0], s=9, color=ALTOS, lw=0, label="moving")
+                a4.set_title(f"Altos (Δ {sa['error_ms'] or '–'} ms; own frame)", fontsize=8, fontweight="normal",
+                             color=INK2)
+            else:
+                a4.set_title("Altos (no frame)", fontsize=8, fontweight="normal", color=INK2)
+            if row == 0:
+                a4.legend(loc="upper right", fontsize=7, markerscale=1.5)
+            a4.set_xlim(12, -12)
+            a4.set_ylim(0, 25)
+            a4.set_aspect("equal")
+            a4.grid(False)
+            a4.tick_params(labelsize=7)
         for aa in (ax[row, 1], ax[row, 2]):
             aa.set_xlim(12, -12)                  # +y (vehicle left) drawn on the left
             aa.set_ylim(0, 25)
@@ -533,3 +591,102 @@ def snapshots(D):
         ax[row, 1].set_ylabel("forward (m)", fontsize=7)
     fig.tight_layout(h_pad=1.0)
     return png(fig, dpi=100)
+
+
+# ── Altos V4 ────────────────────────────────────────────────────────────────
+def altos_points(D):
+    A = D["altos"]
+    t = _rel(D, A["t"])
+    fig, ax = plt.subplots(2, 1, figsize=(11, 4.4), sharex=True)
+
+    def roll(v, n=15):                       # 1 s rolling median (15 frames)
+        v = np.asarray(v, dtype=float)
+        if len(v) < n:
+            return v
+        w = np.lib.stride_tricks.sliding_window_view(v, n)
+        return np.r_[np.full(n // 2, np.nan), np.nanmedian(w, axis=1), np.full(n - 1 - n // 2, np.nan)]
+    ax[0].plot(t, roll(A["points_per_frame"]), color=ALTOS)
+    ax[0].set_ylim(bottom=0)
+    ax[0].set_title("Altos points per frame (1 s median)")
+    ax[0].set_ylabel("points")
+    ax[1].plot(t, roll(A["moving_per_frame"]), color=ALTOS)
+    ax[1].set_ylim(bottom=0)
+    ax[1].set_title(f"Altos moving points per frame (|Doppler| ≥ {A['moving_v']} m/s; 1 s median)")
+    ax[1].set_ylabel("points")
+    ax[1].set_xlabel("time since first radar frame (s)")
+    fig.tight_layout()
+    return png(fig)
+
+
+def altos_distributions(D):
+    A = D["altos"]
+    H = A["hist"]
+    fig, ax = plt.subplots(2, 3, figsize=(11, 5.2))
+    spec = [("range", "range (m)", "Range", 0), ("azimuth", "azimuth (deg, + = left)", "Azimuth", 0),
+            ("elevation", "elevation (deg, + = up)", "Elevation", 0), ("snr_db", "SNR (dB)", "SNR", 0),
+            ("doppler", "Doppler (m/s, + = away)", "Doppler (radial velocity)", 1)]
+    for a, (key, xl, title, logy) in zip(ax.ravel(), spec):
+        c, e = H[key]
+        a.bar(e[:-1], c / max(1, len(A["t"])), width=np.diff(e), align="edge", color=ALTOS, lw=0)
+        if logy:
+            a.set_yscale("log")
+        a.set_title(f"{title} (points per frame)")
+        a.set_xlabel(xl)
+    a = ax[1, 2]
+    a.axis("off")
+    inv = 100 * A["invalid"] / max(1, A["total"])
+    a.text(0, 0.9, f"{A['total']:,} points in {len(A['t']):,} frames", fontsize=9, color=INK2, va="top")
+    a.text(0, 0.72, f"{A['invalid']:,} with NaN values ({inv:.2f}%), left out", fontsize=9, color=INK2, va="top")
+    a.text(0, 0.54, "Elevation: + up (the raw value is z-down)", fontsize=9, color=INK2, va="top")
+    fig.tight_layout()
+    return png(fig)
+
+
+def altos_maps(D):
+    A = D["altos"]
+    fig, ax = plt.subplots(1, 2, figsize=(11, 4.8), gridspec_kw={"width_ratios": [1, 1.3]})
+    bev = A["bev"]
+    ax[0].imshow(bev, origin="lower", cmap=SEQ, norm=LogNorm(vmin=0.005, vmax=max(0.01, bev.max())),
+                 extent=[-20, 20, 0, 40], interpolation="nearest")
+    ax[0].set_xlim(20, -20)                                 # vehicle-left on the left
+    for s_ in (1, -1):                                      # the Altos's +/-75 deg field of view
+        ax[0].plot([0, s_ * 40 * np.tan(np.radians(75))], [0, 40], color=ALTOS, lw=0.8)
+    ax[0].set_ylim(0, 40)
+    ax[0].set_xlabel("y (m, + left)")
+    ax[0].set_ylabel("x (m, forward)")
+    ax[0].set_title("Altos points, top view (per frame, log; own frame)")
+    ax[0].grid(False)
+    side = A["side"]
+    im = ax[1].imshow(side.T, origin="lower", aspect="auto", cmap=SEQ,
+                      norm=LogNorm(vmin=0.005, vmax=max(0.01, side.max())), extent=[0, 40, -5, 5],
+                      interpolation="nearest")
+    for s_ in (1, -1):                                      # +/-15 deg vertical field of view
+        ax[1].plot([0, 40], [0, s_ * 40 * np.tan(np.radians(15))], color=ALTOS, lw=0.8)
+    ax[1].set_xlabel("x (m, forward)")
+    ax[1].set_ylabel("z (m, + up)")
+    ax[1].set_title("Altos points, side view (per frame, log)")
+    ax[1].grid(False)
+    fig.colorbar(im, ax=ax[1], pad=0.01, label="points per frame per cell")
+    fig.tight_layout()
+    return png(fig)
+
+
+def altos_range_time(D):
+    A, L = D["altos"], D["lidar"]
+    t = _rel(D, A["t"])
+    rt = A["rt"].astype(float)
+    e = A["rt_range_edges"]
+    fig, ax = plt.subplots(figsize=(11, 4.0))
+    im = ax.imshow(rt.T, origin="lower", aspect="auto", cmap=SEQ, interpolation="nearest",
+                   norm=LogNorm(vmin=1, vmax=max(2, rt.max())), extent=[t[0], t[-1], e[0], e[-1]])
+    ax.plot(_rel(D, L["track_t"]), L["track_r"], ".", ms=0.8, color=LIDAR, label="LiDAR target range (nearest surface)")
+    ax.set_ylim(e[0], e[-1])
+    ax.set_ylabel("range (m)")
+    ax.set_xlabel("time since first radar frame (s)")
+    ax.set_title(f"Altos moving points (|Doppler| ≥ {A['moving_v']} m/s): range vs time")
+    ax.grid(False)
+    ax.legend(loc="upper right", markerscale=8)
+    cb = fig.colorbar(im, ax=ax, pad=0.01)
+    cb.set_label("points per frame per 0.1 m", fontsize=8)
+    fig.tight_layout()
+    return png(fig)

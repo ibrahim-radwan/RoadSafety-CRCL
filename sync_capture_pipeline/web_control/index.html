@@ -118,6 +118,7 @@
           <label><input type="checkbox" id="s_radar" checked>Radar</label>
           <label><input type="checkbox" id="s_camera" checked>Camera</label>
           <label><input type="checkbox" id="s_lidar" checked>LiDAR</label>
+          <label><input type="checkbox" id="s_altos" checked>Altos radar</label>
         </div>
       </div>
     </div>
@@ -142,6 +143,8 @@
         <div class="big">–</div><div class="sub">FPS</div></div>
       <div class="sensor" id="c_lidar"><div class="name">LiDAR <span class="tag idle">idle</span></div>
         <div class="big">–</div><div class="sub">packets / s</div></div>
+      <div class="sensor" id="c_altos"><div class="name">Altos radar <span class="tag idle">idle</span></div>
+        <div class="big">–</div><div class="sub">frames / s</div></div>
       <div class="sensor" id="c_board"><div class="name">Board (Jetson) <span class="tag idle">–</span></div>
         <div class="big">–</div><div class="sub">junction temperature</div></div>
     </div>
@@ -161,6 +164,7 @@
           <label><input type="checkbox" id="l_radar" checked>Radar</label>
           <label><input type="checkbox" id="l_camera" checked>Camera</label>
           <label><input type="checkbox" id="l_lidar" checked>LiDAR</label>
+          <label><input type="checkbox" id="l_altos" checked>Altos radar</label>
         </div>
       </div>
       <div><label for="lrange">View range</label>
@@ -186,8 +190,8 @@
         <span id="bgstate" style="color:var(--muted);font-size:14px"></span>
       </div>
       <div class="calib" style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:12px">
-        <b>Calibration capture</b> <span style="color:var(--muted);font-size:14px">– saves ~2 s of radar, LiDAR and
-          camera into <code>calibration/&lt;set&gt;/</code> on the SD card. First the empty scene, then each reflector position.</span>
+        <b>Calibration capture</b> <span style="color:var(--muted);font-size:14px">– saves ~2 s of radar, LiDAR,
+          camera and Altos into <code>calibration/&lt;set&gt;/</code> on the SD card. First the empty scene, then each reflector position.</span>
         <div class="row" style="align-items:flex-end;margin-top:8px">
           <div><label for="cset">Set</label><input id="cset" autocomplete="off"></div>
           <div><label for="cpos">Position name (rig's view: left = vehicle left)</label>
@@ -199,7 +203,7 @@
         </div>
         <div class="meta" id="capstate"></div>
         <table class="refl" style="margin-top:6px">
-          <thead><tr><th>Position</th><th>LiDAR x / y / z (vehicle)</th><th>LiDAR az (own frame)</th><th>Radar range / az</th><th>Radar − LiDAR</th></tr></thead>
+          <thead><tr><th>Position</th><th>LiDAR x / y / z (vehicle)</th><th>LiDAR az (own frame)</th><th>Radar range / az</th><th>Radar − LiDAR</th><th>Altos range / az (own frame)</th></tr></thead>
           <tbody id="ctable"></tbody>
         </table>
         <div class="meta" id="cyaw"></div>
@@ -216,6 +220,8 @@
               <input type="checkbox" id="ovl" checked style="width:18px;height:18px">radar on top</label><span></span></div></div>
         <div class="panel" id="p_radar"><canvas id="v_radar" width="600" height="400"></canvas>
           <div class="cap"><b>Radar range–azimuth</b><span></span></div></div>
+        <div class="panel" id="p_altos"><canvas id="v_altos" width="600" height="400"></canvas>
+          <div class="cap"><b>Altos top view (own frame)</b><span></span></div></div>
       </div>
       <div class="meta" id="lsource"></div>
     </div>
@@ -365,7 +371,7 @@ async function refresh() {
   $("elapsed").textContent = "Elapsed " + (s.running ? fmtTime(s.elapsed_s) : "–");
   $("disk").textContent = "Disk free " + s.disk_free_gb + " GB";
   $("reason").textContent = s.result && s.result.stop_reason ? "Stop: " + s.result.stop_reason : "";
-  const r = s.sensors.radar, c = s.sensors.camera, l = s.sensors.lidar;
+  const r = s.sensors.radar, c = s.sensors.camera, l = s.sensors.lidar, al = s.sensors.altos;
   // Normal: ~8,650 packets/s at 4 fps (~17,300 at 8 fps). Far below that means the
   // radar is running a different configuration or is underpowered: stop and check it.
   const radarLow = r && r.secs > 2 && r.pkt_s < 5000;
@@ -376,6 +382,10 @@ async function refresh() {
             c ? `FPS · ${c.frames} frames · ${c.gaps} dropped` : "FPS", c && c.fps < 25);
   setSensor("c_lidar", live, live ? l : null, l ? l.msop_s.toLocaleString() : "–",
             l ? `packets / s · ${l.lost} lost · ${l.mb.toFixed(0)} MB` : "packets / s", l && (l.lost > 0 || l.msop_s < 3000));
+  // Altos: 15 frames/s normally; lost frames or a restart (the stream stopped, ids started again) are bad
+  setSensor("c_altos", live, live ? al : null, al ? String(al.fps) : "–",
+            al ? `frames / s · ${al.pts} points/frame · ${al.lost} lost · ${al.restarts} restarts` : "frames / s",
+            al && (al.fps < 12 || al.lost > 0 || al.incomplete > 0 || al.restarts > 0));
   // Board: live temperatures (also while idle) - summer rides in an enclosure.
   const b = s.board || {}, bc = $("c_board"), bt = bc.querySelector(".tag");
   const f1 = (x) => (x == null ? "–" : x.toFixed(1));
@@ -420,65 +430,12 @@ async function loadSessions() {
 $("btnStart").onclick = async () => {
   unlockAudio();
   $("msg").textContent = "";
-  const sensors = ["radar", "camera", "lidar"].filter((k) => $("s_" + k).checked);
+  const sensors = ["radar", "camera", "lidar", "altos"].filter((k) => $("s_" + k).checked);
   try {
     await post("/api/start", { name: $("name").value.trim(), note: $("note").value, secs: $("secs").value,
                                delay: $("delay").value, sensors, guide: $("g_stage3").checked ? "stage3" : null });
     $("g_stage3").checked = false;              // one-off: the next session is a plain recording again
-    // ── calibration capture ──
-function capText() {
-  const parts = [];
-  for (const s of ["radar", "lidar", "camera"]) {
-    const c = hdr(s) && hdr(s).capture;
-    if (!c || c.state === "off") continue;
-    const what = c.state === "collecting" ? `collecting ${c.done}/${c.of}` : c.state === "error" ? `ERROR ${c.error}` : c.state;
-    parts.push(`${s}: ${c.name} ${what}`);
-  }
-  return parts.join(" · ");
-}
-let calibSeen = 0;
-async function showCalib(force) {
-  const set = $("cset").value.trim();
-  if (!set || (!force && Date.now() - calibSeen < 2000)) return;
-  calibSeen = Date.now();
-  let r;
-  try { r = await getJSON("/api/calib/" + encodeURIComponent(set)); } catch (e) { return; }
-  const pos = (r.positions || []).slice().reverse();
-  const cell = (o, f) => (o && o.found ? f(o) : (o ? "not found" : "–"));
-  const rows = pos.map((p) => {
-    const l = p.lidar, rd = p.radar;
-    const d = l && l.found && rd && rd.found ? `${(rd.range - l.range >= 0 ? "+" : "") + f2(rd.range - l.range)} m, ${
-      (rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI >= 0 ? "+" : "") + f1(rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI)}°` : "–";
-    return `<tr><td><b>${p.name}</b></td><td>${cell(l, (o) => `${f2(o.x)} / ${f2(o.y)} / ${f2(o.z)} m (${f1(o.n_per_sweep)} pts)`)}</td>
-      <td>${cell(l, (o) => `${f1(o.own_az_deg)}°`)}</td><td>${cell(rd, (o) => `${f2(o.range)} m / ${f1(o.az_deg)}° (+${f1(o.rise_db)} dB)`)}</td><td>${d}</td></tr>`;
-  });
-  $("ctable").innerHTML = rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">${
-    r.background ? "background saved; no positions yet" : "no background saved in this set yet"}</td></tr>`;
-  const y = r.yaw_from_radar_boresight_deg;
-  $("cyaw").textContent = (r.background ? "Background saved " + (r.background.time || "") + ". " : "") +
-    (y ? `LiDAR yaw from the radar (positions within 5° of its boresight, n=${y.n}): ${y.mean.toFixed(1)}°. ` : "") +
-    `Folder: ${r.dir}. Full analysis: python calib_reflector.py --set ${r.dir}`;
-}
-async function capture(kind) {
-  $("lmsg").textContent = "";
-  try {
-    await post("/api/live/capture", { kind, set: $("cset").value.trim(), name: $("cpos").value.trim(),
-      r_lo: parseFloat($("gmin").value) || 0, r_hi: parseFloat($("gmax").value) || 20 });
-    if (kind === "position") $("cpos").value = "";
-    setTimeout(() => showCalib(true), 4000);
-  } catch (e) { $("lmsg").textContent = e.message; }
-}
-$("cset").value = "calib_" + new Date().toISOString().slice(0, 10).replace(/-/g, "");
-$("btnCapBg").onclick = () => capture("background");
-$("btnCapPos").onclick = () => capture("position");
-$("ronly").onchange = () => post("/api/live/control", { reflector_only: $("ronly").checked })
-  .catch((e) => { $("lmsg").textContent = e.message; });
-$("cset").onchange = () => {
-  post("/api/live/control", { calib_set: $("cset").value.trim() }).catch(() => {});
-  showCalib(true);
-};
-
-$("name").value = suggestName();
+    $("name").value = suggestName();
   } catch (e) { $("msg").textContent = e.message; }
   refresh();
 };
@@ -491,9 +448,9 @@ $("btnStop").onclick = async () => {
 // ── live view ──────────────────────────────────────────────────────────
 // Images are PULLED: each panel asks for the next image only when the previous one has arrived,
 // so on a slow Wi-Fi the rate drops instead of a backlog building up.
-const COL = { radar: "#2a78d6", lidar: "#eb6834", camera: "#1baf7a" };
+const COL = { radar: "#2a78d6", lidar: "#eb6834", camera: "#1baf7a", altos: "#eda100" };
 let liveOn = false, liveState = null, liveLogN = 0, controlSynced = false;
-const liveImg = { lidar: null, radar: null };
+const liveImg = { lidar: null, radar: null, altos: null };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function gate() {
   const lo = parseFloat($("gmin").value) || 0, hi = parseFloat($("gmax").value) || 1e9;
@@ -558,6 +515,10 @@ function drawBev(sensor) {
     const s = strongest(h, "bright");
     if (s) dot(ctx, ext, W, H, s[0], s[1], 12, "#fff", null);
     if ($("ovl").checked) radarMarks(ctx, ext, W, H, hdr("radar"));
+  } else if (sensor === "altos") {
+    for (const b of h.strong || []) dot(ctx, ext, W, H, b[0], b[1], 5, COL.altos, null);
+    const s = strongest(h, "strong");
+    if (s) dot(ctx, ext, W, H, s[0], s[1], 12, "#fff", null);
   } else {
     radarMarks(ctx, ext, W, H, h);
   }
@@ -565,7 +526,8 @@ function drawBev(sensor) {
 const f1 = (x) => (x == null ? "–" : x.toFixed(1));
 const f2 = (x) => (x == null ? "–" : x.toFixed(2));
 function showLiveNumbers() {
-  const rows = [], r = strongest(hdr("radar"), "static"), l = strongest(hdr("lidar"), "bright");
+  const rows = [], r = strongest(hdr("radar"), "static"), l = strongest(hdr("lidar"), "bright"),
+        al = strongest(hdr("altos"), "strong");
   const row = (name, c, p, extra) => `<tr><td><b style="color:${c}">${name}</b></td>` +
     (p ? `<td>${f2(p[2])} m</td><td>${f1(p[3])}°</td><td>${f2(p[0])} / ${f2(p[1])} m</td><td>${extra}</td>`
        : `<td colspan="4" style="color:var(--muted)">none in the search range</td>`) + "</tr>";
@@ -577,6 +539,7 @@ function showLiveNumbers() {
     : `${f1(r[4])} dB, SNR ${f1(r[5])} dB`) : ""));
   if (liveState.sensors.lidar) rows.push(row("LiDAR", COL.lidar, l, l ? (bgReady(hl) ? `${l[5]} new returns, intensity ${l[4]}`
     : `intensity ${l[4]}, ${l[5]} returns`) : ""));
+  if (liveState.sensors.altos) rows.push(row("Altos (own frame)", COL.altos, al, al ? `SNR ${f1(al[4])} dB, ${al[5]} points` : ""));
   if (r && l) {
     const apart = Math.hypot(r[0] - l[0], r[1] - l[1]);
     rows.push(`<tr class="diff"><td>Radar − LiDAR</td><td>${(r[2] - l[2] >= 0 ? "+" : "") + f2(r[2] - l[2])} m</td>
@@ -586,7 +549,7 @@ function showLiveNumbers() {
   $("refl").innerHTML = rows.join("");
 }
 function showCaptions() {
-  for (const s of ["camera", "lidar", "radar"]) {
+  for (const s of ["camera", "lidar", "radar", "altos"]) {
     const st = liveState.sensors[s], p = $("p_" + s);
     p.classList.toggle("hidden", !st);
     if (!st) continue;
@@ -600,6 +563,8 @@ function showCaptions() {
       if (s === "radar") t += h.pkt_s != null ? ` · ${h.pkt_s.toLocaleString()} pkt/s` : "";
       if (s === "radar") t += ` · ${(h.moving || []).length} moving, ${(h.static || []).length} stationary`;
       if (s === "lidar") t += ` · ${h.objects} objects`;
+      if (s === "altos") t += ` · ${f1(h.fps)} frames/s · ${h.points} points (${h.moving} moving)` +
+        (h.lost || h.restarts ? ` · <span class="tag bad">${h.lost} lost, ${h.restarts} restarts</span>` : "");
       if (st.age_s > 3) t += ` · <span class="tag bad">no update ${st.age_s}s</span>`;
     }
     cap.innerHTML = t;
@@ -615,7 +580,7 @@ async function liveStateLoop() {
         $("ronly").checked = !!liveState.control.reflector_only;
         controlSynced = true;
       }
-      showCaptions(); showLiveNumbers(); drawBev("lidar"); drawBev("radar");
+      showCaptions(); showLiveNumbers(); drawBev("lidar"); drawBev("radar"); drawBev("altos");
       $("capstate").textContent = capText(); showCalib(false);
       $("liveTimer").textContent = liveState.on ? (liveState.stopping ? "– stopping…" :
         `– ${fmtTime(liveState.remaining_s)} left`) : "";
@@ -664,11 +629,11 @@ function liveBegin() {
   liveOn = true; liveLogN = 0;
   $("liveBody").classList.remove("hidden");
   liveStateLoop();
-  for (const s of ["camera", "lidar", "radar"]) frameLoop(s);
+  for (const s of ["camera", "lidar", "radar", "altos"]) frameLoop(s);
 }
 $("btnLive").onclick = async () => {
   $("lmsg").textContent = "";
-  const sensors = ["radar", "camera", "lidar"].filter((k) => $("l_" + k).checked);
+  const sensors = ["radar", "camera", "lidar", "altos"].filter((k) => $("l_" + k).checked);
   try {
     await post("/api/live/control", { range_m: $("lrange").value, radar_map: $("lmap").value,
       calib_set: $("cset").value.trim() || undefined });
@@ -693,7 +658,7 @@ for (const id of ["lrange", "lmap"]) {
 // ── calibration capture ──
 function capText() {
   const parts = [];
-  for (const s of ["radar", "lidar", "camera"]) {
+  for (const s of ["radar", "lidar", "camera", "altos"]) {
     const c = hdr(s) && hdr(s).capture;
     if (!c || c.state === "off") continue;
     const what = c.state === "collecting" ? `collecting ${c.done}/${c.of}` : c.state === "error" ? `ERROR ${c.error}` : c.state;
@@ -711,13 +676,14 @@ async function showCalib(force) {
   const pos = (r.positions || []).slice().reverse();
   const cell = (o, f) => (o && o.found ? f(o) : (o ? "not found" : "–"));
   const rows = pos.map((p) => {
-    const l = p.lidar, rd = p.radar;
+    const l = p.lidar, rd = p.radar, alt = p.altos;
     const d = l && l.found && rd && rd.found ? `${(rd.range - l.range >= 0 ? "+" : "") + f2(rd.range - l.range)} m, ${
       (rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI >= 0 ? "+" : "") + f1(rd.az_deg - Math.atan2(l.y, l.x) * 180 / Math.PI)}°` : "–";
     return `<tr><td><b>${p.name}</b></td><td>${cell(l, (o) => `${f2(o.x)} / ${f2(o.y)} / ${f2(o.z)} m (${f1(o.n_per_sweep)} pts)`)}</td>
-      <td>${cell(l, (o) => `${f1(o.own_az_deg)}°`)}</td><td>${cell(rd, (o) => `${f2(o.range)} m / ${f1(o.az_deg)}° (+${f1(o.rise_db)} dB)`)}</td><td>${d}</td></tr>`;
+      <td>${cell(l, (o) => `${f1(o.own_az_deg)}°`)}</td><td>${cell(rd, (o) => `${f2(o.range)} m / ${f1(o.az_deg)}° (+${f1(o.rise_db)} dB)`)}</td><td>${d}</td>
+      <td>${cell(alt, (o) => `${f2(o.range)} m / ${f1(o.az_deg)}° (SNR ${f1(o.snr_db)} dB)`)}</td></tr>`;
   });
-  $("ctable").innerHTML = rows.join("") || `<tr><td colspan="5" style="color:var(--muted)">${
+  $("ctable").innerHTML = rows.join("") || `<tr><td colspan="6" style="color:var(--muted)">${
     r.background ? "background saved; no positions yet" : "no background saved in this set yet"}</td></tr>`;
   const y = r.yaw_from_radar_boresight_deg;
   $("cyaw").textContent = (r.background ? "Background saved " + (r.background.time || "") + ". " : "") +

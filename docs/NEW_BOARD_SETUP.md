@@ -138,6 +138,10 @@ sudo nmcli con add type ethernet con-name "Wired connection 2" ifname "" \
 sudo nmcli con add type ethernet con-name "lidar-usb-eth" ifname "" \
      802-3-ethernet.mac-address <USB_ADAPTER_MAC> ipv4.method manual ipv4.addresses 192.168.34.30/24 \
      ipv4.never-default yes ipv6.method ignore
+# Altos V4 radar: a SECOND USB-Ethernet adapter -> the Altos's media converter (radar 192.168.3.10)
+sudo nmcli con add type ethernet con-name "altos-usb-eth" ifname "" \
+     802-3-ethernet.mac-address <ALTOS_ADAPTER_MAC> ipv4.method manual ipv4.addresses 192.168.3.1/24 \
+     ipv4.never-default yes ipv6.method ignore
 # Any automatic DHCP profile on these ports must not autoconnect:
 nmcli -t -f NAME,DEVICE con show            # then: sudo nmcli con modify "<name>" connection.autoconnect no
 ```
@@ -145,8 +149,9 @@ nmcli -t -f NAME,DEVICE con show            # then: sudo nmcli con modify "<name
 **Bind by MAC, not by interface name.** `eth0`/`eth1` swap depending on
 whether the USB adapter is present at boot.
 
-Check: `ip -br addr` shows .33.30 and .34.30. The LiDAR web page opens at
-http://192.168.34.200.
+Check: `ip -br addr` shows .33.30, .34.30 and 192.168.3.1. The LiDAR web
+page opens at http://192.168.34.200, the Altos's at http://192.168.3.10:3000
+(`curl -s http://192.168.3.10:3000/status` names the radar and its firmware).
 
 ## 7. SD card (sudo)
 

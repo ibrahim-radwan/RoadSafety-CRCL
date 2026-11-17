@@ -24,6 +24,21 @@ LIDAR   1. Clock fit: every MSOP packet carries the LiDAR timestamp and was
            of view are kept. A sweep's pairing time is when it scanned the
            radar BORESIGHT; the FOV time span is reported alongside.
 
+ALTOS   The Altos V4 radar (fourth sensor, 2026-11-17) sends a processed point
+        cloud. Its own timestamps are unusable without PTP (wrong date; exactly
+        66.7 ms apart while the real frame rate wanders a few hundred ppm), so
+        a frame's time is its first packet's host arrival (altos.pcap):
+          1. split into stretches at radar restarts and gaps > 1 s;
+          2. per stretch, arrival ~ frame number (frame ids, so lost frames
+             keep their slot), slope by least squares, intercept on the lower
+             envelope (as below);
+          3. plus a rolling lower envelope (5th percentile over +-5 s) of the
+             residuals, smoothed, for the slow wander of the frame rate.
+        The radar's processing delay (< 60 ms by its spec) is a constant left
+        in, until an "altos_ms" Stage 3 offset is measured (the report
+        estimates it: Altos Doppler against the LiDAR target's range rate).
+        Points are kept in the Altos's own frame (x forward, y left, z up).
+
 FITS    Arrival delay only ever ADDS. Each fit takes its slope by least
         squares and its intercept from the LOWER envelope of the residuals
         (5th percentile), i.e. the least-delayed arrivals. What remains is
@@ -35,8 +50,11 @@ OUTPUT  <session>/sync/
     radar_timeline.csv   per radar frame: arrival, fitted and reference time
     camera_timeline.csv  per camera frame: capture time on CLOCK_MONOTONIC
     lidar_timeline.csv   per sweep: boresight time, FOV span, point counts
-    pairs.csv            one row per radar frame: matched camera frame and
-                         LiDAR sweep, each with its signed time error
+    altos_timeline.csv   per Altos frame: arrival, fitted and reference time, points
+    altos_points.npz     every Altos point with its frame (index into the timeline)
+                         and that frame's t_ref (see altos_points_npz below)
+    pairs.csv            one row per radar frame: matched camera frame, LiDAR
+                         sweep and Altos frame, each with its signed time error
     alignment.json       fit parameters, quality figures, offsets used
 
 USAGE (conda env: needs numpy and the RoboSense wrapper)
@@ -66,6 +84,9 @@ DEFAULT_OFFSETS = HERE / "calibration" / "stage3_offsets.json"      # Stage 3 re
 ROOT = HERE.parent
 LIDAR_DIR = ROOT / "lidar_standalone_capture"
 WRAPPER_DIR = LIDAR_DIR / "rs_driver" / "python_wrapper_2"
+ALTOS_DIR = ROOT / "altos_standalone_capture"
+ALTOS_SPLIT_GAP_S = 1.0          # a stream pause longer than this starts a new stretch
+ALTOS_WANDER_S = 5.0             # half-window of the rolling envelope (frame-rate wander)
 
 MSOP_ID = b"\x55\xaa\x05\x5a"
 MSOP_TS_OFFSET = 20
@@ -318,8 +339,108 @@ def lidar_timeline(session: Path, offset_s: float, rot, boresight_deg: float, ra
     return bore + offset_s, span, report
 
 
+# ── Altos V4 ────────────────────────────────────────────────────────────────
+def load_altos(session: Path):
+    """All frames of the session's altos.pcap as arrays (altos_v4.frames_to_arrays) and the assembler."""
+    if str(ALTOS_DIR) not in sys.path:
+        sys.path.insert(0, str(ALTOS_DIR))
+    import altos_v4 as av
+    asm = av.FrameAssembler()
+    frames = []
+    for t_ns, pkt in av.read_pcap(session / "altos" / "altos.pcap"):
+        frames.extend(asm.feed(pkt, t_ns))
+    frames.extend(asm.flush())
+    return av.frames_to_arrays(frames), asm
+
+
+def altos_capture_times(fid, t_arr, rate_hz_guess=15.0):
+    """Fitted capture times (host CLOCK_MONOTONIC, seconds) of Altos frames from their arrival
+    times. Returns (t_fit, stretch index per frame, info)."""
+    n = len(t_arr)
+    t_fit = np.array(t_arr, dtype=float)
+    step = (fid[1:].astype(np.int64) - fid[:-1].astype(np.int64))
+    cut = (step <= 0) | (np.diff(t_arr) > ALTOS_SPLIT_GAP_S)          # restart or pause
+    stretch = np.r_[0, np.cumsum(cut)]
+    info = {"stretches": int(stretch[-1] + 1) if n else 0, "fitted_frames": 0, "arrival_frames": 0,
+            "global_fit_residual_ms": [], "wander_correction_ms": []}
+    for k in range(info["stretches"]):
+        m = np.nonzero(stretch == k)[0]
+        x = (fid[m].astype(np.int64) - int(fid[m[0]])).astype(float)    # frame number, lost frames keep a slot
+        y = t_arr[m]
+        fit = envelope_fit(x, y) if len(m) >= 20 else None
+        if fit is None:
+            info["arrival_frames"] += len(m)                            # too short / not a line: arrival times
+            continue
+        a, b, x0, resid, keep = fit
+        line = a * (x - x0) + b
+        r = y - line                                                    # >= ~0: delays above the envelope
+        w = int(round(ALTOS_WANDER_S * rate_hz_guess))
+        if len(m) > 2 * w + 1:
+            pad = np.r_[np.full(w, r[0]), r, np.full(w, r[-1])]
+            win = np.lib.stride_tricks.sliding_window_view(pad, 2 * w + 1)
+            env = np.percentile(win, ENVELOPE_PCT, axis=1)
+            k_ = np.ones(2 * w + 1) / (2 * w + 1)                       # smooth the envelope's steps
+            env = np.convolve(np.r_[np.full(w, env[0]), env, np.full(w, env[-1])], k_, mode="valid")
+        else:
+            env = np.zeros(len(m))
+        t_fit[m] = line + env
+        info["fitted_frames"] += len(m)
+        info["global_fit_residual_ms"] += list(resid * 1e3)
+        info["wander_correction_ms"] += list(env * 1e3)
+    info["global_fit_residual_ms"] = stats_ms(np.array(info["global_fit_residual_ms"]) / 1e3)
+    info["wander_correction_ms"] = stats_ms(np.array(info["wander_correction_ms"]) / 1e3)
+    return t_fit, stretch, info
+
+
+def altos_timeline(session: Path, offset_s: float):
+    d, asm = load_altos(session)
+    n = len(d["frame_id"])
+    if n == 0:
+        raise SystemExit("altos/altos.pcap holds no frames")
+    t_first = d["t_host_first_ns"] / 1e9
+    t_last = d["t_host_last_ns"] / 1e9
+    t_fit, stretch, info = altos_capture_times(d["frame_id"], t_first)
+    t_ref = t_fit + offset_s
+    valid_per_frame = np.bincount(d["frame_idx"][d["valid"]], minlength=n)
+    out = [(i, int(d["frame_id"][i]), int(stretch[i]), f"{t_first[i]:.6f}", f"{t_last[i]:.6f}", f"{t_fit[i]:.6f}",
+            f"{t_ref[i]:.6f}", f"{(t_first[i] - t_fit[i]) * 1e3:.3f}", int(d["n_points"][i]),
+            int(valid_per_frame[i]), int(d["complete"][i]), f"{d['radar_time'][i]:.6f}")
+           for i in range(n)]
+    write_csv(session / "sync" / "altos_timeline.csv",
+              ["idx", "frame_id", "stretch", "t_first_arrival", "t_last_arrival", "t_fit", "t_ref", "residual_ms",
+               "points", "valid_points", "complete", "radar_time_s"], out)
+    altos_points_npz(session, d, t_ref)
+    dt = np.diff(t_fit)
+    report = dict(info, frames=n, frames_lost=asm.missing_ids, frames_incomplete=asm.incomplete,
+                  radar_restarts=asm.restarts,
+                  fps=round(float((n - 1) / (t_fit[-1] - t_fit[0])), 4) if n > 1 else None,
+                  frame_period_ms=stats_ms(dt[dt < ALTOS_SPLIT_GAP_S]),
+                  residual_ms=stats_ms(t_first - t_fit),
+                  packet_spread_ms=stats_ms(t_last - t_first),
+                  points_per_frame={"median": float(np.median(d["n_points"])), "max": int(d["n_points"].max())},
+                  invalid_points=int((~d["valid"]).sum()),
+                  timing="host arrival of each frame's first packet, de-jittered (align_session.py ALTOS)")
+    return t_ref, d["complete"], report
+
+
+def altos_points_npz(session: Path, d: dict, t_ref) -> None:
+    """sync/altos_points.npz: every Altos point, as decoded, with the frame it belongs to.
+        points    (N, 8) float32: range m, doppler m/s (+ = away), azimuth rad (+ left), elevation rad
+                  (raw sign, + down), snr (linear), x, y, z m (x forward, y left, z up; the Altos's own
+                  frame: its mounting on the rig is not applied)
+        valid     (N,) bool: all five sent values finite (the radar sends some as NaN)
+        frame     (N,) int32: row of sync/altos_timeline.csv
+        t_ref     per frame: aligned time (s, CLOCK_MONOTONIC with the offset applied)
+        frame_id  per frame: the radar's frame id"""
+    np.savez_compressed(session / "sync" / "altos_points.npz", points=d["points"].astype(np.float32),
+                        valid=d["valid"], frame=d["frame_idx"].astype(np.int32), t_ref=np.asarray(t_ref),
+                        frame_id=d["frame_id"],
+                        columns=np.array("range doppler azimuth elevation snr x y z"))
+
+
 # ── pairing ─────────────────────────────────────────────────────────────────
-def pair(session, t_radar, radar_files, radar_lost, cam_t, cam_idx, lid_t, lid_span):
+def pair(session, t_radar, radar_files, radar_lost, cam_t, cam_idx, lid_t, lid_span,
+         alt_t=None, alt_complete=None):
     rows, cam_err, lid_err = [], [], []
     cam_ok = np.isfinite(cam_t)
     ct, ci = cam_t[cam_ok], cam_idx[cam_ok]
@@ -329,6 +450,11 @@ def pair(session, t_radar, radar_files, radar_lost, cam_t, cam_idx, lid_t, lid_s
     lt = lid_t[lid_ok] if lid_t is not None else np.array([])
     cam_period = np.median(np.diff(ct)) if len(ct) > 1 else np.nan
     lid_period = np.median(np.diff(lt)) if len(lt) > 1 else np.nan
+    at = alt_t if alt_t is not None else np.array([])
+    alt_order = np.argsort(at)
+    at_sorted = at[alt_order]
+    alt_period = np.median(np.diff(at_sorted)) if len(at) > 1 else np.nan
+    alt_err = []
     for k, tr in enumerate(t_radar):
         flags = []
         c_idx = c_t = c_e = ""
@@ -355,15 +481,31 @@ def pair(session, t_radar, radar_files, radar_lost, cam_t, cam_idx, lid_t, lid_s
                 if abs(e) > GAP_FACTOR * lid_period / 2:
                     flags.append("lidar_gap")       # a missing sweep around this radar frame
             l_e = f"{e * 1e3:.2f}"
+        a_idx = a_t = a_e = ""
+        if len(at_sorted):
+            j = nearest(at_sorted, tr)
+            e = at_sorted[j] - tr
+            a_idx, a_t, a_e = int(alt_order[j]), f"{at_sorted[j]:.6f}", f"{e * 1e3:.2f}"
+            if not (at_sorted[0] - alt_period / 2 <= tr <= at_sorted[-1] + alt_period / 2):
+                flags.append("outside_altos")
+            else:
+                alt_err.append(e)
+                if abs(e) > GAP_FACTOR * alt_period / 2:
+                    flags.append("altos_gap")       # Altos frames missing (or a restart) around this radar frame
+                if alt_complete is not None and not alt_complete[a_idx]:
+                    flags.append("altos_incomplete")
         if radar_lost[k]:
             flags.append("radar_lost_bytes")
         rows.append((k, radar_files[k], f"{tr:.6f}", c_idx, c_t, c_e, l_idx, l_t, l_e, l_span,
-                     radar_lost[k], ";".join(flags)))
+                     a_idx, a_t, a_e, radar_lost[k], ";".join(flags)))
     write_csv(session / "sync" / "pairs.csv",
               ["radar_idx", "radar_file", "t_radar", "camera_frame_index", "t_camera",
                "camera_error_ms", "lidar_sweep", "t_lidar_boresight", "lidar_error_ms",
-               "lidar_fov_span_ms", "radar_lost_bytes", "flags"], rows)
+               "lidar_fov_span_ms", "altos_frame", "t_altos", "altos_error_ms", "radar_lost_bytes", "flags"], rows)
     return {"pairs": len(rows),
+            "altos_error_ms": stats_ms(alt_err),
+            "altos_period_ms": round(float(alt_period) * 1e3, 3) if np.isfinite(alt_period) else None,
+            "altos_gap_pairs": sum(1 for r in rows if "altos_gap" in r[-1]),
             "camera_error_ms": stats_ms(cam_err), "camera_period_ms": round(float(cam_period) * 1e3, 3),
             "lidar_error_ms": stats_ms(lid_err),
             "lidar_period_ms": round(float(lid_period) * 1e3, 3) if np.isfinite(lid_period) else None,
@@ -377,7 +519,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Align a 3-sensor session and pair frames to radar frames")
     ap.add_argument("--session", type=Path, required=True)
     ap.add_argument("--offsets", default=None,
-                    help="Stage 3 result: JSON {radar_ms, camera_ms, lidar_ms} added to each sensor's time. "
+                    help="Stage 3 result: JSON {radar_ms, camera_ms, lidar_ms[, altos_ms]} added to each sensor's time. "
                          f"Default: {DEFAULT_OFFSETS} if it exists; 'none' = uncalibrated")
     ap.add_argument("--lidar-extrinsic", default="auto", choices=["auto", "none"],
                     help="LiDAR -> vehicle (radar) transform recorded for the session and applied by every "
@@ -399,21 +541,25 @@ def main() -> int:
     s = a.session
     meta = json.loads((s / "session.json").read_text())
     sensors = meta.get("sensors", [])
-    if "radar" not in sensors:
-        raise SystemExit("session has no radar: radar frames are the pairing anchor")
-    offsets = {"radar_ms": 0.0, "camera_ms": 0.0, "lidar_ms": 0.0}
+    has_radar = "radar" in sensors
+    if not has_radar:
+        print("  NOTE: no TI radar in this session - its frames are the pairing anchor, so the other "
+              "sensors' timelines are written but there is no pairs.csv")
+    offsets = {"radar_ms": 0.0, "camera_ms": 0.0, "lidar_ms": 0.0, "altos_ms": 0.0}
     off_path = None
     if a.offsets is None:
         off_path = DEFAULT_OFFSETS if DEFAULT_OFFSETS.is_file() else None
     elif str(a.offsets).lower() != "none":
         off_path = Path(a.offsets)
     calibrated = off_path is not None
+    altos_calibrated = False
     if calibrated:
         cal = json.loads(off_path.read_text())
+        altos_calibrated = "altos_ms" in cal
         offsets.update({k: float(cal[k]) for k in offsets if k in cal})
         want = (cal.get("valid_for") or {}).get("radar_firmware")
         have = (meta.get("radar_firmware") or {}).get("variant")
-        if want and have != want:
+        if want and have != want and "radar" in sensors:
             print(f"  WARNING: offsets in {off_path} were measured with radar firmware {want}, "
                   f"this session used {have or 'unknown'} - re-run Stage 3 for it")
     (s / "sync").mkdir(exist_ok=True)
@@ -430,16 +576,18 @@ def main() -> int:
     print(f"  LiDAR extrinsic: {describe(ext)}")
 
     report = {"session": str(s), "offsets": offsets, "offsets_calibrated": calibrated,
+              "altos_offset_calibrated": altos_calibrated,
               "lidar_extrinsic": ext,
               "offsets_file": str(off_path) if off_path else None,
               "lidar_split_angle_deg": a.split_angle,
               "lidar_rpy_deg": list(a.lidar_rpy_deg), "boresight_deg": a.boresight_deg,
               "envelope_percentile": ENVELOPE_PCT}
 
-    t_radar, files, lost, report["radar"] = radar_timeline(s, offsets["radar_ms"] / 1e3)
-    print(f"\nRadar : {report['radar']['frames']} frames, period {report['radar']['period_ms']:.3f} ms "
-          f"({report['radar']['fps']:.3f} fps), fit residual p99 "
-          f"{report['radar']['residual_ms'].get('p99')} ms, outliers {report['radar']['outliers']}")
+    if has_radar:
+        t_radar, files, lost, report["radar"] = radar_timeline(s, offsets["radar_ms"] / 1e3)
+        print(f"\nRadar : {report['radar']['frames']} frames, period {report['radar']['period_ms']:.3f} ms "
+              f"({report['radar']['fps']:.3f} fps), fit residual p99 "
+              f"{report['radar']['residual_ms'].get('p99')} ms, outliers {report['radar']['outliers']}")
 
     cam_t, cam_idx = np.array([]), np.array([], int)
     if "camera" in sensors:
@@ -463,7 +611,21 @@ def main() -> int:
               f"{l['fov_span_ms'].get('median')} ms, sweeps without boresight points "
               f"{l['sweeps_without_boresight']}")
 
-    report["pairing"] = pair(s, t_radar, files, lost, cam_t, cam_idx, lid_t, lid_span)
+    alt_t, alt_complete = None, None
+    if "altos" in sensors:
+        alt_t, alt_complete, report["altos"] = altos_timeline(s, offsets["altos_ms"] / 1e3)
+        q = report["altos"]
+        print(f"Altos : {q['frames']} frames ({q['fps']} fps), lost {q['frames_lost']}, incomplete "
+              f"{q['frames_incomplete']}, restarts {q['radar_restarts']}, {q['stretches']} stretch(es); arrival "
+              f"above the fit p99 {q['residual_ms'].get('p99')} ms, wander correction "
+              f"{q['wander_correction_ms'].get('min')}..{q['wander_correction_ms'].get('max')} ms"
+              f"{'' if altos_calibrated else ' (no altos_ms offset: processing delay not removed)'}")
+
+    if not has_radar:
+        (s / "sync" / "alignment.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(f"\nWrote {s / 'sync'}/: the sensors' timelines and alignment.json (no pairs.csv without the TI radar)")
+        return 0
+    report["pairing"] = pair(s, t_radar, files, lost, cam_t, cam_idx, lid_t, lid_span, alt_t, alt_complete)
     p = report["pairing"]
     print(f"\nPairs : {p['pairs']} radar frames, flagged {p['flagged']} "
           f"(in a camera gap {p['camera_gap_pairs']}, in a LiDAR gap {p['lidar_gap_pairs']})")
@@ -473,10 +635,13 @@ def main() -> int:
     if p["lidar_error_ms"]:
         print(f"  LiDAR  error ms: {p['lidar_error_ms']}  (bound: half a sweep = "
               f"{(p['lidar_period_ms'] or 0) / 2:.1f} ms)")
+    if p["altos_error_ms"]:
+        print(f"  Altos  error ms: {p['altos_error_ms']}  (bound: half a frame = "
+              f"{(p['altos_period_ms'] or 0) / 2:.1f} ms; Altos gaps {p['altos_gap_pairs']})")
 
     (s / "sync" / "alignment.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"\nWrote {s / 'sync'}/: radar_timeline.csv camera_timeline.csv lidar_timeline.csv "
-          f"pairs.csv alignment.json")
+          f"{'altos_timeline.csv altos_points.npz ' if 'altos' in sensors else ''}pairs.csv alignment.json")
     if not calibrated:
         print("Pairs carry each sensor's unmeasured constant latency until Stage 3 offsets are applied.")
     return 0

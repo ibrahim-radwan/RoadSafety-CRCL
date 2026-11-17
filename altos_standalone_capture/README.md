@@ -1,7 +1,7 @@
 # Altos V4 radar: standalone capture
 
-The team is evaluating an **Altos V4** 4D imaging radar (since 2026-11-15),
-either alongside or in place of the cascaded TI radar.
+An **Altos V4** 4D imaging radar: the project's **fourth sensor**, recorded
+alongside the TI radar, LiDAR and camera (decided 2026-11-17).
 
 The sensor:
 - 16 TX × 16 RX;
@@ -9,8 +9,16 @@ The sensor:
 - up to 15 frames/s;
 - outputs a **processed point cloud**, not raw ADC data.
 
-This folder records it on its own. It is not yet part of
-`sync_capture_pipeline/`.
+This folder holds its recorder and packet format, and the tools for
+working with it on its own.
+
+**In the capture pipeline:**
+- `sync_capture_pipeline/capture_session.py` runs `record_altos_raw.py` into
+  `<session>/altos/`.
+- `check_session.py`, `align_session.py`, the session report and the live
+  view all include it.
+- See `docs/knowledge/07_synchronisation_and_stage3.md` for its capture
+  times.
 
 Our unit: serial V4-260804-0146, firmware 8e75cfeb.
 

@@ -12,9 +12,11 @@ an NVIDIA **Jetson AGX Orin**. The sensors:
 - a **cascaded TI mmWave radar**: 2 × AWR2243 + AM273x, raw ADC through a
   DCA1000, 8 frames/s;
 - a **RoboSense RS-Fairy LiDAR**: 10 Hz, raw packets to pcap;
-- a **Stereolabs ZED 2i stereo camera**: 30 fps, lossless SVO2.
+- a **Stereolabs ZED 2i stereo camera**: 30 fps, lossless SVO2;
+- an **Altos V4 imaging radar** (fourth sensor, 2026-11-17): a processed point
+  cloud, 15 frames/s, raw UDP packets to pcap.
 
-The system records raw data from all three, aligns them offline on one clock,
+The system records raw data from all of them, aligns them offline on one clock,
 validates and reports each session, and replays them. The data feeds an
 end-user research team (annotation and ML). Firmware for the radar is built on
 a separate Windows machine with its own repository.
@@ -72,7 +74,7 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   calibration/radar_rx_phase.json   in-situ radar phase correction (team layout only; superseded, see 03)
   calibration/lidar_extrinsic.json  LiDAR -> vehicle (radar) transform per mounting (provisional, until the team's)
   web_control/                  Flask iPad control (systemd service, port 8080)
-  live/                         live view workers (radar, LiDAR, camera -> JPEG + numbers to the web page; saves only
+  live/                         live view workers (radar, LiDAR, camera, Altos -> JPEG + numbers to the web page; saves only
                                 calibration captures on request, into <sessions-root>/calibration/<set>/)
   replay/                       PyQt/pyqtgraph replay: one window, 6 panels, live detection (camera in its own process)
   tests/                        pytest (needs the reference sessions; skips when absent)
@@ -80,7 +82,8 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   legacy/                       superseded originals, kept for reference
   sessions/                     OLD eMMC recordings (git-ignored)
 camera_standalone_capture/ZED_2i_Sensor/   ZED recorder (recorder.py, config.yaml)
-altos_standalone_capture/                  Altos V4 radar (under evaluation): recorder, checker, 3D viewer, settings switch, room analysis
+altos_standalone_capture/                  Altos V4 radar: recorder (used by capture_session), packet format, checker,
+                                           3D viewer, settings switch, room analysis
 lidar_standalone_capture/                  LiDAR raw recorder + checker
   rs_driver/                    RoboSense rs_driver (third-party, modified; see its NOTICE.md)
     python_wrapper_2/           our pybind11 wrapper (robosense_lidar.cpp, lidar.py)
@@ -134,7 +137,9 @@ docs/                           knowledge base + new-board setup
 - **Radar frame layout:** int16 LE, I first,
   `[loop 64][tx 6][dev 2][rx 4][sample 256][I,Q]`.
 - **Sensor colours** in figures and UI: radar `#2a78d6`, LiDAR `#eb6834`,
-  camera `#1baf7a`.
+  camera `#1baf7a`, Altos `#eda100`.
+- **"radar"** in sensor lists, flags and file names means the TI cascade
+  radar; the Altos is always **"altos"**.
 - **Python:** 3.8 for everything that runs on the rig. Use
   `from __future__ import annotations`; no 3.9+ APIs.
 

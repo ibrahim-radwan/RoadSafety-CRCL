@@ -340,6 +340,79 @@ def collect_camera(S: Path, t0: float, snap_cam_idx: list) -> dict:
             if (S / "camera" / "capture_status.json").is_file() else {}}
 
 
+# ── Altos V4 ────────────────────────────────────────────────────────────────
+ALTOS_MOVING_V = 0.3           # |doppler| at or above this counts as moving (m/s)
+ALTOS_RT_MAX_M = 25.0          # range-time map extent
+ALTOS_TARGET_DR = 0.6          # Altos points within this range of the LiDAR target ...
+ALTOS_TARGET_DAZ = 20.0        # ... and this azimuth (deg; wide: the Altos's mounting is not calibrated)
+
+
+def collect_altos(S: Path, lid: dict, snap_radar_idx: list, pairs: list) -> dict:
+    """The Altos's points from sync/altos_points.npz (align_session.py), in its own frame."""
+    import json as _json
+    d = np.load(S / "sync" / "altos_points.npz")
+    rows = _csv(S / "sync" / "altos_timeline.csv")
+    t = np.array([float(r["t_ref"]) for r in rows])
+    t_arr = np.array([float(r["t_first_arrival"]) for r in rows])
+    n = len(t)
+    pts, valid, fr = d["points"], d["valid"], d["frame"]
+    p, f = pts[valid].astype(np.float64), fr[valid]
+    rng, dop, az, el, snr = p[:, 0], p[:, 1], np.degrees(p[:, 2]), -np.degrees(p[:, 3]), p[:, 4]
+    x, y, z = p[:, 5], p[:, 6], p[:, 7]
+    snr_db = 10 * np.log10(np.maximum(snr, 1e-9))
+    moving = np.abs(dop) >= ALTOS_MOVING_V
+    per_frame = np.bincount(f, minlength=n)
+    moving_per_frame = np.bincount(f[moving], minlength=n)
+    # moving returns over range and time (counts per frame and 0.1 m)
+    redges = np.arange(0.0, ALTOS_RT_MAX_M + 1e-9, 0.1)
+    rt = np.histogram2d(f[moving], rng[moving], bins=[np.arange(n + 1) - 0.5, redges])[0].astype(np.float32)
+    # the LiDAR target: Altos Doppler at its range (for the timing check) and the Altos's nearest moving return
+    tl, lr, la = lid["track_t"], lid["track_r"], lid["track_az"]
+    ok = np.isfinite(lr)
+    tli, lri, lai = tl[ok], lr[ok], la[ok]
+    vel = np.full(n, np.nan)
+    target_range = np.full(n, np.nan)
+    order = np.argsort(f, kind="stable")
+    starts = np.searchsorted(f[order], np.arange(n + 1))
+    for i in range(n):
+        if len(tli) < 2 or not (tli[0] <= t[i] <= tli[-1]):
+            continue
+        j = np.searchsorted(tli, t[i])
+        if not (0 < j < len(tli)) or tli[j] - tli[j - 1] > 0.3:
+            continue
+        r0, a0 = np.interp(t[i], tli, lri), np.interp(t[i], tli, lai)
+        k = order[starts[i]:starts[i + 1]]
+        near = k[(np.abs(rng[k] - r0) <= ALTOS_TARGET_DR) & (np.abs(az[k] - a0) <= ALTOS_TARGET_DAZ) & moving[k]]
+        if len(near) >= 2:
+            vel[i] = float(np.median(dop[near]))
+            target_range[i] = float(np.median(rng[near]))
+    # snapshots: the Altos frame paired with each snapshot radar frame
+    snaps = {}
+    for i in snap_radar_idx:
+        a_ = pairs[i].get("altos_frame") if i < len(pairs) else None
+        if a_ not in (None, ""):
+            k = order[starts[int(a_)]:starts[int(a_) + 1]]
+            snaps[i] = {"frame": int(a_), "error_ms": pairs[i].get("altos_error_ms"),
+                        "xyz_v_snr": np.c_[x[k], y[k], z[k], dop[k], snr_db[k]].astype(np.float32)}
+    meta = _json.loads((S / "altos" / "metadata.json").read_text()) if (S / "altos" / "metadata.json").is_file() else {}
+    stats = _csv(S / "altos" / "stats.csv")
+    return {
+        "t": t, "t_arrival": t_arr, "points_per_frame": per_frame, "moving_per_frame": moving_per_frame,
+        "invalid": int((~valid).sum()), "total": int(len(valid)),
+        "hist": {"range": np.histogram(rng, bins=np.arange(0, 160.01, 0.5)),
+                 "azimuth": np.histogram(az, bins=np.arange(-90, 90.01, 2)),
+                 "elevation": np.histogram(el, bins=np.arange(-20, 20.01, 1)),
+                 "snr_db": np.histogram(snr_db, bins=np.arange(-5, 70.01, 1)),
+                 "doppler": np.histogram(dop, bins=np.arange(-50, 50.01, 0.5))},
+        "bev": np.histogram2d(x, y, bins=[np.arange(0, 40.01, 0.2), np.arange(-20, 20.01, 0.2)])[0] / max(1, n),
+        "side": np.histogram2d(x, z, bins=[np.arange(0, 40.01, 0.2), np.arange(-5, 5.01, 0.1)])[0] / max(1, n),
+        "rt": rt, "rt_range_edges": redges, "vel": vel, "target_range": target_range, "snaps": snaps,
+        "meta": meta, "stats_t": np.array([int(r["t_monotonic_ns"]) / 1e9 for r in stats]),
+        "stats_frames": np.array([int(r["frames"]) for r in stats]),
+        "moving_v": ALTOS_MOVING_V,
+    }
+
+
 # ── timing check (velocity) ─────────────────────────────────────────────────
 def velocity_timing(radar: dict, lid: dict, window: float = 30.0) -> list:
     from scipy.signal import savgol_filter
@@ -395,5 +468,10 @@ def collect(S: Path) -> dict:
     D["snap_cam_idx"] = snap_cam
     log("timing check (radar Doppler vs LiDAR range rate) ...")
     D["vel_timing"] = velocity_timing(D["radar"], D["lidar"])
+    D["altos"], D["altos_vel_timing"] = None, []
+    if "altos" in D["meta"].get("sensors", []) and (S / "sync" / "altos_points.npz").is_file():
+        log("Altos: points from sync/altos_points.npz, timing check (Altos Doppler vs LiDAR range rate) ...")
+        D["altos"] = collect_altos(S, D["lidar"], D["snap_radar_idx"], pairs)
+        D["altos_vel_timing"] = velocity_timing(D["altos"], D["lidar"])
     D["collect_s"] = time.monotonic() - t_start
     return D

@@ -1,5 +1,6 @@
 """
-capture_session.py — run a synchronised radar + ZED 2i camera + RS-Fairy LiDAR session.
+capture_session.py — run a synchronised radar + ZED 2i camera + RS-Fairy LiDAR (+ Altos V4
+radar) session.
 
 See SYNC_DESIGN_3_SENSORS.md for the timing model. The radar + D455 version
 this replaces is kept in legacy/.
@@ -14,9 +15,17 @@ WHY THREE PROCESSES AND NOT THREADS
     script imports only the stdlib and runs anywhere.
 
 ORDERING
-    LiDAR and camera start FIRST and stop LAST, so every radar frame has
-    coverage on both sides. The launcher waits until both report that they
-    are recording before it starts the radar (~5.5 s of DCA setup).
+    LiDAR, camera and the Altos radar start FIRST and stop LAST, so every
+    (TI) radar frame has coverage on all sides. The launcher waits until each
+    reports that it is recording (the Altos: its first frame received) before
+    it starts the radar (~5.5 s of DCA setup).
+
+ALTOS V4 (fourth sensor, 2026-11-17)
+    A processed point cloud over UDP multicast, recorded raw to altos/altos.pcap
+    by altos_standalone_capture/record_altos_raw.py (stdlib only, runs with
+    --altos-python). Preflight reads the radar's settings from its web server
+    (GET only) and refuses to start if it does not answer. "radar" in this
+    launcher always means the TI cascade radar.
 
     Each recorder runs in its own process group. Ctrl+C therefore reaches
     only this launcher, which stops the radar first, lets the others trail,
@@ -56,9 +65,12 @@ ROOT = HERE.parent
 SENSOR_PYTHON = "/home/jetson/miniconda3/envs/rel_1_py_3_8/bin/python"
 ZED_DIR = ROOT / "camera_standalone_capture" / "ZED_2i_Sensor"
 LIDAR_DIR = ROOT / "lidar_standalone_capture"
+ALTOS_DIR = ROOT / "altos_standalone_capture"
+ALTOS_RADAR_IP = "192.168.3.10"          # the Altos's factory address (docs/knowledge/02_hardware_and_network.md)
 
 # Lines each recorder prints once it is actually recording.
-READY = {"camera": "Recording 1920x1080", "lidar": "Recording RS-Fairy"}
+READY = {"camera": "Recording 1920x1080", "lidar": "Recording RS-Fairy", "altos": "Altos receiving"}
+EARLY = ("lidar", "camera", "altos")     # start before the TI radar, stop after it
 # Storage per hour at 8 fps (SYNC_DESIGN_3_SENSORS.md section 9).
 SD_MOUNT = Path("/mnt/sdcard")
 RADAR_RATE_RE = re.compile(r"t\+\s*\d+s\s+([\d,]+) pkt/s")
@@ -67,7 +79,8 @@ RADAR_RATE_RE = re.compile(r"t\+\s*\d+s\s+([\d,]+) pkt/s")
 # capturing, and arrival times stopped meaning anything). Stop early instead
 # of recording minutes of unusable radar data.
 RADAR_LOW_FRACTION, RADAR_LOW_SECONDS = 0.5, 5
-GB_PER_HOUR = {"radar": 90, "camera": 5, "lidar": 18}   # measured 2026-10-10 at 8 fps: 90.6 / 3.9 / 17.5
+GB_PER_HOUR = {"radar": 90, "camera": 5, "lidar": 18,   # measured 2026-10-10 at 8 fps: 90.6 / 3.9 / 17.5
+               "altos": 1}                              # Altos: ~0.3 GB/h indoors (2026-11-15); 1 allows a busier scene
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,8 +109,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-radar", action="store_true", help="bench test without the radar")
     p.add_argument("--no-camera", action="store_true")
     p.add_argument("--no-lidar", action="store_true")
+    p.add_argument("--no-altos", action="store_true", help="without the Altos V4 radar")
+    p.add_argument("--altos-python", default=sys.executable,
+                   help="interpreter for the Altos recorder (stdlib only)")
+    p.add_argument("--altos-host-ip", default="192.168.3.1",
+                   help="this machine's address on the Altos's USB-Ethernet adapter")
     p.add_argument("--ready-timeout", type=float, default=45.0,
-                   help="seconds to wait for camera/LiDAR to start recording")
+                   help="seconds to wait for camera/LiDAR/Altos to start recording")
     p.add_argument("--min-free-gb", type=float, default=5.0,
                    help="stop the session if free space falls below this")
     return p.parse_args()
@@ -108,6 +126,25 @@ def clock_pair() -> dict:
     r = time.time_ns()
     m2 = time.monotonic_ns()
     return {"monotonic_ns": (m1 + m2) // 2, "realtime_ns": r}
+
+
+def altos_preflight(host_ip: str) -> dict:
+    """The Altos radar's identity and settings (GET only), or {"error": ...} if it does not answer."""
+    import urllib.request
+    out = {}
+    try:
+        for path in ("status", "install"):
+            with urllib.request.urlopen(f"http://{ALTOS_RADAR_IP}:3000/{path}", timeout=3) as r:
+                out[path] = json.loads(r.read().decode("utf-8"))
+    except Exception as exc:
+        return {"error": f"Altos radar does not answer at {ALTOS_RADAR_IP} ({exc}) - check its power (15 V, "
+                         f"4 A adaptor), its USB-Ethernet adapter and that this machine has {host_ip} on it"}
+    st, inst = out["status"], (out["install"] or [{}])[0]
+    thr = (inst.get("rpvb_control_overrides") or {}).get("threshold_coeff")
+    out["line"] = (f"{st.get('machine_name')} {st.get('serial_num')} fw {st.get('firmware_ver')} | profile "
+                   f"{inst.get('profile')} | threshold {'default' if thr is None else thr.get('Float', ['?'])[0]} | "
+                   f"fps limit {inst.get('fps_limit') or 'off'} | sync {inst.get('sync_mode')}")
+    return out
 
 
 def sha256(path: Path) -> str:
@@ -192,8 +229,8 @@ def main() -> int:
             log_fh.write(line + "\n")
             log_fh.flush()      # flush per line: a crash must not lose the tail
 
-    sensors = [n for n, off in (("lidar", a.no_lidar), ("camera", a.no_camera), ("radar", a.no_radar))
-               if not off]
+    sensors = [n for n, off in (("lidar", a.no_lidar), ("camera", a.no_camera), ("altos", a.no_altos),
+                                ("radar", a.no_radar)) if not off]
     if not sensors:
         print("all sensors disabled - nothing to record")
         return 1
@@ -247,6 +284,13 @@ def main() -> int:
                  f"md5 {radar_fw.get('appimage_md5', '?')[:8]})")
             if str(radar_fw.get("data_valid", "yes")).lower() != "yes":
                 emit(f"  WARNING: firmware_map.json says this image's data is not valid: {radar_fw['data_valid']}")
+    altos_settings = None
+    if "altos" in sensors:
+        altos_settings = altos_preflight(a.altos_host_ip)
+        if altos_settings.get("error"):
+            problems.append(altos_settings["error"])
+        else:
+            emit(f"  altos    : {altos_settings['line']}")
     rmem = int(Path("/proc/sys/net/core/rmem_max").read_text())
     if rmem < 32 * 1024 * 1024 and ("radar" in sensors or "lidar" in sensors):
         emit(f"  WARNING: net.core.rmem_max is {rmem:,} B; run "
@@ -287,6 +331,11 @@ def main() -> int:
         recs["camera"] = Recorder("camera", [a.sensor_python, "-u", "recorder.py",
                                              "--session-dir", str(cam_dir.resolve())],
                                   ZED_DIR, emit)
+    if "altos" in sensors:
+        recs["altos"] = Recorder("altos", [a.altos_python, "-u", "record_altos_raw.py",
+                                           "--session-dir", str((a.out / "altos").resolve()),
+                                           "--radar-ip", ALTOS_RADAR_IP, "--host-ip", a.altos_host_ip],
+                                 ALTOS_DIR, emit)
     if "radar" in sensors:
         recs["radar"] = Recorder("radar", [a.radar_python, "-u", str(HERE / "dca_capture_radar_sync.py"),
                                            "--secs", str(a.secs), "--out", str((a.out / "radar").resolve())],
@@ -295,13 +344,13 @@ def main() -> int:
     stop_reason = "radar finished"
     t_radar_start = None
     try:
-        # ── camera + LiDAR first, wait until both are recording ─────────────
-        for name in ("lidar", "camera"):
+        # ── camera, LiDAR and Altos first, wait until each is recording ─────
+        for name in EARLY:
             if name in recs:
                 emit(f"\n  starting {name} ...")
                 recs[name].start()
         deadline = time.monotonic() + a.ready_timeout
-        for name in ("lidar", "camera"):
+        for name in EARLY:
             if name not in recs:
                 continue
             while not recs[name].ready.wait(0.2):
@@ -354,7 +403,7 @@ def main() -> int:
             if stop_requested.is_set():
                 stop_reason = "operator stop (Ctrl+C)"
                 break
-            dead = [n for n in ("lidar", "camera") if n in recs and not recs[n].alive()]
+            dead = [n for n in EARLY if n in recs and not recs[n].alive()]
             if dead:
                 stop_reason = f"{', '.join(dead)} exited early"
                 emit(f"\n  ERROR: {stop_reason} - stopping the session")
@@ -377,16 +426,17 @@ def main() -> int:
             emit("\n  stopping radar ...")
             recs["radar"].interrupt()
         codes["radar"] = recs["radar"].wait(timeout=180)
-        if not stop_reason.startswith(("startup", "lidar", "camera")):
-            emit(f"  radar stopped - camera/LiDAR trailing {a.lead:.0f} s ...")
+        if not stop_reason.startswith(("startup",) + EARLY):
+            emit(f"  radar stopped - camera/LiDAR/Altos trailing {a.lead:.0f} s ...")
             time.sleep(a.lead)
     clocks["stop"] = clock_pair()
-    for name in ("lidar", "camera"):
+    for name in EARLY:
         if name in recs and recs[name].proc is not None:
             emit(f"  stopping {name} ...")
             recs[name].interrupt()
-    if "lidar" in recs and recs["lidar"].proc is not None:
-        codes["lidar"] = recs["lidar"].wait(timeout=60)
+    for name in ("lidar", "altos"):
+        if name in recs and recs[name].proc is not None:
+            codes[name] = recs[name].wait(timeout=60)
     if "camera" in recs and recs["camera"].proc is not None:
         # The ZED verifies the finalized SVO2 after stopping (~0.55x the
         # recording time), so allow for it.
@@ -421,6 +471,8 @@ def main() -> int:
         "zed/config.yaml": ZED_DIR / "config.yaml",
         "lidar/record_lidar_raw.py": LIDAR_DIR / "record_lidar_raw.py",
         "lidar/config.yaml": LIDAR_DIR / "rs_driver" / "config" / "config.yaml",
+        "altos/record_altos_raw.py": ALTOS_DIR / "record_altos_raw.py",
+        "altos/altos_v4.py": ALTOS_DIR / "altos_v4.py",
     }
     meta = {
         "started_local": started_local,
@@ -438,6 +490,7 @@ def main() -> int:
         "net_core_rmem_max": rmem,
         "thermal": thermal,
         "radar_firmware": radar_fw,
+        "altos": altos_settings,
         "camera_staged": camera_staged,
         "tool_sha256": {k: sha256(p) for k, p in files.items()},
         "pairing": "NOT applied. Offsets must be measured (Stage 3) before association.",
@@ -452,7 +505,7 @@ def main() -> int:
     if thermal["samples"]:
         emit(f"  board       : tj max {thermal['tj_max_c']:.1f} C, fan max {thermal['fan_max_pct']}% "
              f"({thermal['samples']} samples){'  - WARNING: got hot' if thermal['tj_max_c'] >= board_health.WARN_C else ''}")
-    ok = not stop_reason.startswith(("startup", "lidar", "camera", "free"))
+    ok = not stop_reason.startswith(("startup", "free") + EARLY)
     for name in sensors:
         code = codes.get(name)
         detail = ""
@@ -467,6 +520,11 @@ def main() -> int:
             md = json.loads((a.out / "lidar" / "metadata.json").read_text())
             detail = (f"complete={md.get('complete')} packets={md.get('packets')} "
                       f"lost={md.get('msop_lost')}")
+            ok = ok and bool(md.get("complete"))
+        elif name == "altos" and (a.out / "altos" / "metadata.json").is_file():
+            md = json.loads((a.out / "altos" / "metadata.json").read_text())
+            detail = (f"complete={md.get('complete')} frames={md.get('frames')} lost={md.get('frames_lost')} "
+                      f"incomplete={md.get('frames_incomplete')} restarts={md.get('radar_restarts')}")
             ok = ok and bool(md.get("complete"))
         ok = ok and code == 0
         emit(f"  {name:7s}: exit {code}  {detail}")

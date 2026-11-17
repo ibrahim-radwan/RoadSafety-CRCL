@@ -81,3 +81,37 @@ essentials:
   session's extrinsic yaw, like `report/collect.py`). The existing caches
   were checked: all in the vehicle frame (the 2026-11-03 ones were written
   by the report).
+
+## The Altos V4 radar (fourth sensor, 2026-11-17)
+
+- **Capture time = host arrival of each frame's first packet, de-jittered.**
+  The radar's own timestamps can't be used without PTP. Its date is wrong
+  (2025-03), and the stamps are exactly 66.7 ms apart while the real frame
+  rate wanders: fitted against host time, −505, +408 and −104 ppm in three
+  recordings.
+- **How `align_session.py` fits it:**
+  - Split at radar restarts and pauses over 1 s.
+  - Fit arrival time against frame number. Frame ids are used, so lost
+    frames keep their slot. The intercept sits on the lower envelope, as for
+    the other sensors.
+  - Add a rolling ±5 s lower envelope of the residuals, for the wander.
+  - Checked on synthetic arrivals: 2 ms of jitter is cut to < 2 ms of error
+    (`tests/test_altos.py`).
+- **The radar's processing delay is still in its times.** The spec says
+  < 60 ms. The fix is an `altos_ms` key in `calibration/stage3_offsets.json`,
+  which `align_session` applies like the others. Until it exists,
+  `alignment.json` says `"altos_offset_calibrated": false` and the report
+  says so.
+- **Measuring `altos_ms`:** the report runs the velocity check for the Altos
+  too:
+  - its moving points' median Doppler near the LiDAR target (±0.6 m,
+    ±20°: the mounting isn't calibrated);
+  - fitted against the LiDAR range rate, per 30 s window;
+  - the weighted residual is what to add to `altos_ms`.
+  
+  It needs a session with someone walking towards and away from the rig.
+  Not yet run: no 4-sensor session exists.
+- **Pairing:** `pairs.csv` gives each TI radar frame the nearest Altos
+  frame (`altos_frame`, `t_altos`, `altos_error_ms`). The error stays within
+  ±33.3 ms (half an Altos frame), plus any gap. Flags: `outside_altos`,
+  `altos_gap`, `altos_incomplete`.

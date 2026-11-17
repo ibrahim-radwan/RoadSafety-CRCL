@@ -24,6 +24,7 @@ don't need a screen, keyboard or SSH on the scooter.
    - radar: packets/s
    - camera: FPS and dropped frames
    - LiDAR: packets/s and losses
+   - Altos radar: frames/s, points per frame, lost frames and restarts
 5. **Board (Jetson)** card: the live junction temperature, CPU and GPU
    temperatures, and fan speed, shown while idle and while recording. The tag
    reads **warm** at 80 °C and above, and **HOT** at 90 °C and above. The Orin
@@ -32,7 +33,7 @@ don't need a screen, keyboard or SSH on the scooter.
    `check_session.py` warns if the peak reached 80 °C. A session will not start
    if the board is already at 90 °C or above.
 6. **Stop recording** is the same as Ctrl+C in a terminal. The radar stops
-   first, then camera and LiDAR trail and finalize. The camera's SVO2 check
+   first, then camera, LiDAR and Altos trail and finalize. The camera's SVO2 check
    takes about half the recording length.
 7. `check_session.py` then runs automatically. **PASS** means the session is
    complete. Its full report is saved as `<session>/check_session.txt` and is

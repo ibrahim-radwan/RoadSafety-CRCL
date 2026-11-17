@@ -98,6 +98,16 @@ Each item cost real debugging time. Read before changing the related code.
 - **Lossless H.264 decodes at only ~40–50 fps.**
 
 ## Software
+- **The Altos radar restarts on every settings change, and its frame ids
+  start again from 0** (seen 2026-11-15). A frame assembler that treats a
+  smaller id as a late packet then drops every frame after the restart. A
+  step back of more than 30 frames is now counted as a restart. Don't
+  change the Altos's settings while recording.
+- **One text replacement can match twice.** Commit 11e1b628 (2026-11-07)
+  pasted the calibration-capture script into the page twice: once where
+  intended, and once inside the Start button's handler, where it reset the
+  calibration set name on every Start. Removed 2026-11-17. After a scripted
+  edit, check that the new block appears once.
 - **Never install a systemd unit with a fixed user and path.** The web
   service's file named user `jetson` and
   `/home/jetson/dev/CascadedRadarRoadSafetyOnTwoWheelers`, and

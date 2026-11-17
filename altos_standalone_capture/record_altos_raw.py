@@ -319,6 +319,7 @@ def main() -> int:
     print("Session: %s" % session)
 
     error = None
+    announced = False
     t_start = time.monotonic()
     with (session / "stats.csv").open("w", newline="") as sf, \
          (session / "clock_map.csv").open("w", newline="") as cf:
@@ -336,6 +337,10 @@ def main() -> int:
             next_tick += 1.0
             clocks.writerow(clock_pair())
             asm = rx.asm
+            if asm.frames and not announced:
+                # capture_session.py waits for this line (READY) before it starts the TI radar
+                print("Altos receiving: first frame after %.1f s" % (now - t_start), flush=True)
+                announced = True
             cur = (rx.packets, asm.frames, rx.points, asm.missing_ids, asm.incomplete,
                    rx.foreign, rx.queue_drops)
             d = [c - p for c, p in zip(cur, prev)]

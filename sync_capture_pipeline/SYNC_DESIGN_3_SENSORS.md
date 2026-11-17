@@ -203,6 +203,26 @@ Later option: the LiDAR supports gPTP (802.1AS), which could make the
 clock fit unnecessary. The USB adapter has no hardware timestamping, so the
 gain is limited. This is not needed for a first version.
 
+### 3.4 Altos V4 radar (15 fps, added 2026-11-17)
+
+A fourth sensor: an imaging radar that sends a processed point cloud over UDP
+multicast (`altos_standalone_capture/`). It is recorded raw, as the LiDAR is:
+`altos/altos.pcap`, every packet stamped with CLOCK_MONOTONIC at receipt.
+
+- **Its own timestamps are not used.** Without PTP its clock is wrong, and its
+  stamps are a nominal 66.7 ms apart while the real rate wanders by a few
+  hundred ppm.
+- **Capture time:** each frame's first-packet arrival, fitted per stretch.
+  The fit runs against frame number, with a lower-envelope intercept plus a
+  rolling ±5 s envelope for the wander (`align_session.py`; details in
+  `docs/knowledge/07_synchronisation_and_stage3.md`).
+- **Its processing delay** (< 60 ms by its spec) is a constant to measure:
+  `altos_ms`.
+- **Output:**
+  - `sync/altos_timeline.csv`, one row per frame;
+  - `sync/altos_points.npz`, every point with its frame and that frame's
+    `t_ref`, in the Altos's own frame (x forward, y left, z up).
+
 ## 4. Pairing (offline)
 
 For each radar frame `k` with reference time `t_k`:
@@ -216,6 +236,8 @@ For each radar frame `k` with reference time `t_k`:
   - **Decided:** keep the error, report it, and let users filter on it.
   - **Later, if needed:** motion-compensate the LiDAR points to `t_k`,
     using per-point times and IMU ego-motion.
+- **Altos:** the frame nearest to `t_k`. Its 15 fps against the radar's 8
+  gives an error of up to ±33.3 ms.
 - **Output:** `pairs.csv`, with one row per radar frame. It holds the
   radar file, camera frame index and timestamp, LiDAR sweep index and
   sector time, and each signed time error. The camera images and LiDAR
@@ -238,6 +260,8 @@ sessions/<run>/
                     metadata.json, capture_status.json  (ZED recorder output)
   lidar/            lidar.pcap, stats.csv, clock_map.csv, metadata.json,
                     config_used.yaml                    (record_lidar_raw.py)
+  altos/            altos.pcap, frames.csv, stats.csv, clock_map.csv,
+                    metadata.json (incl. the radar's own settings)  (record_altos_raw.py)
   sync/             generated offline: per-sensor timelines on CLOCK_MONOTONIC,
                     fit reports, pairs.csv
 ```

@@ -15,7 +15,7 @@ from . import figures as F
 
 CSS = """
 :root { color-scheme: light; --surface:#fcfcfb; --surface-2:#f3f2ef; --ink:#0b0b0b; --ink-2:#52514e;
-        --muted:#8a8984; --rule:#e4e3df; --radar:#2a78d6; --lidar:#eb6834; --camera:#1baf7a; }
+        --muted:#8a8984; --rule:#e4e3df; --radar:#2a78d6; --lidar:#eb6834; --camera:#1baf7a; --altos:#eda100; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--surface); color:var(--ink);
        font:15px/1.5 -apple-system, "Segoe UI", Roboto, "DejaVu Sans", sans-serif; }
@@ -136,9 +136,56 @@ def observations(D) -> list:
                    "everything in this report is in the pipeline frame, azimuth and y positive to the LEFT, as the "
                    "LiDAR (perception/core/conventions.py; verified on freewalk_ref_02 against camera and LiDAR). "
                    "The radar uses the measured array layout (calibration/radar_array.json, 2026-11-07).")
+    obs += altos_observations(D)
     b = D["log"]["board"]
     if len(b):
         obs.append(f"Jetson junction temperature {b[:, 0].min():.1f}–{b[:, 0].max():.1f} °C.")
+    return obs
+
+
+def altos_settings(D) -> dict:
+    A = D.get("altos") or {}
+    inst = (((A.get("meta") or {}).get("radar_settings") or {}).get("install") or [{}])[0]
+    thr = (inst.get("rpvb_control_overrides") or {}).get("threshold_coeff")
+    return {"profile": inst.get("profile"), "threshold": "default (250,000)" if thr is None else thr.get("Float", ["?"])[0],
+            "fps_limit": inst.get("fps_limit") or "off (15 fps)", "sync": inst.get("sync_mode"),
+            "serial": (A.get("meta") or {}).get("serial"), "firmware": (A.get("meta") or {}).get("firmware")}
+
+
+def altos_observations(D) -> list:
+    A = D.get("altos")
+    if A is None:
+        return []
+    al = D["align"].get("altos", {})
+    pr = D["align"].get("pairing", {})
+    obs = []
+    ppf = A["points_per_frame"]
+    obs.append(f"Altos V4: {len(A['t']):,} frames at {al.get('fps') or 0:.2f} fps; lost {al.get('frames_lost', 0)}, "
+               f"incomplete {al.get('frames_incomplete', 0)}, radar restarts {al.get('radar_restarts', 0)}; "
+               f"points per frame median {np.median(ppf):,.0f} (5–95%: {np.percentile(ppf, 5):,.0f}–"
+               f"{np.percentile(ppf, 95):,.0f}); {100 * A['invalid'] / max(1, A['total']):.2f}% of points sent with "
+               f"NaN values (left out).")
+    st = altos_settings(D)
+    obs.append(f"Altos settings: profile {st['profile']}, threshold {st['threshold']}, FPS limit {st['fps_limit']}, "
+               f"sync {st['sync']}. Its points are in its own frame (x forward, y left, z up): its mounting on "
+               f"the rig is not calibrated yet.")
+    if pr.get("altos_error_ms"):
+        e = pr["altos_error_ms"]
+        obs.append(f"Altos pairing: nearest Altos frame to every radar frame, error p01/p99 {e['p01']:+.1f}/"
+                   f"{e['p99']:+.1f} ms (bound ±{(pr.get('altos_period_ms') or 66.7) / 2:.1f} ms); "
+                   f"{pr.get('altos_gap_pairs', 0)} pairs in an Altos gap.")
+    if not D["align"].get("altos_offset_calibrated"):
+        obs.append("Altos time = arrival of each frame's first packet, de-jittered; its processing delay "
+                   "(< 60 ms by the spec) is NOT removed: no altos_ms offset has been measured yet.")
+    vt = [v for v in D.get("altos_vel_timing") or [] if v.get("status") == "ok" and v["sigma_ms"] < 15]
+    if vt:
+        r = np.array([v["residual_ms"] for v in vt]); s_ = np.array([v["sigma_ms"] for v in vt])
+        w = 1 / np.maximum(s_, 1) ** 2
+        obs.append(f"Velocity-based Altos−LiDAR timing check: {len(vt)} window(s) with σ < 15 ms, weighted mean "
+                   f"{(w * r).sum() / w.sum():+.1f} ± {1 / np.sqrt(w.sum()):.1f} ms. Adding this to the altos_ms "
+                   f"offset would align the Altos with the LiDAR (the method's own systematic error is ≈ ±10 ms).")
+    else:
+        obs.append("Velocity-based Altos−LiDAR timing check: no window had enough radial motion of one target.")
     return obs
 
 
@@ -163,6 +210,13 @@ def overview_table(D) -> str:
     other = [
         ("Camera", f"ZED 2i, {len(C['frame_index']):,} frames, {C['status'].get('fps', '–')} fps nominal"),
         ("LiDAR", f"RS-Fairy, {len(L['sweep_t']):,} sweeps"),
+    ]
+    if D.get("altos") is not None:
+        st = altos_settings(D)
+        other.append(("Altos V4", f"{len(D['altos']['t']):,} frames; profile {st['profile']}, threshold "
+                                  f"{st['threshold']}, FPS limit {st['fps_limit']} (serial {st['serial']}, "
+                                  f"firmware {st['firmware']})"))
+    other += [
         ("Offsets file", (D['align'].get('offsets_file') or '–').split('/')[-1]),
         ("Report generated", time.strftime("%Y-%m-%d %H:%M")),
     ]
@@ -181,9 +235,12 @@ def fig_html(b64, caption) -> str:
 
 
 def build(D) -> str:
+    has_altos = D.get("altos") is not None
     key = ('<span class="key"><span><span class="sw" style="background:var(--radar)"></span>radar</span>'
            '<span><span class="sw" style="background:var(--lidar)"></span>LiDAR</span>'
-           '<span><span class="sw" style="background:var(--camera)"></span>camera</span></span>')
+           '<span><span class="sw" style="background:var(--camera)"></span>camera</span>' +
+           ('<span><span class="sw" style="background:var(--altos)"></span>Altos</span>' if has_altos else '') +
+           '</span>')
     S = []
     S.append(("overview", "Overview", overview_table(D) +
               "<h3>Observations</h3><ul class='obs'>" + "".join(f"<li>{html.escape(o)}</li>" for o in observations(D)) +
@@ -203,7 +260,12 @@ def build(D) -> str:
                        "data: in each 30 s window with enough radial motion of one target, the radar Doppler "
                        "velocity at the LiDAR target's range is fitted to the LiDAR range rate. 0 means "
                        "consistent with the Stage 3 offsets. Velocity is used because range comparisons depend "
-                       "on which body part each sensor sees.")))
+                       "on which body part each sensor sees.") +
+              (fig_html(F.velocity_check(D, "altos"), "The same check for the Altos: the median Doppler of its "
+                        "moving points near the LiDAR target (within 0.6 m in range and 20° in azimuth: its mounting "
+                        "is not calibrated) fitted to the LiDAR range rate. Adding the weighted residual to "
+                        "altos_ms in calibration/stage3_offsets.json would align the Altos with the LiDAR.")
+               if has_altos else "")))
     S.append(("radar", "Radar",
               fig_html(F.radar_range_time(D), "Moving returns over range and time. Static clutter is removed "
                        "inside each frame (mean over the 64 chirp loops), then each range bin is shown relative "
@@ -216,6 +278,20 @@ def build(D) -> str:
               fig_html(F.radar_profiles(D), "Left: static-scene range profile (all Doppler) and the median "
                        "moving-only profile, which approximates the noise floor; vertical line: high-pass floor. "
                        "Right: mean level per virtual channel.")))
+    if has_altos:
+        S.append(("altos", "Altos V4 radar",
+                  '<div class="caveat">A processed point cloud: every point is one detection (range, Doppler, '
+                  'azimuth, elevation, SNR) made inside the radar. Points are in the Altos\'s own frame (x forward, '
+                  'y left, z up); its mounting on the rig is not calibrated yet. Times: arrival of each frame\'s first '
+                  'packet, de-jittered (align_session.py); points: sync/altos_points.npz.</div>' +
+                  fig_html(F.altos_points(D), "Points per frame over the session, and the moving ones among them.") +
+                  fig_html(F.altos_maps(D), "Accumulated points: top view (forward up, left on the left; lines: "
+                           "the Altos's ±75° field of view) and side view (lines: ±15°). Points far outside the "
+                           "scene's walls or under the ground are reflections (multipath, floor bounces).") +
+                  fig_html(F.altos_distributions(D), "Distributions of the points' range, azimuth, elevation, SNR "
+                           "and Doppler, per frame.") +
+                  fig_html(F.altos_range_time(D), "Moving points over range and time, with the LiDAR's single-target "
+                           "track: a person walking appears as a band along the orange track.")))
     S.append(("lidar", "LiDAR",
               fig_html(F.lidar_maps(D), "Left: accumulated bird's-eye view (forward up, vehicle-left on the "
                        "left; blue lines: radar ±60° field of view). Right: points by direction and range; a "
@@ -229,14 +305,16 @@ def build(D) -> str:
               fig_html(F.camera_imu(D), "ZED 2i IMU magnitudes; shows whether the rig was static.")))
     S.append(("cross", "Cross-sensor",
               fig_html(F.range_overlay(D), "Range of the moving target seen by radar (strongest moving return "
-                       "above its range bin's floor) and LiDAR (single-target track), on the common time base.") +
+                       "above its range bin's floor) and LiDAR (single-target track), on the common time base" +
+                       ("; below, the Altos's moving points at the LiDAR target." if has_altos else ".")) +
               '<div class="caveat">Radar bird\'s-eye views use the current processing\'s azimuth with its sign '
               'mirrored (verified against camera and LiDAR on freewalk_ref_02), with the measured array layout '
               '(2026-11-07): ~1-2 deg against the LiDAR on a walker, ~0.4 deg on a corner reflector. Without '
               'TDM Doppler compensation here, a moving target\'s angle is less precise.</div>' +
               fig_html(F.snapshots(D), "Paired snapshots at six moments: camera frame, LiDAR sweep (top view, "
-                       "−1.2…2.2 m height), radar bird's-eye view and radar range–Doppler map, all for the same "
-                       "radar frame. Circle: the LiDAR target. Δ: time difference to the radar frame. Radar BEV colour "
+                       "−1.2…2.2 m height), radar bird's-eye view and radar range–Doppler map" +
+                       (", and the paired Altos frame (top view, its own frame; yellow: moving points)" if has_altos else "") +
+                       ", all for the same radar frame. Circle: the LiDAR target. Δ: time difference to the radar frame. Radar BEV colour "
                        "scale starts 3 dB above that frame's median (its noise floor). Note how a single person "
                        "appears as an arc spanning much of the field of view: the radar's angular focusing is weak "
                        "with the current (uncalibrated) channel processing, while its range is sharp.")))
@@ -246,5 +324,5 @@ def build(D) -> str:
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'><title>{html.escape(title)}</title>"
             f"<style>{CSS}</style></head><body><header><h1>{html.escape(D['session'])}</h1>"
-            f"<div class='sub'>Three-sensor recording report · {html.escape(str(D['meta'].get('started_local')))} · "
+            f"<div class='sub'>{'Four' if has_altos else 'Three'}-sensor recording report · {html.escape(str(D['meta'].get('started_local')))} · "
             f"{key}</div></header><nav>{nav}</nav><main>{body}</main></body></html>")

@@ -25,6 +25,7 @@
 | Cascade radar: 2 × AWR2243 + AM273x MSS, DCA1000 capture board | DCA1000 Ethernet → **onboard** Ethernet | Needs a **full 12 V supply**: on a weak supply it accepts commands but sends no data. Firmware in QSPI streams at power-on. |
 | RoboSense RS-Fairy LiDAR | Ethernet → **USB-Ethernet adapter** (ASIX AX88179, MAC 00:0E:C6:BC:78:54) | 10 Hz, 100 Mbit link |
 | Stereolabs ZED 2i | USB | 30 fps, SVO2 lossless |
+| Altos V4 imaging radar (fourth sensor, 2026-11-17) | 100BASE-T1 → the harness's media converter → RJ45 → a **second USB-Ethernet adapter** | 15 fps, processed point cloud (UDP multicast). Power 9–36 V; the guide asks for a supply > 25 W: the **15 V / 4 A** adaptor (not the 1.5 A one), plug 5.5 × 2.5 mm. Boots in 10–20 s. See `altos_standalone_capture/README.md`. |
 
 ## Network (NetworkManager)
 
@@ -32,8 +33,20 @@
 |---|---|---|---|
 | Radar | "Wired connection 2" | 192.168.33.30/24 | DCA1000 192.168.33.180 (config UDP 4096, data UDP 4098) |
 | LiDAR | "lidar-usb-eth" | 192.168.34.30/24, never-default | LiDAR 192.168.34.200: MSOP 6699, DIFOP 7788, IMU 6688; web UI http://192.168.34.200 |
+| Altos V4 | "altos-usb-eth" | 192.168.3.1/24, never-default | Radar 192.168.3.10 (its factory address): data UDP multicast 224.1.2.4:4040; web UI http://192.168.3.10:3000 (settings), :8080 (firmware) |
 
-- **Both profiles are bound by MAC address, not interface name.** `eth0` and
+**The Altos keeps its factory addresses (decided 2026-11-17).** 192.168.3.x
+is distinct from every subnet in use: TI radar 192.168.33.x, LiDAR
+192.168.34.x, Wi-Fi 192.168.1.x and the hotspot 192.168.50.x. Nothing is
+changed on the radar. Its multicast group is joined on 192.168.3.1 only, so
+it cannot reach the other ports. The address must be on the Altos's own
+adapter; without the profile, the recorder and the live view refuse to
+start ("Cannot join 224.1.2.4").
+
+On `ibrahim-desktop` (2026-11-15/16) the Altos was on `eth0`, alongside the
+DCA profile, with a temporary `sudo ip addr add 192.168.3.1/24 dev eth0`.
+
+- **All sensor profiles are bound by MAC address, not interface name.** `eth0` and
   `eth1` swap depending on whether the USB adapter is present at boot. A
   profile bound to a name silently fails to start.
 - Radar profile: onboard MAC 3C:6D:66:17:8F:E4. **These MACs belong to this

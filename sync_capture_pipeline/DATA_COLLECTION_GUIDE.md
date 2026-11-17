@@ -20,6 +20,9 @@ ride**).
 
 ### Power — check this first
 
+The Altos radar runs on its **15 V / 4 A** adaptor; the 1.5 A one is too
+weak. It needs 10–20 s to boot.
+
 The radar board needs a **full 12 V supply**. On a weak supply (such as a
 partly discharged power bank) the radar accepts every command and reports
 success, but sends **no data**. No error appears anywhere except the radar
@@ -31,6 +34,7 @@ packet rate.
 |---|---|
 | DCA1000 (radar capture board) | Ethernet → Jetson onboard port |
 | LiDAR | Ethernet → USB-Ethernet adapter → Jetson |
+| Altos radar | its harness's media converter → a **second** USB-Ethernet adapter → Jetson |
 | ZED 2i camera | USB → Jetson |
 | SD card (1 TB) | Jetson SD slot. **Insert before powering on, never remove while recording** |
 | iPad | Same Wi-Fi as the Jetson |
@@ -39,7 +43,7 @@ packet rate.
   The LiDAR was once found turned 57° after being reconnected, which ruins
   its data for pairing. If any sensor was moved or remounted, tell the team
   responsible for calibration.
-- **Power-on order:** radar 12 V + DCA1000 → LiDAR → Jetson. The radar starts
+- **Power-on order:** radar 12 V + DCA1000 → LiDAR → Altos → Jetson. The radar starts
   streaming by itself at power-on. No laptop is needed.
 - Nothing needs to be typed on the Jetson. Network settings, the SD card
   mount, the web page and the system settings all start automatically.
@@ -76,7 +80,7 @@ the iPad".
 | **Note** | What is being recorded: route, weather, traffic, anything unusual. **Always fill this in**; you will not remember later. |
 | **Duration (s)** | `0` = record until you press **Stop**. Any other value = stops by itself after that many seconds (Stop still works earlier). |
 | **Countdown (s)** | Delay before recording starts, to get ready or get on the bike. |
-| **Sensors** | Leave all three ticked. |
+| **Sensors** | Leave all four ticked: Radar, Camera, LiDAR, Altos radar. |
 | **Stage 3 calibration guide** | **Leave OFF.** Only for timing calibration (section 5). |
 
 Press **Start recording**. The tap also enables sound on the iPad.
@@ -84,7 +88,7 @@ Press **Start recording**. The tap also enables sound on the iPad.
 ### What you see and hear
 
 1. **Countdown** (if set), then **"Starting sensors…"** for about 15 s. The
-   LiDAR and camera start first; the radar starts last.
+   LiDAR, camera and Altos start first; the radar starts last.
 2. **One long beep = recording.** The banner shows elapsed time (and the set
    duration).
 3. **Live status cards**, updated every second:
@@ -94,6 +98,7 @@ Press **Start recording**. The tap also enables sound on the iPad.
    | Radar | about **17,300 packets/s**. Below 5,000 it turns red (see section 4). |
    | Camera | about **30 fps**, few or no gaps |
    | LiDAR | packets flowing, **0 lost** |
+   | Altos radar | about **15 frames/s**, **0 lost, 0 restarts**. Red below 12 frames/s, or on any lost frame or restart |
    | Board (Jetson) | temperature OK (warns at 80 °C, refuses to start at 90 °C) |
 
 4. **Three short beeps = recording ended**: the duration was reached, you
@@ -195,6 +200,8 @@ aligning the sensors, for example with a corner reflector on a stand.
 | **Radar 0 packets/s**, or HINT "DCA1000 not responding" | Check the radar's **12 V supply** and the DCA1000 Ethernet cable. Power-cycle the radar and DCA1000. |
 | **Radar below 5,000 packets/s** (card red; e.g. ~900 or ~3,000/s), or the session **stops by itself** with HINT "radar data rate too low (DCA1000 throttled)" | Rare DCA1000 start-up fault: it sends too slowly, buffers the radar data, then stops capturing. The launcher stops the session automatically after 5 s of low rate. **Power-cycle the radar + DCA1000** (12 V off, wait 10 s, on) and start a new session. |
 | HINT "no LiDAR data" | LiDAR power and the USB-Ethernet adapter. |
+| HINT "no Altos radar data", or "PREFLIGHT FAILED: Altos radar does not answer" | The Altos's power (15 V / 4 A adaptor; it needs 10–20 s to boot), its connector and media converter, and its USB-Ethernet adapter. To record without it, untick **Altos radar**. |
+| Altos card red with **restarts** | The Altos restarted during the session: a power dip, or someone changed its settings. Don't change its settings while recording. The session check fails it. |
 | HINT "camera not detected" | Unplug and replug the ZED USB cable, start again. |
 | HINT "SD card not found" | Insert the card fully. If it was removed while the Jetson ran, reinserting is enough; no commands are needed. |
 | HINT "storage full" | Copy finished sessions off, then delete them. |
@@ -324,7 +331,9 @@ Delete sessions from the card only after the copy has been checked.
   radar/              frame_*.bin (3,145,728 B each), frames.csv
   camera/             camera.svo2, capture/frames.csv, IMU, calibration
   lidar/              lidar.pcap, clock_map.csv, stats.csv, metadata.json
-  sync/               (after align_session) pairs.csv, timelines, alignment.json
+  altos/              altos.pcap, frames.csv, stats.csv, clock_map.csv, metadata.json
+  sync/               (after align_session) pairs.csv, timelines, alignment.json,
+                      altos_timeline.csv, altos_points.npz (every Altos point with its time)
 ```
 
 Radar frame format: int16 little-endian, **I first**,

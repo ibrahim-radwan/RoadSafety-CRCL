@@ -18,6 +18,7 @@ own Wi-Fi hotspot: join `JetsonHotSpot` and open
 | Camera | ZED 2i left image, 640 × 360 (live: HD720 at 15 fps, no depth) | 5 /s | ~28 kB |
 | LiDAR | The replay's top view (`replay/sources.py` `render_lidar`): forward up, vehicle-left on the left, coloured by height above our local ground. Optional overlay of the radar detections | 4 /s | ~16 kB |
 | Radar | Range–azimuth fan with our detections (`perception/radar.py`): the **stationary** map (zero Doppler, no clutter removal; shows a corner reflector) or the **moving-target** map | 4 /s | ~28 kB |
+| Altos | `live/altos_live.py`: the last 5 frames (1/3 s) as a top view in the same extent, in the Altos's **own** frame (its mounting isn't calibrated). Still points grey, moving ones blue (approaching) or red (receding). Strongest points marked | 4 /s | small |
 
 That is about 0.3 MB/s (~2.6 Mbit/s) over the Wi-Fi, measured on
 `freewalk_ref_02`. The LiDAR and radar views share one extent
@@ -35,6 +36,11 @@ range window you set on the page:
   intensity percentile (at least 100 of 255) are binned in 0.5 m cells, and
   the cell with the highest summed intensity wins. Corner reflectors are by
   far the brightest LiDAR returns.
+- **Altos:** the strongest 0.5 m cell of its newest frame, by summed SNR,
+  in its own frame. Calibration captures save its next 2 s
+  (`<set>/<position>/altos/`: `frames.npz`, `meta.json`; for a position,
+  `reflector.json`). The reflector is the strongest cell the set's saved
+  background didn't have (0.3 m cells); tested on a recording only.
 - **Radar − LiDAR:** the range and azimuth difference. If the two points
   are more than 1.5 m apart, the row says they are probably not the same
   object.
