@@ -1,42 +1,95 @@
 # Notes for the research team
 
 The current state of the system, and what to know when recording and
-processing. Updated 2026-11-17. Earlier versions of this file are in git
+processing. Updated 2026-11-23. Earlier versions of this file are in git
 history.
 
 ## What to do now
 
-1. **Pull the latest `main`** on the rig and on the processing machines.
-   On the rig, then restart the web page's service
-   (`sudo systemctl restart capture-web`), or the iPad page stays on the old
-   version. Then re-run, on every session you have:
-   `python make_report.py --session <s>` and
-   `python run_perception.py --session <s>`.
-   The radar and LiDAR outputs have changed (see "New since your
-   questions").
-2. **Connect the Altos V4 radar to the rig** as a fourth sensor: follow
-   "Connecting the Altos to the rig" in the next section, step by step.
-3. **Mark the LiDAR's housing and its collar** so that any turn shows. The
-   housing can turn in its collar.
-4. **Record a calibration set on the wheeler, as mounted.** Record the empty
-   scene first, as a session named `background`. Then record the reflector
-   positions in the same folder, without moving the vehicle. If anything is
-   remounted later, record a new set. Mount the Altos before recording the
-   set, so it is in the set too.
-5. **Record a 10–15 minute pilot, with all four sensors, and share it with
-   us before collecting at scale.** It should contain:
-   - the calibration set;
-   - about a minute of someone walking towards and away from the stopped
-     wheeler (a timing check; for the Altos it also sets its time offset);
-   - a ride at mixed speeds;
-   - a few stops.
-6. **We check the pilot and send feedback or corrections:** data health,
-   sync and calibration on the vehicle, detection on real roads, and the
-   Altos's time offset, which we add to the offsets file. Then
-   you record more and share it, and we keep feeding back.
+1. **Update the rig.** On the Jetson, from the repository folder:
+   `git pull`, then `sudo systemctl restart capture-web`, then reload the
+   iPad page. (With the hotspot on, connect the Jetson to the internet for
+   the pull first: `docs/knowledge/02_hardware_and_network.md`, "Wi-Fi for
+   the iPad".)
+2. **Make room on the Jetson's internal disk** (where the camera records
+   during a session). On the road the camera writes about **17 GB per
+   hour**.
+   - `df -h /` shows the free space. Aim for **25 GB or more**: about 1 h of
+     road recording.
+   - `ls ~/camera_stage` should be empty. Anything in it is camera data
+     from a session whose move to the SD card failed: **don't delete it**,
+     tell us.
+   - Don't delete recordings to make room; ask us first.
+3. **Test recording 1: 2 minutes, all four sensors, standing still.**
+   After the stop, the page shows **Session notes: PASS** within seconds,
+   and Start works again straight away.
+4. **Test recording 2: a ride of 20–30 minutes.** At start the log says how
+   many minutes the internal disk holds. If it fills, the session stops by
+   itself, cleanly, and its data are complete.
+5. **Run the full check on both**, on the Jetson, when it is not recording:
+
+   ```bash
+   conda activate rel_1_py_3_8
+   cd <repository folder>/sync_capture_pipeline
+   S=/mnt/sdcard/sessions/<name>
+   python ../camera_standalone_capture/ZED_2i_Sensor/verify_svo.py --session $S
+   python check_session.py --session $S > $S/check_session.txt
+   ```
+
+   `verify_svo.py` decodes every camera frame: about half the recording
+   time. `check_session.txt` ends with **PASS** or **FAIL**.
+6. **Run the same two commands on `run_20261123_1619`** (the 18-minute
+   session that stopped when the internal disk filled). Its radar, LiDAR
+   and Altos data are complete; this checks its camera file. Keep the
+   session.
+7. **Send us**, for the two tests and `run_20261123_1619`: `session.json`,
+   `session.log`, `session_notes.txt`, `check_session.txt` and
+   `camera/svo_verification.json`. They are small text files.
+8. **Then the calibration set and the pilot,** as before:
+   - mark the LiDAR's housing and its collar, so any turn shows;
+   - record a calibration set on the wheeler as mounted: the empty scene
+     first, as a session named `background`, then the reflector positions
+     in the same folder, without moving the vehicle. Mount the Altos first,
+     so it is in the set too. If anything is remounted later, record a new
+     set;
+   - record a 10–15 minute pilot with all four sensors: the calibration
+     set, about a minute of someone walking towards and away from the
+     stopped wheeler (a timing check; it also sets the Altos's time
+     offset), a ride at mixed speeds, a few stops. Share it with us before
+     collecting at scale;
+   - we check it (data health, sync and calibration on the vehicle,
+     detection on real roads, the Altos's time offset) and send feedback.
+
+**Copying sessions:** run the full check (step 5) on the copy as well.
+`check_session.py` runs on any machine with Python; `verify_svo.py` needs
+the ZED SDK. Copies to a Windows drive have arrived damaged while the
+originals on the SD card were complete.
 
 Meanwhile, please try the live view's calibration capture on the rig. So
 far it is tested only on playback.
+
+## Recording long sessions
+
+- **The Jetson's internal disk sets the longest session:** about 1 h of
+  road recording per 23 GB free (indoors 4–8 times longer).
+  - At start, the log gives the minutes available, with a warning below
+    30 min.
+  - It warns at 10 and 3 min left. Then it stops every sensor in order:
+    the data are complete. The page shows a HINT, and the notes say
+    "session stopped early, cleanly: storage limit".
+- **After every session: the session notes** (`session_notes.txt`),
+  written in seconds. They list what each recorder reported: losses,
+  camera gaps (how many, the longest and when, per minute), temperature
+  and stop reason. The page shows their **PASS** or **FAIL**, marked
+  "(notes)" in the session list.
+- **The full check** (step 5 above) reads all the data again and decodes
+  the camera file. Run it after the recording day, before the data are
+  used. The session list then shows its result.
+- **Camera gaps** of 0.1–0.5% are normal. Above 1% the check fails. The
+  notes say when the gaps happened.
+- **A session can stop within a second of the radar starting**, with the
+  HINT "the radar capture began in the middle of a radar frame". It happens
+  now and then at start. Start a new session; no power-cycle is needed.
 
 ## The Altos V4 radar (fourth sensor)
 
@@ -106,8 +159,7 @@ On the rig's Jetson, in a terminal, from the repository folder:
    people in blue or red.
 9. **Make a 30 s test recording** with all four sensors ticked.
    - The Altos card should read about **15 frames/s, 0 lost, 0 restarts**.
-   - `check_session` should say **PASS**.
-   - Then go on with the calibration set and the pilot (steps 4–5 above).
+   - The session notes should say **PASS**.
 
 If the session refuses to start with "Altos radar does not answer": check
 its power, its connector, and that 192.168.3.1 is on its adapter
@@ -312,8 +364,10 @@ camera: range, speed, timing and angle conventions.
 **Camera (ZED 2i)**
 
 - Recorded as lossless H.264 SVO2; images are extracted offline.
-- Dropped frames: typically 0.2–0.3%, single frames, listed in
+- Dropped frames: typically 0.1–0.5%, mostly single frames, listed in
   `capture/timing/camera_gaps.csv` and flagged in `sync/pairs.csv`.
+- `camera/svo_verification.json` (from `verify_svo.py`): every frame of the
+  SVO2 decoded and its time checked.
 
 **Synchronisation**
 
