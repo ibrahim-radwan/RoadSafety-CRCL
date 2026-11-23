@@ -12,6 +12,10 @@ Each item cost real debugging time. Read before changing the related code.
 - **`uart_uniflash.py` can exit 0 on failure.** Read its output after flashing.
 - **The DCA1000 can come up throttled.** Power-cycle the radar + DCA1000; the
   watchdog stops such sessions.
+- **The radar capture can start mid-frame** (about 1 start in 10). Every frame
+  then straddles two radar frames. The launcher stops such a session within a
+  second; start a new one (no power-cycle). See
+  [03](03_radar_firmware_and_dca.md).
 - **The LiDAR can be knocked out of alignment.** Check it faces forward.
 - **A round LiDAR shows no "forward".** The RS-Fairy's 0° is its encoder's,
   and the cylinder sits in a round collar. The team mounted it "facing
@@ -94,6 +98,12 @@ Each item cost real debugging time. Read before changing the related code.
 ## Camera
 - **Share a disk with the radar and the camera drops frames.** Stage the camera
   on its own disk.
+- **Lossless video size depends on the scene.** 2–4 GB/h indoors, 16.6 GB/h
+  on the road; a budget measured indoors (3.9 GB/h) let the eMMC fill after
+  18 min on the first long road session (2026-11-23). Measure data rates in
+  the conditions of use.
+- **Don't do slow checks at the end of a session.** The SVO2 decode check
+  (~0.6× the recording time) held up the next session; it now runs offline.
 - **`pyzed.grab()` holds the GIL.** Run the camera in its own process.
 - **Lossless H.264 decodes at only ~40–50 fps.**
 
@@ -217,6 +227,10 @@ Each item cost real debugging time. Read before changing the related code.
 ## Analysis
 - **A clean PASS from `check_session` doesn't prove timing.** Use Stage 3 or
   the velocity check.
+- **Copies can be damaged where the originals are not.** Two of the team's
+  sessions checked from a Windows drive (2026-11-18/19) showed
+  `WinError 1392`, a truncated `lidar.pcap` and missing radar frames; the
+  recorder logs on the rig were clean. Run the full check on the copy.
 - **When there is no ground truth, score one sensor against another.** The
   radar false-alarm proxy is the share of confirmed radar tracks with no LiDAR
   object nearby; that is how the multipath ghosts were found. But a

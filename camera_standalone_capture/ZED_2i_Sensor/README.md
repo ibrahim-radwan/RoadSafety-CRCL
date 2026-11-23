@@ -44,7 +44,7 @@ You only start `recorder.py`; it calls the exporter automatically when
 `recording.auto_export: true` and capture has finalized successfully.
 
 1. **During recording:** save `camera.svo2`, timestamped IMU/sensor CSVs and calibration.
-2. **After Ctrl+C or the configured `--duration`:** stop acquisition, drain pending writes and finalize/verify the archive.
+2. **After Ctrl+C or the configured `--duration`:** stop acquisition, drain pending writes, finalize the archive and check its frame count. Decoding every frame to verify it (~0.6x the recording time) runs at stop only with `recording.verify_after_stop: true`; otherwise run `python3 verify_svo.py --camera-dir <folder>` (or `--session <session>`) afterwards. It writes `svo_verification.json` and never changes the recording.
 3. **After successful finalization:** `export.py` replays the archive and creates the PNG streams, sensor copies and calibration under `export/`.
 
 | How you run it | When are PNG files written? |

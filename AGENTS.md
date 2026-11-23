@@ -52,7 +52,8 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   capture_session.py            three-sensor launcher (preflight, watchdogs, session.json)
   dca_capture_radar_sync.py     radar receiver (DCA1000 control + UDP, frames.csv), stdlib only
   align_session.py              offline alignment -> sync/*_timeline.csv, pairs.csv, alignment.json
-  check_session.py              completeness check, PASS/FAIL (stdlib only)
+  check_session.py              completeness check, PASS/FAIL (stdlib only); --quick = the session notes
+                                the launcher writes at stop (session_notes.txt), the full check offline
   measure_sync_offset.py        Stage 3 offset measurement (plate routine)
   make_report.py, report/       descriptive HTML session report (no verdicts) + data collection
   perception/                   THE processing library: core/ (config, readers, calibration, session,
@@ -81,7 +82,7 @@ sync_capture_pipeline/          <- MAIN CODE: capture, sync, validation, report,
   handover/                     briefs sent to the Windows firmware-build agent
   legacy/                       superseded originals, kept for reference
   sessions/                     OLD eMMC recordings (git-ignored)
-camera_standalone_capture/ZED_2i_Sensor/   ZED recorder (recorder.py, config.yaml)
+camera_standalone_capture/ZED_2i_Sensor/   ZED recorder (recorder.py, config.yaml); verify_svo.py = offline SVO2 decode check
 altos_standalone_capture/                  Altos V4 radar: recorder (used by capture_session), packet format, checker,
                                            3D viewer, settings switch, room analysis
 lidar_standalone_capture/                  LiDAR raw recorder + checker

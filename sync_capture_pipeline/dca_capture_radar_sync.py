@@ -248,6 +248,13 @@ class Receiver(threading.Thread):
                 self.bursts += 1
                 if abs(self._burst_offset) > ADC_BYTES:
                     self.misaligned_bursts += 1
+                    if self.misaligned_bursts == 1:
+                        # Said at once (the launcher stops on it): a steady
+                        # offset from the 2nd burst on means the DCA began
+                        # capturing mid-frame and EVERY frame straddles two.
+                        when = "at start" if self.bursts <= 3 else "mid-session"
+                        print(f"  WARNING: radar frames misaligned {when}: burst {self.bursts} starts "
+                              f"{self._burst_offset:+,} B from a frame boundary", flush=True)
             while len(self._buf) >= FRAME_BYTES:
                 fn = f"frame_{self.frames:06d}.bin"
                 start = self.frames * FRAME_BYTES

@@ -37,7 +37,8 @@ SCHEMA = {
     'depth': {'mode', 'confidence_threshold', 'texture_confidence_threshold', 'stabilization', 'min_distance_m', 'max_distance_m'},
     'tracking': {'enabled', 'imu_fusion', 'area_memory', 'pose_smoothing'},
     'sensors': {'poll_rate_hz', 'poll_window_fraction', 'magnetometer', 'barometer', 'temperature'},
-    'recording': {'dataset_root', 'session_prefix', 'compression', 'auto_export', 'min_free_space_gb', 'csv_queue_records'},
+    'recording': {'dataset_root', 'session_prefix', 'compression', 'auto_export', 'min_free_space_gb', 'csv_queue_records',
+                  'verify_after_stop'},
     'export': {'point_cloud', 'png_compression', 'include_depth'},
     'runtime': {'open_timeout_sec', 'warmup_sec', 'status_interval_sec', 'grab_failure_timeout_sec'},
     'images': {'enabled', 'streams', 'format', 'workers', 'queue_frames', 'png_compression', 'jpeg_quality', 'writer_backend'},
@@ -71,7 +72,7 @@ def validate_config(config):
 
     for section, fields in {
         'camera': ['disable_self_calibration'], 'tracking': ['enabled', 'imu_fusion', 'area_memory', 'pose_smoothing'],
-        'sensors': ['magnetometer', 'barometer', 'temperature'], 'recording': ['auto_export'],
+        'sensors': ['magnetometer', 'barometer', 'temperature'], 'recording': ['auto_export', 'verify_after_stop'],
         'export': ['point_cloud', 'include_depth'], 'images': ['enabled']
     }.items():
         for field in fields:

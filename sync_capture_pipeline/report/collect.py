@@ -52,11 +52,14 @@ def collect_meta(S: Path) -> dict:
     align = json.loads((S / "sync" / "alignment.json").read_text())
     variant, how = radar_firmware.session_variant(S)
     fw = dict(radar_firmware.firmware_map().get(variant, {}))
-    check = (S / "check_session.txt").read_text() if (S / "check_session.txt").is_file() else ""
+    # The full check once it has been run; until then the session notes (quick check).
+    src = next((f for f in ("check_session.txt", "session_notes.txt") if (S / f).is_file()), None)
+    check = (S / src).read_text() if src else ""
     verdict = re.search(r"^\s+(PASS|FAIL)\b.*$", check, re.M)
     warn = re.findall(r"^\s+- (.+)$", check.split("VERDICT")[-1], re.M) if "VERDICT" in check else []
     return {"session": S.name, "path": str(S), "meta": meta, "align": align, "fw_variant": variant,
-            "fw_source": how, "fw": fw, "check_line": verdict.group(0).strip() if verdict else None,
+            "fw_source": how, "fw": fw, "check_line": ((verdict.group(0).strip() + (" (session notes: quick check)" if src == "session_notes.txt" else ""))
+                           if verdict else None),
             "check_items": warn}
 
 

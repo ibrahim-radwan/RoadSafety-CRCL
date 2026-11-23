@@ -1,4 +1,4 @@
-# Project status and roadmap (updated 2026-11-07)
+# Project status and roadmap (updated 2026-11-23)
 
 ## Where the project stands
 
@@ -11,9 +11,9 @@ hardware:
 | Radar firmware | `r075m_v2_8fps` flashed (8 fps, 2.62–75 m). All 20 variants rebuilt with the DSS-L3 memory-init fix. See [03](03_radar_firmware_and_dca.md). |
 | Capture | Three-sensor launcher with preflight checks, board-temperature monitoring and a radar-rate watchdog; iPad web control. See `sync_capture_pipeline/DATA_COLLECTION_GUIDE.md`. |
 | Live view | iPad page card for the extrinsic alignment (2026-10-31): camera, LiDAR top view, radar map with detections, strongest reflector per sensor; nothing saved; never together with recording; off after 10 min. **Working on the rig (team, 2026-11-05):** hotspot set up, live view runs, recording works. See `sync_capture_pipeline/live/README.md`. |
-| Storage | 1 TB SD card (ext4), camera staged on the eMMC; 0.2% camera drops. See [04](04_storage_and_recording.md). |
+| Storage | 1 TB SD card (ext4), camera staged on the eMMC; 0.1–0.5% camera drops. The eMMC limits session length (~1 h of road camera per 23 GB free); the launcher stops a session cleanly before it fills. See [04](04_storage_and_recording.md). |
 | Synchronisation | Offline alignment on CLOCK_MONOTONIC. **Stage 3 offsets measured**: radar +12.65 ± 1.45 ms, camera +23.34 ± 3.28 ms (LiDAR reference). Applied automatically. See [07](07_synchronisation_and_stage3.md). |
-| Validation | `check_session.py` (completeness, pass/fail) runs after every session. `make_report.py` produces a descriptive HTML report per session, with no verdict. |
+| Validation | Session notes after every session (`check_session.py --quick`, seconds); the full check (`verify_svo.py`, then `check_session.py`) offline. `make_report.py` produces a descriptive HTML report per session, with no verdict. |
 | Replay | One window, six panels (camera, LiDAR, LiDAR 3D, radar BEV, range-Doppler, objects), each can be maximised; bird's-eye views fill their panels; live GPU detection and tracking on radar and LiDAR; event strip; radar point cloud (detections, raw). See `sync_capture_pipeline/replay/README.md`. |
 | Processing and detection | One PyTorch library, `sync_capture_pipeline/perception/`, plus `run_perception.py`: radar signal-processing stages (`radar_dsp.py`), GPU radar CFAR (TDM Doppler compensation, in-situ phase correction, multipath-ghost flags), GPU LiDAR objects (local ground, overhead structures removed), Doppler-aware tracking. Scored against the LiDAR walker: see `perception/README.md`. The old radar chain was merged in and deleted on 2026-10-25 (below). |
 | Tests | `sync_capture_pipeline/tests/`: report, perception, baseline (golden frames: ours, and the old chain's frozen outputs) and radar-stage tests. Session tests need the reference sessions and skip if absent. |
@@ -193,6 +193,45 @@ and keeps its factory addresses (02).
   radar data.
 
 See `altos_standalone_capture/README.md`.
+
+## Long sessions: storage, session notes (2026-11-23)
+
+The team's first sessions with all four sensors (11 sessions, 18–23 Nov,
+logs only) raised four points: the eMMC filling on long sessions, the check
+holding up the next session, checkpoints during a session, camera drops.
+
+- **Found in their logs:**
+  - the one long road session (18 min) stopped when the eMMC filled: the
+    camera writes 16.6 GB/h on the road (2–4 indoors; the budget was 5), and
+    only 8.3 GB were free;
+  - the end-of-session wait was mostly the ZED decoding every frame (~0.6×
+    the recording time);
+  - camera drops were 0.1–0.5% in every session, all under the 1% limit;
+  - two sessions were damaged in the copy to a Windows drive;
+  - one session (`check`) had its radar capture start mid-frame
+    ([03](03_radar_firmware_and_dca.md)).
+- **Done (step 2 of the plan):** the camera budget is 20 GB/h; an eMMC
+  watchdog stops all sensors cleanly before it fills (warnings at 10 and
+  3 min); local time on every log line; session notes
+  (`session_notes.txt`, `check_session.py --quick`) written by the launcher
+  in seconds; the SVO2 decode moved to `verify_svo.py` (offline, required by
+  the full check); the launcher stops a session whose radar capture starts
+  mid-frame. Tested on synthetic sessions and with a stand-in ZED (the
+  watchdog); `test_session_notes.py`.
+- **Not yet verified on the rig:** a real ZED recording with
+  `verify_after_stop: false` (how long the frame-count check takes on a
+  large SVO2) and `verify_svo.py` on a real SVO2; the misalignment stop on a
+  real start.
+- **Next:**
+  - salvage `run_20261123_1619`: `verify_svo.py` on it (radar, LiDAR and
+    Altos are complete; the camera's SVO2 was closed but not verified);
+  - **step 3: camera segments + a background mover to the SD card +
+    checkpoints** (`checkpoints.jsonl`, flushed files at each), for sessions
+    longer than the eMMC holds; measure the frames lost at each switch and
+    the drops while the mover runs;
+  - an NVMe drive (the owner's decision: fstab);
+  - a file list with sizes at stop, so copies can be checked;
+  - re-cutting a mid-frame radar session offline (no bytes are lost).
 
 ## Open items and ideas
 

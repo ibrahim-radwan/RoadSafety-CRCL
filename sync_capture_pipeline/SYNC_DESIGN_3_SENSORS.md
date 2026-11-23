@@ -285,17 +285,21 @@ starts last:
 
 **Stop order.** The radar stops first, then a trailing window, then the
 ZED and the LiDAR. Every stop is a SIGINT, so each recorder finalises
-cleanly. The ZED's post-capture SVO2 verification takes about 0.55× the
-recording time, and the launcher must wait for it.
+cleanly. The ZED checks the finalized SVO2's frame count; since
+2026-11-23 its frame-by-frame decode (about 0.55× the recording time,
+which held up the next session) runs offline in `verify_svo.py`, part of
+the full check. The launcher then writes the session notes
+(`check_session.py --quick`, seconds).
 
 **Live health.** One line per second, teed to `session.log`:
 
 - radar packets/s
 - camera FPS and gaps
 - LiDAR packets/s and losses
-- free disk space
+- free disk space, on the SD card and on the camera staging disk
 
-Abort cleanly if any sensor goes silent.
+Abort cleanly if any sensor goes silent, a disk runs low, or the radar
+capture starts mid-frame.
 
 **Manifest.** Clock pairs (monotonic and wall clock) at start and stop,
 config snapshots, the git state of each tool, and exit codes. Since

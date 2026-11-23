@@ -1,8 +1,21 @@
 """
 check_session.py — validate a capture_session.py session (TI radar, camera, LiDAR, Altos V4).
 
-Run it on return, BEFORE the next session. A clean exit is the condition
-for keeping the data. (The radar + D455 version is in legacy/.)
+Two modes (2026-11-23):
+
+    --quick   SESSION NOTES. Reads only what the recorders wrote about
+              themselves (manifests, metadata, frame ledgers, camera gaps):
+              seconds, even for a long session. capture_session.py runs it
+              at the end of every session and saves session_notes.txt, so
+              the next session can start straight away.
+    (full)    THE FULL CHECK, offline, before the data are used. Also reads
+              both PCAPs end to end and requires the camera's SVO2 to have
+              been decoded frame by frame, which verify_svo.py does (the ZED
+              recorder no longer does it at stop: ~0.6x the recording time).
+              Saved as check_session.txt by whoever runs it. A clean exit is
+              the condition for keeping the data.
+
+(The radar + D455 version is in legacy/.)
 
 WHAT THIS ANSWERS
     1. Did every recorder finish cleanly?
@@ -26,7 +39,9 @@ FAILURES vs WARNINGS
     lost bytes is marked in pairs.csv). Thresholds are options below.
 
 USAGE
-    python check_session.py --session ./sessions/run05
+    python check_session.py --session ./sessions/run05 --quick      # notes, seconds
+    <conda env python> ../camera_standalone_capture/ZED_2i_Sensor/verify_svo.py --session ./sessions/run05
+    python check_session.py --session ./sessions/run05 > ./sessions/run05/check_session.txt
 """
 from __future__ import annotations
 
@@ -38,7 +53,8 @@ import struct
 import sys
 from pathlib import Path
 
-ALTOS_DIR = Path(__file__).resolve().parent.parent / "altos_standalone_capture"
+ROOT = Path(__file__).resolve().parent.parent
+ALTOS_DIR = ROOT / "altos_standalone_capture"
 
 FRAME_BYTES = 256 * 64 * 48 * 4      # radar frame, r075m
 ADC_BYTES = 1456                     # radar payload per packet
@@ -98,8 +114,13 @@ def check_manifest(s: Path, r: Report) -> list:
     for name in sensors:
         if meta.get("exit_codes", {}).get(name) != 0:
             r.fail(f"{name} recorder exit code {meta.get('exit_codes', {}).get(name)}")
-    if str(meta.get("stop_reason", "")).startswith(("startup", "lidar", "camera", "altos", "free", "radar exited")):
-        r.fail(f"session ended abnormally: {meta.get('stop_reason')}")
+    reason = str(meta.get("stop_reason", ""))
+    if reason.startswith(("startup", "lidar", "camera", "altos", "free", "radar exited", "radar frames misaligned")):
+        r.fail(f"session ended abnormally: {reason}")
+    elif reason.startswith("storage limit"):
+        # The launcher stopped every sensor in order before a disk filled:
+        # the data are complete, the session is only shorter than planned.
+        r.warn(f"session stopped early, cleanly: {reason}")
     return sensors
 
 
@@ -134,7 +155,16 @@ def check_radar(s: Path, r: Report, a) -> dict:
     misaligned = sum(1 for v in offs if abs(v) > ADC_BYTES)
     r.line(f"alignment   : {misaligned} frames whose burst is > 1 packet from a frame boundary")
     if misaligned:
-        r.fail(f"{misaligned} radar frames misaligned with transmission bursts - frames may straddle two radar frames")
+        # A steady offset on every burst = the DCA1000 began capturing in the
+        # middle of a radar frame, so every .bin holds the end of one radar
+        # frame and the start of the next (seen 2026-11-23, session "check").
+        bad = [v for v in offs if abs(v) > ADC_BYTES]
+        med = st.median(bad)
+        steady = max(bad) - min(bad) <= 2 * ADC_BYTES
+        r.line(f"              offset {med:+,.0f} B ({100 * abs(med) / FRAME_BYTES:.1f}% of a frame)"
+               f"{', the same on every burst: recording started mid-frame' if steady else ', varying'}")
+        r.fail(f"{misaligned} radar frames misaligned with transmission bursts - each frame straddles two radar "
+               f"frames{' (the DCA started capturing mid-frame; start a new session)' if steady else ''}")
 
     t = [float(x["t_burst_monotonic"]) for x in rows]
     gaps = [b - a_ for a_, b in zip(t, t[1:])]
@@ -156,11 +186,11 @@ def check_radar(s: Path, r: Report, a) -> dict:
         r.line(f"cadence     : {1 / med:.3f} fps, worst interval {worst:.2f}x median")
         if worst > 1.8:
             r.fail(f"radar interval {worst:.2f}x the median: frames missing")
-    return {"t0": t[0], "t1": t[-1]} if t else {}
+    return {"t0": t[0], "t1": t[-1], "t": t} if t else {}
 
 
 # ── camera ──────────────────────────────────────────────────────────────────
-def check_camera(s: Path, r: Report, a) -> dict:
+def check_camera(s: Path, r: Report, a, radar_t0: float = None) -> dict:
     r.section("3 Camera (ZED 2i)")
     c = s / "camera"
     status = load_json(c / "capture_status.json")
@@ -168,17 +198,34 @@ def check_camera(s: Path, r: Report, a) -> dict:
         r.fail("camera/capture_status.json missing - recorder did not finalize")
         return {}
     svo = c / "camera.svo2"
+    # The frame-by-frame decode check: done by the recorder at stop (sessions
+    # before 2026-11-23, or verify_after_stop: true), or offline by
+    # verify_svo.py, which writes camera/svo_verification.json.
+    ver = load_json(c / "svo_verification.json")
+    decoded = bool(status.get("finalized_svo_timestamps_verified")) or bool(ver.get("ok"))
     r.line(f"status      : complete={status.get('complete')}  phase={status.get('phase')}  "
            f"error={status.get('error')}")
     r.line(f"SVO2        : {svo.stat().st_size / 1e6 if svo.is_file() else 0:.1f} MB, frame count verified="
-           f"{status.get('finalized_svo_frame_count_verified')}, timestamps verified="
-           f"{status.get('finalized_svo_timestamps_verified')}")
+           f"{status.get('finalized_svo_frame_count_verified') or bool(ver.get('ok'))}, decoded and timestamps "
+           f"verified={decoded}{' (verify_svo.py)' if ver.get('ok') else ''}")
     if not status.get("complete"):
-        r.fail(f"camera recording incomplete: {status.get('error')}")
+        if ver.get("ok"):
+            r.warn(f"camera stopped early ({status.get('error')}); its SVO2 was verified afterwards, "
+                   f"so the frames up to the stop are usable")
+        else:
+            r.fail(f"camera recording incomplete: {status.get('error')}")
     if not svo.is_file() or svo.stat().st_size == 0:
         r.fail("camera.svo2 missing or empty")
-    if not (status.get("finalized_svo_frame_count_verified") and status.get("finalized_svo_timestamps_verified")):
-        r.fail("SVO2 frame count / timestamps were not verified after finalization")
+    if ver and not ver.get("ok"):
+        r.fail(f"SVO2 verification failed (verify_svo.py): {ver.get('error')}")
+    elif not decoded:
+        if a.quick:
+            r.line("decode check: not run yet - part of the full check (verify_svo.py, offline)")
+        elif status.get("complete") or ver:
+            r.fail("SVO2 not decoded and verified yet - run verify_svo.py --session <session> first")
+        else:
+            r.fail("SVO2 frame count / timestamps not verified (camera stopped early) - "
+                   "verify_svo.py --session <session> checks what was saved")
     if not list((c / "calibration").glob("SN*.conf")):
         r.fail("camera factory calibration (calibration/SN*.conf) missing")
 
@@ -200,6 +247,30 @@ def check_camera(s: Path, r: Report, a) -> dict:
         return {}
     # Capture time on CLOCK_MONOTONIC, as align_session.py computes it.
     off = [int(x["host_receipt_ns"]) - int(x["host_receipt_mono_ns"]) for x in rows]
+    gaps = load(c / "capture" / "timing" / "camera_gaps.csv")
+    if gaps:
+        # Where the drops are, in seconds from the first radar frame (or the
+        # first camera frame without a radar), worst first.
+        by_idx = {int(x["frame_index"]): k for k, x in enumerate(rows)}
+        t_ref = radar_t0 if radar_t0 is not None else (int(rows[0]["timestamp_ns"]) - off[0]) / 1e9
+        ev = []
+        for g in gaps:
+            k = by_idx.get(int(g["frame_index"]))
+            t = (int(g["timestamp_ns"]) - off[k]) / 1e9 - t_ref if k is not None else float("nan")
+            ev.append((int(g["estimated_missing_frames"]), int(g["frame_interval_ns"]) / 1e6, t))
+        single = sum(1 for m, _, _ in ev if m == 1)
+        longest = max(ev, key=lambda e: e[1])
+        r.line(f"gaps        : {len(ev)} ({single} of one frame, {len(ev) - single} longer); longest "
+               f"{longest[1]:.0f} ms at t = {longest[2]:.1f} s")
+        worst = sorted(ev, key=lambda e: -e[1])[:5]
+        if len(ev) > single:
+            r.line("              longest: " + ", ".join(f"{ms:.0f} ms at {t:.1f} s" for _, ms, t in worst))
+        per_min = {}
+        for _, _, t in ev:
+            if t == t:
+                per_min[int(t // 60)] = per_min.get(int(t // 60), 0) + 1
+        if len(per_min) > 1:
+            r.line("              per minute: " + " ".join(f"{k}:{v}" for k, v in sorted(per_min.items())))
     steps = sum(1 for a_, b in zip(off, off[1:]) if abs(b - a_) > 1_000_000)
     r.line(f"wall clock  : {steps} steps > 1 ms during the session")
     if steps:
@@ -239,6 +310,23 @@ def check_lidar(s: Path, r: Report, a) -> dict:
     if not pcap.is_file():
         r.fail("lidar.pcap missing")
         return {}
+    if a.quick:
+        # The recorder's own counters; the full check re-reads the PCAP.
+        lost, msop = meta.get("msop_lost") or 0, (meta.get("packets") or {}).get("msop", 0)
+        pct = 100 * lost / max(1, msop + lost)
+        r.line(f"PCAP        : {pcap.stat().st_size / 1e6:.1f} MB, recorder counted {meta.get('packets')} "
+               f"(not re-read: full check)")
+        r.line(f"loss        : {lost} MSOP packets ({pct:.4f}%), queue drops {meta.get('queue_drops')}, "
+               f"kernel drops {meta.get('kernel_udp_drops') or {}}")
+        if lost:
+            (r.fail if pct > a.max_lidar_loss_pct else r.warn)(f"{lost} LiDAR packets lost ({pct:.4f}%)")
+        if meta.get("queue_drops"):
+            r.warn(f"LiDAR recorder queue dropped {meta['queue_drops']} packets")
+        if not msop:
+            r.fail("no LiDAR point packets recorded")
+        first, last = meta.get("first_msop") or {}, meta.get("last_msop") or {}
+        return ({"t0": first["monotonic_ns"] / 1e9, "t1": last["monotonic_ns"] / 1e9}
+                if first.get("monotonic_ns") and last.get("monotonic_ns") else {})
     ports = meta.get("ports", {})
     counts = {name: 0 for name in ports}
     by_port = {v: k for k, v in ports.items()}
@@ -292,6 +380,26 @@ def check_altos(s: Path, r: Report, a) -> dict:
     if not pcap.is_file():
         r.fail("altos.pcap missing")
         return {}
+    if a.quick:
+        # The recorder's own counters and frame ledger; the full check rebuilds the frames from the PCAP.
+        lost, inc, n = meta.get("frames_lost") or 0, meta.get("frames_incomplete") or 0, meta.get("frames") or 0
+        pct = 100 * (lost + inc) / max(1, n + lost)
+        r.line(f"PCAP        : {pcap.stat().st_size / 1e6:.1f} MB, recorder counted {meta.get('packets')} packets, "
+               f"{n} frames (not re-read: full check)")
+        r.line(f"frames      : lost {lost}, incomplete {inc} ({pct:.3f}%), radar restarts "
+               f"{meta.get('radar_restarts')}, kernel drops {meta.get('kernel_udp_drops')}")
+        if lost or inc:
+            (r.fail if pct > a.max_altos_loss_pct else r.warn)(
+                f"{lost} Altos frames lost and {inc} incomplete ({pct:.3f}%)")
+        if meta.get("radar_restarts"):
+            r.fail(f"the Altos radar restarted {meta['radar_restarts']} time(s) during the session (a settings "
+                   f"change or a power dip): a gap, and its frame ids started again")
+        rows = load(s / "altos" / "frames.csv")
+        if not rows:
+            if not n:
+                r.fail("no Altos frames recorded")
+            return {}
+        return {"t0": int(rows[0]["t_first_monotonic_ns"]) / 1e9, "t1": int(rows[-1]["t_first_monotonic_ns"]) / 1e9}
     if str(ALTOS_DIR) not in sys.path:
         sys.path.insert(0, str(ALTOS_DIR))
     import altos_v4 as av                          # stdlib only, like this checker
@@ -347,7 +455,11 @@ def check_coverage(r: Report, radar: dict, others: dict) -> None:
         lead, trail = radar["t0"] - span["t0"], span["t1"] - radar["t1"]
         r.line(f"{name:<11} : leads radar by {lead:+.2f} s, trails by {trail:+.2f} s")
         if lead < 0 or trail < 0:
-            r.fail(f"radar frames fall outside {name} coverage - those frames cannot be paired")
+            t = radar.get("t") or []
+            before = sum(1 for x in t if x < span["t0"])
+            after = sum(1 for x in t if x > span["t1"])
+            r.fail(f"radar frames fall outside {name} coverage - those frames cannot be paired "
+                   f"({before} at the start, {after} at the end, of {len(t)})")
 
 
 def main() -> int:
@@ -361,18 +473,20 @@ def main() -> int:
                     help="fail above this %% of lost LiDAR packets (below: warning)")
     ap.add_argument("--max-altos-loss-pct", type=float, default=0.5,
                     help="fail above this %% of lost or incomplete Altos frames (below: warning)")
+    ap.add_argument("--quick", action="store_true",
+                    help="session notes: recorder counters only (no PCAP reads, no SVO2 decode check); seconds")
     a = ap.parse_args()
     s = a.session
 
     print("=" * 76)
-    print(f"  SESSION: {s}")
+    print(f"  {'SESSION NOTES (quick check: what the recorders reported)' if a.quick else 'FULL CHECK'}: {s}")
     print("=" * 76)
     r = Report()
     sensors = check_manifest(s, r)
     radar = check_radar(s, r, a) if "radar" in sensors else {}
     spans = {}
     if "camera" in sensors:
-        spans["camera"] = check_camera(s, r, a)
+        spans["camera"] = check_camera(s, r, a, radar.get("t0"))
     if "lidar" in sensors:
         spans["lidar"] = check_lidar(s, r, a)
     if "altos" in sensors:
@@ -382,19 +496,25 @@ def main() -> int:
     sizes = sum(p.stat().st_size for p in s.rglob("*") if p.is_file())
     print(f"\n    session size: {sizes / 1e9:.2f} GB")
     print("\n" + "=" * 76)
-    print("  VERDICT")
+    print("  VERDICT" + (" (quick check - the full check is still to run)" if a.quick else ""))
     print("=" * 76)
     if r.failures:
         print("  FAIL - do not use this session until resolved:")
         for f in r.failures:
             print(f"    - {f}")
     else:
-        print("  PASS - data is complete and the sensors cover the radar recording.")
+        print("  PASS - " + ("no problem reported by the recorders." if a.quick else
+                             "data is complete and the sensors cover the radar recording."))
     if r.warnings:
         print("  Warnings:")
         for w in r.warnings:
             print(f"    - {w}")
-    if not r.failures:
+    if a.quick:
+        cam = ROOT / "camera_standalone_capture" / "ZED_2i_Sensor" / "verify_svo.py"
+        print("\n  Full check (offline, before using the data; not during a recording):")
+        print(f"    1. <conda env python> {cam} --session {s}")
+        print(f"    2. python {Path(__file__).resolve()} --session {s} > {s / 'check_session.txt'}")
+    elif not r.failures:
         print("\n  Next: python align_session.py --session", s,
               "[--offsets <Stage 3 offsets.json>]")
     return 1 if r.failures else 0

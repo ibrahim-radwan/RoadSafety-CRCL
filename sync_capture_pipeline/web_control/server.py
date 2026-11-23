@@ -14,8 +14,11 @@ WHAT IT DOES
     Status -> parsed from the launcher's own per-second output: radar
               packets/s, camera FPS and gaps, LiDAR packets/s and losses,
               plus free disk space.
-    After a session ends, check_session.py runs automatically and its
-    PASS/FAIL is shown and saved as <session>/check_session.txt.
+    After a session ends, the launcher writes its session notes (a quick
+    check_session.py --quick from the recorders' own counters, seconds) as
+    <session>/session_notes.txt; their PASS/FAIL is shown here. The full
+    check (check_session.txt) is run offline, so the next session is not
+    held up; the session list shows it once it exists.
 
 LIVE VIEW (liveview.py, ../live/)
     For extrinsic alignment: the camera's left image, the LiDAR top view and
@@ -94,6 +97,12 @@ HINTS = [
      "(radar at 192.168.3.10, this Jetson 192.168.3.1)"),
     (("ZED SDK sees 0 cameras", "CAMERA NOT DETECTED"),
      "camera not detected - unplug and replug the ZED USB cable, then start again"),
+    (("storage limit: camera staging disk",),
+     "the Jetson's internal disk (where the camera is staged) was nearly full, so the session was stopped "
+     "cleanly and its data are complete - free space on it before a long session"),
+    (("radar frames misaligned at start",),
+     "the radar capture began in the middle of a radar frame (it happens now and then at start) - "
+     "start a new session; no power-cycle needed"),
     (("free space below", "not enough space"),
      "storage full - copy finished sessions off the SD card and delete them (or free space on the "
      "Jetson's internal disk, where the camera is staged during recording)"),
@@ -113,6 +122,7 @@ PHASES = [
     ("stopping radar", "stopping"),
     ("radar stopped", "stopping"),
     ("camera is verifying", "finalizing"),
+    ("camera is finalizing", "finalizing"),
     ("SESSION SUMMARY", "finished"),
 ]
 
@@ -284,13 +294,18 @@ class Session:
                               "summary": hints}
                 self.phase = "done"
             return
-        with self.lock:
-            self.phase, self.check = "checking", {"status": "running"}
-        r = subprocess.run([self.checker_python, str(CHECKER), "--session", str(out)],
-                           capture_output=True, text=True)
-        text = r.stdout + r.stderr
-        (out / "check_session.txt").write_text(text)
-        verdict = "PASS" if r.returncode == 0 else "FAIL"
+        notes = out / "session_notes.txt"
+        if notes.is_file():                             # written by the launcher (2026-11-23 on)
+            text = notes.read_text(errors="replace")
+            verdict = "PASS" if "  PASS" in text else "FAIL"
+        else:                                           # a launcher that died before writing them
+            with self.lock:
+                self.phase, self.check = "checking", {"status": "running"}
+            r = subprocess.run([self.checker_python, str(CHECKER), "--session", str(out), "--quick"],
+                               capture_output=True, text=True)
+            text = r.stdout + r.stderr
+            notes.write_text(text)
+            verdict = "PASS" if r.returncode == 0 else "FAIL"
         lines = text.splitlines()
         at = [i for i, l in enumerate(lines) if "VERDICT" in l]
         tail = lines[at[0] + 2:] if at else lines[-15:]      # skip the "=====" under VERDICT
@@ -368,13 +383,15 @@ def list_sessions(root: Path, active: str = None) -> list:
                 meta = json.loads((d / "session.json").read_text())
             except ValueError:
                 pass
-        check = "recording" if d.name == active else None
-        if (d / "check_session.txt").is_file():
-            check = "PASS" if "  PASS" in (d / "check_session.txt").read_text() else "FAIL"
+        check, kind = ("recording" if d.name == active else None), None
+        for fname, k in (("check_session.txt", "full"), ("session_notes.txt", "quick")):
+            if (d / fname).is_file():
+                check, kind = ("PASS" if "  PASS" in (d / fname).read_text(errors="replace") else "FAIL"), k
+                break
         size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
         out.append({"name": d.name, "started": meta.get("started_local"), "note": meta.get("note", ""),
                     "stop_reason": meta.get("stop_reason"), "sensors": meta.get("sensors", []),
-                    "size_gb": round(size / 1e9, 2), "check": check})
+                    "size_gb": round(size / 1e9, 2), "check": check, "check_kind": kind})
     return out
 
 
@@ -472,8 +489,11 @@ def create_app(session: Session, live: liveview.LiveView = None) -> Flask:
     def api_check(name):
         if not NAME_RE.match(name):
             return "bad name", 400
-        p = session.root / name / "check_session.txt"
-        return (p.read_text(), 200, {"Content-Type": "text/plain"}) if p.is_file() else ("no check yet", 404)
+        for fname in ("check_session.txt", "session_notes.txt"):      # the full check once it exists
+            p = session.root / name / fname
+            if p.is_file():
+                return p.read_text(errors="replace"), 200, {"Content-Type": "text/plain"}
+        return "no check yet", 404
 
     # ── live view ───────────────────────────────────────────────────────
     @app.post("/api/live/start")

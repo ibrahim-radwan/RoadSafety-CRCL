@@ -111,6 +111,20 @@ LiDAR object within 1.5 m), then the change through the full pipeline
   - The launcher watchdog stops a session after 5 s below 50% of the expected
     rate; `check_session` flags it; `align_session` falls back to nominal
     frame times.
+- **Capture can start mid-frame (seen 2026-11-23, session `check`).**
+  - **Symptom:** every burst after the first sits at the same offset
+    (`burst alignment: 496 of 497`), frame span 133.3 ms instead of 125.0.
+    No loss. Every `.bin` holds the end of one radar frame and the start of
+    the next, so the session's radar data cannot be used as recorded.
+  - **Likely cause:** the radar frames continuously from boot, and
+    START_RECORD landed while a frame's data were streaming. The chirps take
+    about 13 ms of each 125 ms frame, so roughly 1 start in 9; 1 of 11
+    sessions so far.
+  - **Handling:** the receiver warns at the first misaligned burst; if that
+    is within the first 3 bursts, the launcher stops the session ("radar
+    frames misaligned at start - start a new session"). A new start fixes
+    it; no power-cycle is needed. Re-cutting an affected session offline
+    should be possible (no bytes are lost), but has not been done.
 - **Frame stamping:** each frame takes the time of the transmit burst that
   carried its **first** byte. A frame is 2,160.5 packets, so a burst starts
   just before a frame boundary. An earlier receiver stamped frames one burst

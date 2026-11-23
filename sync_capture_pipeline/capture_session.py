@@ -79,8 +79,11 @@ RADAR_RATE_RE = re.compile(r"t\+\s*\d+s\s+([\d,]+) pkt/s")
 # capturing, and arrival times stopped meaning anything). Stop early instead
 # of recording minutes of unusable radar data.
 RADAR_LOW_FRACTION, RADAR_LOW_SECONDS = 0.5, 5
-GB_PER_HOUR = {"radar": 90, "camera": 5, "lidar": 18,   # measured 2026-10-10 at 8 fps: 90.6 / 3.9 / 17.5
+# The camera's lossless video grows with the scene: 2-4 GB/h indoors, 16.6 GB/h
+# on the road (run_20261123_1619), so budget for the road.
+GB_PER_HOUR = {"radar": 90, "camera": 20, "lidar": 18,  # measured 2026-10-10 at 8 fps: 90.6 / (camera above) / 17.5
                "altos": 1}                              # Altos: ~0.3 GB/h indoors (2026-11-15); 1 allows a busier scene
+CAMERA_WARN_MIN = (10, 3)                # warn when the camera staging disk has this many minutes left
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,6 +121,9 @@ def parse_args() -> argparse.Namespace:
                    help="seconds to wait for camera/LiDAR/Altos to start recording")
     p.add_argument("--min-free-gb", type=float, default=5.0,
                    help="stop the session if free space falls below this")
+    p.add_argument("--stage-min-free-gb", type=float, default=3.0,
+                   help="stop the whole session, cleanly, if the camera staging disk falls below this "
+                        "(the ZED stops itself at 2 GiB, which used to end the session abruptly)")
     return p.parse_args()
 
 
@@ -161,6 +167,7 @@ class Recorder:
         self.proc = None
         self.reader = None
         self.rates = []             # radar: per-second packet counts, as the receiver reports them
+        self.misaligned_at_start = False   # radar: the DCA began capturing mid-frame
 
     def start(self):
         self.proc = subprocess.Popen(
@@ -179,6 +186,8 @@ class Recorder:
                 m = RADAR_RATE_RE.search(line)
                 if m:
                     self.rates.append(int(m.group(1).replace(",", "")))
+                if "radar frames misaligned at start" in line:
+                    self.misaligned_at_start = True
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -224,6 +233,10 @@ def main() -> int:
     lock = threading.Lock()
 
     def emit(line: str = "") -> None:
+        # Local time on every line, so the phases of a session (and of its
+        # end: finalising, moving the camera, the notes) can be timed.
+        body = line.lstrip("\n")
+        line = line[:len(line) - len(body)] + (f"{time.strftime('%H:%M:%S')} {body}" if body else "")
         with lock:
             print(line, flush=True)
             log_fh.write(line + "\n")
@@ -269,10 +282,15 @@ def main() -> int:
         else:
             cam_dir.parent.mkdir(parents=True, exist_ok=True)
             stage_gb = shutil.disk_usage(cam_dir.parent).free / 1e9
-            emit(f"  camera   : staged on {cam_dir.parent} ({stage_gb:.1f} GB free, "
-                 f"~{stage_gb / GB_PER_HOUR['camera']:.1f} h), moved to {a.out / 'camera'} afterwards")
-            if a.secs > 0 and stage_gb < GB_PER_HOUR["camera"] * a.secs / 3600 + 2:
-                problems.append(f"not enough space for the camera on {cam_dir.parent}")
+            stage_min = max(0.0, stage_gb - a.stage_min_free_gb) / GB_PER_HOUR["camera"] * 60
+            emit(f"  camera   : staged on {cam_dir.parent} ({stage_gb:.1f} GB free, ~{stage_min:.0f} min of "
+                 f"camera on the road), moved to {a.out / 'camera'} afterwards")
+            if a.secs > 0 and stage_min < a.secs / 60:
+                problems.append(f"not enough space for the camera on {cam_dir.parent} "
+                                f"(~{stage_min:.0f} min on the road, {a.secs / 60:.0f} min asked)")
+            elif stage_min < 30:
+                emit(f"  WARNING: camera staging disk holds only ~{stage_min:.0f} min of road recording - the "
+                     f"session stops by itself then; free space on {cam_dir.parent.parent} for longer sessions")
     radar_fw = radar_firmware.read_flashed() if "radar" in sensors else None
     if "radar" in sensors:
         if radar_fw is None:
@@ -367,6 +385,8 @@ def main() -> int:
 
         # ── run: until radar ends, Ctrl+C, a sensor dies, or the disk fills ─
         next_disk = next_temp = time.monotonic()
+        stage_warned = set()
+        staged = cam_dir != a.out / "camera"
         period_ms = float((radar_fw or {}).get("frame_periodicity_ms") or 125)
         expected_pps = 3_145_728 / 1456 / (period_ms / 1000)
         while True:
@@ -390,6 +410,14 @@ def main() -> int:
                 if b["level"] == "hot":
                     emit(f"  WARNING: board is HOT (tj {b['tj_c']:.0f} C) - near throttling; "
                          f"consider stopping and cooling it")
+            if "radar" in recs and recs["radar"].misaligned_at_start:
+                # The DCA began capturing mid-frame: every frame would hold
+                # the end of one radar frame and the start of the next. A new
+                # start is the fix; it shows within the first second.
+                stop_reason = ("radar frames misaligned at start (the DCA1000 began capturing mid-frame) - "
+                               "start a new session")
+                emit(f"\n  ERROR: {stop_reason}")
+                break
             if "radar" in recs and not recs["radar"].alive():
                 rc = recs["radar"].proc.returncode
                 if rc != 0:
@@ -414,6 +442,22 @@ def main() -> int:
                     stop_reason = f"free space below {a.min_free_gb} GB"
                     emit(f"\n  ERROR: {stop_reason} - stopping the session")
                     break
+                if staged and "camera" in recs:
+                    # The camera stages on the Jetson's own disk: stop every
+                    # sensor in order before the ZED hits its own limit and
+                    # quits on its own (which ended the session abruptly).
+                    free = shutil.disk_usage(cam_dir.parent).free / 1e9
+                    left_min = max(0.0, free - a.stage_min_free_gb) / GB_PER_HOUR["camera"] * 60
+                    if free < a.stage_min_free_gb:
+                        stop_reason = (f"storage limit: camera staging disk {cam_dir.parent.parent} below "
+                                       f"{a.stage_min_free_gb} GB free - stopped all sensors cleanly")
+                        emit(f"\n  WARNING: {stop_reason}")
+                        break
+                    crossed = {w for w in CAMERA_WARN_MIN if left_min < w} - stage_warned
+                    if crossed:                       # once per threshold, one line even if several crossed
+                        stage_warned |= crossed
+                        emit(f"  WARNING: camera staging disk: {free:.1f} GB free, ~{left_min:.0f} min of "
+                             f"road recording left - the session stops by itself then")
             time.sleep(0.2)
     except RuntimeError as exc:
         stop_reason = f"startup failed: {exc}"
@@ -440,8 +484,10 @@ def main() -> int:
     if "camera" in recs and recs["camera"].proc is not None:
         # The ZED verifies the finalized SVO2 after stopping (~0.55x the
         # recording time), so allow for it.
+        # With recording.verify_after_stop (off by default) it also decodes
+        # every frame: ~0.55x the recording time, hence the long timeout.
         rec_s = (clocks["stop"]["monotonic_ns"] - clocks["start"]["monotonic_ns"]) / 1e9
-        emit(f"  camera is verifying its SVO2 (up to ~{rec_s * 0.6:.0f} s) ...")
+        emit("  camera is finalizing its SVO2 ...")
         codes["camera"] = recs["camera"].wait(timeout=120 + rec_s)
 
     # ── staged camera -> session directory ──────────────────────────────────
@@ -505,7 +551,7 @@ def main() -> int:
     if thermal["samples"]:
         emit(f"  board       : tj max {thermal['tj_max_c']:.1f} C, fan max {thermal['fan_max_pct']}% "
              f"({thermal['samples']} samples){'  - WARNING: got hot' if thermal['tj_max_c'] >= board_health.WARN_C else ''}")
-    ok = not stop_reason.startswith(("startup", "free") + EARLY)
+    ok = not stop_reason.startswith(("startup", "free", "radar frames misaligned") + EARLY)
     for name in sensors:
         code = codes.get(name)
         detail = ""
@@ -532,8 +578,30 @@ def main() -> int:
     emit(f"  log         : {log_path}")
     if not ok:
         emit("\n  SESSION INCOMPLETE - check the log above before relying on this data.")
+    write_notes(a.out, emit)
     log_fh.close()
     return 0 if ok else 1
+
+
+def write_notes(out: Path, emit) -> None:
+    """Session notes: check_session.py --quick (the recorders' own counters,
+    seconds) -> <out>/session_notes.txt, with its verdict in the log. The full
+    check (PCAPs, SVO2 decode) is run offline, when the rig is free."""
+    emit("\n  writing session notes (quick check) ...")
+    try:
+        r = subprocess.run([sys.executable, str(HERE / "check_session.py"), "--session", str(out), "--quick"],
+                           capture_output=True, text=True, timeout=300)
+        text = r.stdout + r.stderr
+    except Exception as exc:                     # the recording is saved either way
+        emit(f"  session notes failed: {exc}")
+        return
+    (out / "session_notes.txt").write_text(text, encoding="utf-8")
+    lines = text.splitlines()
+    at = [i for i, x in enumerate(lines) if "VERDICT" in x]
+    for x in (lines[at[0] + 2:] if at else lines[-15:]):
+        if x.strip():
+            emit(x)
+    emit(f"  notes       : {out / 'session_notes.txt'}")
 
 
 if __name__ == "__main__":

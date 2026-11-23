@@ -276,7 +276,7 @@ function showTiming(s) {
     const dur = s.duration_s > 0 ? ` / ${fmtTime(Math.round(s.duration_s))}` : "";
     html = `<div class="big2">● ${fmtTime(Math.floor(s.recording_s))}${dur}</div><div class="what">RECORDING</div>`;
   } else if (s.recording_s) {
-    cls = "end"; html = `<div class="big2">Recording finished</div><div class="what">${fmtTime(Math.floor(s.recording_s))} recorded - wait for the check result</div>`;
+    cls = "end"; html = `<div class="big2">Recording finished</div><div class="what">${fmtTime(Math.floor(s.recording_s))} recorded - wait for the session notes</div>`;
   }
   b.className = "banner " + cls; b.innerHTML = html;
   // beep when recording starts and when it ends
@@ -397,8 +397,9 @@ async function refresh() {
   const v = $("verdict"), ck = s.check;
   if (ck) {
     v.className = "verdict " + ck.status;
-    const title = { PASS: "check_session: PASS", FAIL: "check_session: FAIL – do not use this session yet",
-                    running: "Running check_session …", skipped: "check_session skipped: " + (ck.reason || "") }[ck.status];
+    const title = { PASS: "Session notes: PASS (quick check) – run the full check offline before using the data",
+                    FAIL: "Session notes: FAIL – read the notes before the next session",
+                    running: "Writing session notes …", skipped: "Session notes skipped: " + (ck.reason || "") }[ck.status];
     v.innerHTML = "<strong>" + title + "</strong>" + (ck.summary ? "<ul>" + ck.summary.map(x => "<li>" +
       x.replace(/[<>&]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m])) + "</li>").join("") + "</ul>" : "");
   } else { v.className = "verdict"; }
@@ -420,7 +421,7 @@ async function loadSessions() {
   $("sessions").innerHTML = list.map((x) => {
     const ck = x.check === "recording" ? `<span class="tag bad">recording</span>`
       : x.check ? `<a href="/api/sessions/${encodeURIComponent(x.name)}/check" target="_blank"
-      class="tag ${x.check === "PASS" ? "ok" : "bad"}">${x.check}</a>` : "–";
+      class="tag ${x.check === "PASS" ? "ok" : "bad"}">${x.check}${x.check_kind === "quick" ? " (notes)" : ""}</a>` : "–";
     const esc = (t) => String(t || "").replace(/[<>&]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m]));
     return `<tr><td><strong>${esc(x.name)}</strong><br><span style="color:var(--muted);font-size:13px">
       ${esc((x.started || "").replace("T", " ").slice(0, 16))}</span></td><td>${ck}</td>

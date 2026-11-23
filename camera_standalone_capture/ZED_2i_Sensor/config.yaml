@@ -58,6 +58,10 @@ recording:
   # Keep sessions raw (SVO2 + CSVs); extract images offline with export.py.
   auto_export: false
   min_free_space_gb: 2.0
+  # Decode every frame of the finalized SVO2 at stop to verify it: ~0.6x the
+  # recording time, which blocked the next session (2026-11-23). false: only
+  # the frame count is checked at stop; verify_svo.py decodes it offline.
+  verify_after_stop: false
   csv_queue_records: 10000
 
 export:

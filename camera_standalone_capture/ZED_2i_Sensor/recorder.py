@@ -15,8 +15,9 @@ from sensors import collect_sensors
 
 from dataset import (CsvSink, calibration_data, capture_space_headroom, check_size, clock_check, dataset_root,
                      file_hash, load_config, pose_record,
-                     read_svo_frame, require_success, save_json, sdk_init, sdk_runtime, image_views)
+                     require_success, save_json, sdk_init, sdk_runtime, image_views)
 from dataset import validate_config
+from verify_svo import decode_all, open_svo
 
 def capture(config, config_path, duration=None, sl=None, stop=None, session_dir=None):
     if duration is not None and (not math.isfinite(duration) or duration <= 0):
@@ -283,28 +284,25 @@ def capture(config, config_path, duration=None, sl=None, stop=None, session_dir=
                 sink.close()
             except Exception as exc:
                 error = error or exc
+        decode_verified = False
         if error is None and session is not None:
-            verification = sl.Camera()
+            # Frame count always; the frame-by-frame decode (~0.6x the
+            # recording time) only with verify_after_stop - otherwise
+            # verify_svo.py does it offline, after the session.
+            verification = None
             try:
-                parameters = sdk_init(sl, config, session / 'camera.svo2', session / 'calibration')
-                parameters.depth_mode = sl.DEPTH_MODE.NONE
-                parameters.depth_stabilization = 0
-                require_success(sl, verification.open(parameters), 'Verify finalized SVO2')
+                verification = open_svo(sl, config, session)
                 if verification.get_svo_number_of_frames() != count:
                     raise RuntimeError(f'Finalized SVO2 frame count differs from {count} successful grabs')
-                import csv
-                verification_runtime = sdk_runtime(sl, config)
-                verification_runtime.enable_depth = False
-                with (session / 'capture/frames.csv').open() as handle:
-                    for entry in csv.DictReader(handle):
-                        _, recovered = read_svo_frame(sl, verification, verification_runtime,
-                            int(entry['frame_index']), int(entry['timestamp_ns']))
-                        svo_decode_recoveries += int(recovered)
+                if config['recording']['verify_after_stop']:
+                    _, svo_decode_recoveries = decode_all(sl, config, verification, session / 'capture/frames.csv')
+                    decode_verified = True
             except Exception as exc:
                 error = exc
             finally:
                 try:
-                    verification.close()
+                    if verification is not None:
+                        verification.close()
                 except Exception as exc:
                     error = error or exc
         if session is not None:
@@ -318,7 +316,9 @@ def capture(config, config_path, duration=None, sl=None, stop=None, session_dir=
                       'estimated_missing_camera_frames': gap_estimate,
                       'encoder_status_unconfirmed_frames': unconfirmed_encoder_frames,
                       'finalized_svo_frame_count_verified': error is None,
-                      'finalized_svo_timestamps_verified': error is None,
+                      'finalized_svo_timestamps_verified': error is None and decode_verified,
+                      'svo_decode_check': ('at stop' if decode_verified else
+                                           'deferred: verify_svo.py' if error is None else 'not run'),
                       'svo_decode_recoveries_during_verification': svo_decode_recoveries,
                       'direct_images': image_sink.stats() if image_sink else None,
                       'streams': sink.stats() if sink else {}, 'stopped_local': datetime.now().astimezone().isoformat()}

@@ -22,6 +22,19 @@
 - **Safety check:** the launcher refuses to record under `/mnt/sdcard` unless
   it is mounted, so the bare directory on the eMMC never silently takes the
   data.
+- **The eMMC limits session length** (2026-11-23). The camera's lossless
+  video grows with the scene: 2–4 GB/h indoors, **16.6 GB/h on the road**
+  (`run_20261123_1619`). That session started with 8.3 GB free on the eMMC,
+  the ZED stopped itself at its 2 GB minimum after 18 min, and the launcher
+  ended the session abruptly. Now:
+  - the launcher budgets **20 GB/h** for the camera and prints the minutes of
+    road recording the eMMC holds (a warning below 30 min);
+  - it watches the eMMC every 10 s, warns at 10 and 3 min left, and below
+    `--stage-min-free-gb` (3 GB) **stops all sensors in order**: stop reason
+    `storage limit: ...`, a complete session, a warning in the check.
+  - For sessions longer than the eMMC allows: free space on it, or (open)
+    segment the camera and move segments to the SD card while recording, or
+    add an NVMe drive.
 
 ## Data rates at 8 fps
 
@@ -29,11 +42,12 @@
 |---|---|
 | Radar | 90.6 GB/h |
 | LiDAR | 17.5 GB/h |
-| Camera | 3.9 GB/h |
+| Camera | 2–4 GB/h indoors, 16.6 GB/h on the road (launcher budgets 20) |
 | Altos V4 | ~0.3 GB/h (a 3–4 m room, 2026-11-15; the launcher budgets 1 GB/h; at most ~13 GB/h at its 12,000-point maximum) |
-| **Total** | **~112 GB/h (31 MB/s)** |
+| **Total** | **~110–130 GB/h (31–36 MB/s)** |
 
-The card holds about 8 h; the eMMC holds about 4 h of camera.
+The card holds about 7–8 h. The eMMC holds (free GB − 3) / 20 h of road
+camera: about 1 h per 23 GB free.
 
 ## History (why not other options)
 

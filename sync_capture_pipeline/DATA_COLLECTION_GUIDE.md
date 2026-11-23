@@ -103,16 +103,18 @@ Press **Start recording**. The tap also enables sound on the iPad.
 
 4. **Three short beeps = recording ended**: the duration was reached, you
    pressed Stop, or a sensor failed. The page shows "Recording finished".
-5. Wait for **finalizing**. The camera verifies its file, which takes up to
-   about half the recording time, and is then moved onto the SD card. The
-   session check then runs by itself.
+5. Wait for **finalizing**: the camera closes its file, which is moved onto
+   the SD card (about 1 min per 5 GB), and the **session notes** are written
+   (seconds). Then the next session can start.
 
-### Check the result before the next session
+### Read the session notes before the next session
 
-The session appears under **Recorded sessions** with **PASS** or **FAIL**.
-Tap it to read the full check.
+The session appears under **Recorded sessions** with **PASS (notes)** or
+**FAIL (notes)**. Tap it to read the notes: what each recorder reported
+(losses, camera gaps with their times, temperature, stop reason). They are
+saved as `<session>/session_notes.txt`.
 
-- **PASS:** the data is complete. Go on.
+- **PASS:** no recorder reported a problem. Go on.
 - **FAIL:** read why before recording more, or you risk a series of
   unusable sessions.
   - **Camera dropped slightly above 1%** (for example 1.05%) is a borderline
@@ -121,6 +123,21 @@ Tap it to read the full check.
     before continuing.
 
 A plain-language **HINT** appears on the page for the common failures.
+
+### The full check, after the recording day
+
+The notes do not re-read the data. Before a session is used, run the full
+check on the Jetson when it is not recording (it reads every file: minutes
+for a long session):
+
+```bash
+conda activate rel_1_py_3_8 && cd ~/dev/CascadedRadarRoadSafetyOnTwoWheelers/sync_capture_pipeline
+S=/mnt/sdcard/sessions/<name>
+python ../camera_standalone_capture/ZED_2i_Sensor/verify_svo.py --session $S   # decodes every camera frame
+python check_session.py --session $S > $S/check_session.txt                       # PASS / FAIL
+```
+
+The session list then shows the full check's **PASS** or **FAIL**.
 
 ### Live view (for aligning the sensors, not for recording)
 
@@ -180,14 +197,18 @@ aligning the sensors, for example with a corner reflector on a stand.
 
 | | Capacity |
 |---|---|
-| SD card (radar + LiDAR + camera) | 930 GB free ≈ **8 hours** of recording (about 112 GB per hour) |
-| Jetson internal disk (camera during recording) | holds about **4 hours** of camera; emptied after each session |
+| SD card (radar + LiDAR + camera) | 930 GB free ≈ **7–8 hours** of recording (110–130 GB per hour) |
+| Jetson internal disk (camera during recording) | about **1 hour of road recording per 23 GB free** (the camera writes ~17 GB/h on the road, 2–4 GB/h indoors); emptied after each session |
 
 - The camera records to the Jetson's internal disk during a session and is
   moved onto the SD card when the session ends. This avoids camera frame
   drops; it is automatic.
 - The launcher refuses to start if the SD card is missing or there is not
-  enough space for the set duration.
+  enough space for the set duration. At start it prints how many minutes of
+  road recording the internal disk holds, and warns below 30 min.
+- **Long sessions:** when the internal disk gets nearly full, the session
+  **stops by itself, cleanly** (warnings at 10 and 3 min left). The data
+  are complete; start a new session after freeing space.
 - **The SD card is ext4 (Linux).** Windows cannot read it directly. Copy
   sessions off through the Jetson (section 6).
 
@@ -199,6 +220,8 @@ aligning the sensors, for example with a corner reflector on a stand.
 |---|---|
 | **Radar 0 packets/s**, or HINT "DCA1000 not responding" | Check the radar's **12 V supply** and the DCA1000 Ethernet cable. Power-cycle the radar and DCA1000. |
 | **Radar below 5,000 packets/s** (card red; e.g. ~900 or ~3,000/s), or the session **stops by itself** with HINT "radar data rate too low (DCA1000 throttled)" | Rare DCA1000 start-up fault: it sends too slowly, buffers the radar data, then stops capturing. The launcher stops the session automatically after 5 s of low rate. **Power-cycle the radar + DCA1000** (12 V off, wait 10 s, on) and start a new session. |
+| Session **stops by itself within a second** of the radar starting, HINT "radar capture began in the middle of a radar frame" | Happens now and then at start. **Just start a new session**; no power-cycle needed. |
+| Session **stops by itself** with HINT "the Jetson's internal disk ... was nearly full" | The data recorded are complete. Free space on the Jetson's internal disk before the next long session. |
 | HINT "no LiDAR data" | LiDAR power and the USB-Ethernet adapter. |
 | HINT "no Altos radar data", or "PREFLIGHT FAILED: Altos radar does not answer" | The Altos's power (15 V / 4 A adaptor; it needs 10–20 s to boot), its connector and media converter, and its USB-Ethernet adapter. To record without it, untick **Altos radar**. |
 | Altos card red with **restarts** | The Altos restarted during the session: a power dip, or someone changed its settings. Don't change its settings while recording. The session check fails it. |
@@ -326,10 +349,12 @@ Delete sessions from the card only after the copy has been checked.
 ```
 <name>/
   session.json        settings, clocks, radar firmware, thermal, notes
-  session.log         full recording log
-  check_session.txt   PASS/FAIL report
+  session.log         full recording log (local time on every line)
+  session_notes.txt   quick check at the end of the session (what the recorders reported)
+  check_session.txt   the full check's PASS/FAIL report (once it has been run)
   radar/              frame_*.bin (3,145,728 B each), frames.csv
-  camera/             camera.svo2, capture/frames.csv, IMU, calibration
+  camera/             camera.svo2, capture/frames.csv, IMU, calibration,
+                      svo_verification.json (once verify_svo.py has run)
   lidar/              lidar.pcap, clock_map.csv, stats.csv, metadata.json
   altos/              altos.pcap, frames.csv, stats.csv, clock_map.csv, metadata.json
   sync/               (after align_session) pairs.csv, timelines, alignment.json,
@@ -341,7 +366,12 @@ Radar frame format: int16 little-endian, **I first**,
 `cascaded_radar_capture_pipeline/firmware/FIRMWARE_STATUS.md`.
 
 **Keep** every session with a PASS, its note and `session.json`. Sessions
-that fail the check should be fixed or deleted, not annotated.
+that fail the full check should be fixed or deleted, not annotated.
+
+**Check copies before using them.** Run the full check on the copy too:
+copies to Windows drives have arrived corrupted (`WinError 1392`, a
+truncated `lidar.pcap`, missing radar frames) while the originals were
+complete.
 
 ---
 

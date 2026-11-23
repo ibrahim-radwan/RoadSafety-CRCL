@@ -33,16 +33,22 @@ don't need a screen, keyboard or SSH on the scooter.
    `check_session.py` warns if the peak reached 80 °C. A session will not start
    if the board is already at 90 °C or above.
 6. **Stop recording** is the same as Ctrl+C in a terminal. The radar stops
-   first, then camera, LiDAR and Altos trail and finalize. The camera's SVO2 check
-   takes about half the recording length.
-7. `check_session.py` then runs automatically. **PASS** means the session is
-   complete. Its full report is saved as `<session>/check_session.txt` and is
-   linked from the session list. When the log shows a known failure, the result
-   starts with a **HINT** naming what to check:
+   first, then camera, LiDAR and Altos trail and finalize. The camera only
+   closes its SVO2 and checks its frame count (seconds); the frame-by-frame
+   decode is part of the offline full check (`verify_svo.py`).
+7. The launcher then writes the **session notes**
+   (`check_session.py --quick`, the recorders' own counters, seconds) as
+   `<session>/session_notes.txt`, and the page shows their **PASS** or
+   **FAIL**. The next session can start straight away. The session list
+   links the notes, or the full check (`check_session.txt`) once it has been
+   run offline. When the log shows a known failure, the result starts with a
+   **HINT** naming what to check:
    - radar board not responding: its 12 V power and cable;
    - radar data rate too low (DCA1000 throttled): the launcher stops the
      session by itself after 5 s below half the expected rate; power-cycle the
      radar + DCA1000;
+   - the camera staging disk nearly full: the session was stopped cleanly;
+   - the radar capture began mid-frame: start a new session;
    - SD card not found;
    - no LiDAR data;
    - camera not detected;
@@ -126,7 +132,7 @@ Details, the design and what is still to verify on the rig:
 | Start | Runs `capture_session.py` exactly as a terminal would, in its own session |
 | Stop | Sends SIGINT (Ctrl+C) to the launcher |
 | Status | The server follows `<session>/session.log`, which the launcher writes line by line |
-| Check | `check_session.py` runs after the launcher exits |
+| Check | The launcher writes `session_notes.txt` (`check_session.py --quick`); the server shows it (and runs it only if the launcher died first) |
 
 **A recording survives the web server.** The launcher never writes to a pipe
 owned by the server. Its output goes to `sessions/.launcher/<name>.txt` and

@@ -12,8 +12,19 @@
   - `auto_export: false`: **no PNG export at capture**, extraction is offline;
   - `sensors.poll_rate_hz 200`;
   - magnetometer, barometer and temperature off.
-- **Frame drops:** typically 0.2–0.3%, single frames, listed in
-  `capture/timing/camera_gaps.csv`.
+- **Verification (2026-11-23):** at stop the recorder checks only the SVO2's
+  frame count (`recording.verify_after_stop: false`). Decoding every frame
+  took ~0.6× the recording time and held up the next session; it is now
+  done offline by **`verify_svo.py --session <session>`**, which writes
+  `camera/svo_verification.json`. The full `check_session.py` requires it;
+  the session notes (`--quick`) only say it is still to run. It also works on
+  a camera that stopped early (e.g. a full disk).
+- **Data rate:** 2–4 GB/h indoors, 16.6 GB/h on the road (lossless video
+  grows with the scene). See [04](04_storage_and_recording.md).
+- **Frame drops:** typically 0.1–0.5%, mostly single frames, listed in
+  `capture/timing/camera_gaps.csv`; the same indoors and on the road
+  (2026-11-23, 11 sessions). The session notes summarise them (count,
+  longest gap and when, per minute).
   - **Cause:** write stalls on any disk shared with the radar, hence the eMMC
     staging (see [04](04_storage_and_recording.md)).
   - **Ruled out:** CPU load, USB-hub sharing with the LiDAR, and the keyboard
