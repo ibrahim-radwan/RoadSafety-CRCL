@@ -1,7 +1,7 @@
 # Notes for the research team
 
 The current state of the system, and what to know when recording and
-processing. Updated 2026-11-23. Earlier versions of this file are in git
+processing. Updated 2026-11-25. Earlier versions of this file are in git
 history.
 
 ## What to do now
@@ -16,9 +16,8 @@ history.
    hour**.
    - `df -h /` shows the free space. Aim for **25 GB or more**: about 1 h of
      road recording.
-   - `ls ~/camera_stage` should be empty. Anything in it is camera data
-     from a session whose move to the SD card failed: **don't delete it**,
-     tell us.
+   - If the page lists **"Camera data not moved to the SD card"**, press
+     **Move to SD card** for each: that frees their space too.
    - Don't delete recordings to make room; ask us first.
 3. **Test recording 1: 2 minutes, all four sensors, standing still.**
    After the stop, the page shows **Session notes: PASS** within seconds,
@@ -72,11 +71,19 @@ far it is tested only on playback.
 
 - **The Jetson's internal disk sets the longest session:** about 1 h of
   road recording per 23 GB free (indoors 4–8 times longer).
-  - At start, the log gives the minutes available, with a warning below
-    30 min.
-  - It warns at 10 and 3 min left. Then it stops every sensor in order:
-    the data are complete. The page shows a HINT, and the notes say
-    "session stopped early, cleanly: storage limit".
+  - **The page shows it before Start:** *"Camera space (Jetson disk): 8.3 GB
+    free → about 16 min on the road"*, and counts down during a recording.
+  - Start is refused below 1 min, or for a duration longer than the space.
+    For "as long as possible", use duration 0 (until Stop).
+  - When the space runs out, every sensor stops in order and the data are
+    complete: "Recording finished: camera space full".
+  - After each session the camera data move to the SD card and the space is
+    back, so sessions in a row each get the same time. No fixed limit is
+    needed.
+- **"Camera data not moved to the SD card: <name>"** on the page: an earlier
+  session's camera data are still on the Jetson disk (a power loss during
+  that session, or a failed move). Don't delete them; press **Move to SD
+  card**, then run the full check on that session.
 - **After every session: the session notes** (`session_notes.txt`),
   written in seconds. They list what each recorder reported: losses,
   camera gaps (how many, the longest and when, per minute), temperature

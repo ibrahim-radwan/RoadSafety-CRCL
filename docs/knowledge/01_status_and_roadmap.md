@@ -218,6 +218,11 @@ holding up the next session, checkpoints during a session, camera drops.
   the full check); the launcher stops a session whose radar capture starts
   mid-frame. Tested on synthetic sessions and with a stand-in ZED (the
   watchdog); `test_session_notes.py`.
+- **2026-11-25:** the team saw the eMMC limit and proposed a fixed 15 min.
+  Instead the page now shows the camera space (minutes of road recording,
+  counting down), refuses Start below 1 min or for a longer duration, and
+  lists leftover staging folders with a **Move to SD card** button
+  (`tests/test_camera_space.py`; checked in a browser with a stand-in ZED).
 - **Not yet verified on the rig:** a real ZED recording with
   `verify_after_stop: false` (how long the frame-count check takes on a
   large SVO2) and `verify_svo.py` on a real SVO2; the misalignment stop on a

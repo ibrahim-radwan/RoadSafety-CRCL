@@ -32,9 +32,19 @@
   - it watches the eMMC every 10 s, warns at 10 and 3 min left, and below
     `--stage-min-free-gb` (3 GB) **stops all sensors in order**: stop reason
     `storage limit: ...`, a complete session, a warning in the check.
-  - For sessions longer than the eMMC allows: free space on it, or (open)
-    segment the camera and move segments to the SD card while recording, or
-    add an NVMe drive.
+  - **The iPad page shows the camera space** (minutes of road recording,
+    counting down while recording) and refuses Start below 1 min or for a
+    duration longer than the space (2026-11-25). The launcher refuses the
+    same below 1 min.
+  - **Leftovers:** a staging folder that never reached the SD card (a failed
+    move, a power loss) is listed on the page and in the launcher's
+    preflight; **Move to SD card** moves it into its session. Until then it
+    shortens every session.
+  - The move after a session is copy-then-delete (two disks): the eMMC is
+    freed only once the copy is complete.
+  - For sessions longer than the eMMC allows: free space on it, or add an
+    NVMe drive (recommended), or (open) segment the camera and move segments
+    to the SD card while recording.
 
 ## Data rates at 8 fps
 

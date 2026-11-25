@@ -203,12 +203,25 @@ aligning the sensors, for example with a corner reflector on a stand.
 - The camera records to the Jetson's internal disk during a session and is
   moved onto the SD card when the session ends. This avoids camera frame
   drops; it is automatic.
-- The launcher refuses to start if the SD card is missing or there is not
-  enough space for the set duration. At start it prints how many minutes of
-  road recording the internal disk holds, and warns below 30 min.
-- **Long sessions:** when the internal disk gets nearly full, the session
-  **stops by itself, cleanly** (warnings at 10 and 3 min left). The data
-  are complete; start a new session after freeing space.
+- **The page shows the camera space** under the session settings:
+  *"Camera space (Jetson disk): 8.3 GB free → about 16 min on the road"*.
+  Green from 30 min, amber 10–30, red below 10. During a recording it counts
+  down (*"Camera space left: ~N min"*). The figure assumes a road scene;
+  indoors lasts 4–8 times longer.
+- **Start is refused** when the SD card is missing, when the camera space
+  is under 1 min, or when the duration typed is longer than the camera space
+  (the page says so as you type). Use duration 0 (until Stop) to record
+  until the space runs out.
+- **When the space runs out**, the session **stops by itself, cleanly**:
+  "Recording finished: camera space full - the data are complete".
+- **After each session the camera data move to the SD card** (about 1 min
+  per 5 GB), and the camera space is back to what it was. Three sessions in
+  a row each get the same time.
+- **"Camera data not moved to the SD card: <name>"** means an earlier
+  session's camera data are still on the Jetson disk (the Jetson lost power
+  during that session, or the move failed). Don't delete them. Press **Move
+  to SD card**: they go into that session on the SD card, then run the full
+  check on it. If there is no button, the line says why; ask the team lead.
 - **The SD card is ext4 (Linux).** Windows cannot read it directly. Copy
   sessions off through the Jetson (section 6).
 
@@ -221,7 +234,8 @@ aligning the sensors, for example with a corner reflector on a stand.
 | **Radar 0 packets/s**, or HINT "DCA1000 not responding" | Check the radar's **12 V supply** and the DCA1000 Ethernet cable. Power-cycle the radar and DCA1000. |
 | **Radar below 5,000 packets/s** (card red; e.g. ~900 or ~3,000/s), or the session **stops by itself** with HINT "radar data rate too low (DCA1000 throttled)" | Rare DCA1000 start-up fault: it sends too slowly, buffers the radar data, then stops capturing. The launcher stops the session automatically after 5 s of low rate. **Power-cycle the radar + DCA1000** (12 V off, wait 10 s, on) and start a new session. |
 | Session **stops by itself within a second** of the radar starting, HINT "radar capture began in the middle of a radar frame" | Happens now and then at start. **Just start a new session**; no power-cycle needed. |
-| Session **stops by itself** with HINT "the Jetson's internal disk ... was nearly full" | The data recorded are complete. Free space on the Jetson's internal disk before the next long session. |
+| Session **stops by itself** with HINT "the Jetson's internal disk ... was nearly full" | The data recorded are complete. For longer sessions, free space on the Jetson's internal disk. |
+| Start refused: "not enough camera space on the Jetson disk" | Move any camera data the page lists to the SD card (**Move to SD card**), or free space on the Jetson's internal disk. |
 | HINT "no LiDAR data" | LiDAR power and the USB-Ethernet adapter. |
 | HINT "no Altos radar data", or "PREFLIGHT FAILED: Altos radar does not answer" | The Altos's power (15 V / 4 A adaptor; it needs 10–20 s to boot), its connector and media converter, and its USB-Ethernet adapter. To record without it, untick **Altos radar**. |
 | Altos card red with **restarts** | The Altos restarted during the session: a power dip, or someone changed its settings. Don't change its settings while recording. The session check fails it. |

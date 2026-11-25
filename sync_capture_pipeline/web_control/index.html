@@ -28,6 +28,16 @@
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .row > * { flex: 1 1 200px; }
+  .space { margin-top: 12px; padding: 8px 12px; border-radius: 10px; font-size: 16px; display: none; }
+  .space.on { display: block; }
+  .space.ok { background: var(--ok-bg); color: var(--ok); }
+  .space.warn { background: var(--warn-bg); color: var(--warn); }
+  .space.bad { background: var(--bad-bg); color: var(--bad); }
+  .space .sd { color: var(--muted); font-size: 14px; }
+  .leftover { margin-top: 8px; padding: 8px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn);
+              display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 15px; }
+  .leftover button { flex: 0 0 auto; width: auto; min-height: 0; font-size: 15px; font-weight: 600; padding: 8px 14px;
+                     background: var(--accent); color: #fff; border: 0; border-radius: 8px; opacity: 1; }
   label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 4px; }
   input[type=text], input[type=number] { width: 100%; font-size: 18px; padding: 12px; border-radius: 10px;
          border: 1px solid var(--line); background: var(--bg); color: var(--text); }
@@ -122,6 +132,9 @@
         </div>
       </div>
     </div>
+    <div class="space" id="space"></div>
+    <div id="leftovers"></div>
+    <div class="msg" id="durmsg"></div>
     <div class="row" style="margin-top:12px">
       <div class="checks"><label><input type="checkbox" id="g_stage3">Stage 3 calibration guide (walk / side-steps / flips, double beep at each phase) - leave OFF for data collection</label></div>
     </div>
@@ -276,7 +289,8 @@ function showTiming(s) {
     const dur = s.duration_s > 0 ? ` / ${fmtTime(Math.round(s.duration_s))}` : "";
     html = `<div class="big2">● ${fmtTime(Math.floor(s.recording_s))}${dur}</div><div class="what">RECORDING</div>`;
   } else if (s.recording_s) {
-    cls = "end"; html = `<div class="big2">Recording finished</div><div class="what">${fmtTime(Math.floor(s.recording_s))} recorded - wait for the session notes</div>`;
+    const full = s.result && String(s.result.stop_reason || "").startsWith("storage limit");
+    cls = "end"; html = `<div class="big2">Recording finished${full ? ": camera space full" : ""}</div><div class="what">${fmtTime(Math.floor(s.recording_s))} recorded${full ? " - the data are complete" : ""} - wait for the session notes</div>`;
   }
   b.className = "banner " + cls; b.innerHTML = html;
   // beep when recording starts and when it ends
@@ -362,14 +376,18 @@ async function refresh() {
   $("phase").textContent = s.phase; $("phase").className = "phase " + s.phase.split(" ")[0];
   $("dot").className = "dot" + (s.running ? " on" : "");
   // Recording and live view never run together: each one's start is off while the other runs.
-  $("btnStart").disabled = s.running || s.live_on; $("btnStop").disabled = !s.running;
-  $("btnStart").textContent = s.live_on ? "Start recording (stop live view first)" : "Start recording";
+  // No camera space (under 1 min on the Jetson disk): Start is refused anyway, so it is off; untick Camera to record without it.
+  const noSpace = !s.running && s.camera_space && s.camera_space.minutes < 1 && $("s_camera").checked;
+  $("btnStart").disabled = s.running || s.live_on || noSpace; $("btnStop").disabled = !s.running;
+  $("btnStart").textContent = s.live_on ? "Start recording (stop live view first)"
+    : noSpace ? "Start recording (no camera space)" : "Start recording";
   $("btnLive").disabled = s.running || s.live_on;
   $("btnLive").textContent = s.running ? "Start live view (not while recording)" : "Start live view";
   if (s.live_on && !liveOn) liveBegin();
   $("sessname").textContent = s.name ? "– " + s.name : "";
   $("elapsed").textContent = "Elapsed " + (s.running ? fmtTime(s.elapsed_s) : "–");
   $("disk").textContent = "Disk free " + s.disk_free_gb + " GB";
+  showSpace(s);
   $("reason").textContent = s.result && s.result.stop_reason ? "Stop: " + s.result.stop_reason : "";
   const r = s.sensors.radar, c = s.sensors.camera, l = s.sensors.lidar, al = s.sensors.altos;
   // Normal: ~8,650 packets/s at 4 fps (~17,300 at 8 fps). Far below that means the
@@ -416,6 +434,49 @@ async function refresh() {
   if (lastRunning !== s.running || checkState !== lastCheck) loadSessions();
   lastRunning = s.running; lastCheck = checkState;
 }
+// Camera space on the Jetson's own disk (the camera records there, then moves to the SD card):
+// minutes of ROAD recording (20 GB/h; indoors lasts longer), leftovers of sessions never moved.
+const escH = (t) => String(t || "").replace(/[<>&]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m]));
+let lastLeftovers = "", lastSpace = null;
+function showSpace(s) {
+  lastSpace = s;
+  const sp = s.camera_space, el = $("space");
+  if (!sp) { el.className = "space"; return; }
+  const m = Math.floor(sp.minutes), sdH = s.disk_free_gb / 130;
+  const rec = s.running && s.phase !== "finished";
+  el.className = "space on " + sp.level;
+  el.innerHTML = rec
+    ? `Camera space left: <b>~${m} min</b> (${sp.free_gb} GB free on the Jetson disk)` +
+      (m < 10 ? " - the session will stop by itself then" : "")
+    : `Camera space (Jetson disk): ${sp.free_gb} GB free → <b>${m < 1 ? "less than 1 min" : "about " + m + " min"}</b> on the road` +
+      (m < 1 ? " - not enough to record: free space on it" + (sp.leftovers.length ? " or move the data below" : "") : "") +
+      `<div class="sd">SD card: ${s.disk_free_gb} GB free → about ${sdH.toFixed(1)} h</div>`;
+  const mv = s.stage_move;
+  let html = sp.leftovers.map((x) => `<div class="leftover"><span>⚠ Camera data not moved to the SD card:
+      <b>${escH(x.name)}</b> (${x.gb < 0.1 ? "<0.1" : x.gb} GB). Don't delete it.</span>` +
+      (x.movable && !s.running && !(mv && mv.state === "moving")
+        ? `<button data-move="${escH(x.name)}">Move to SD card</button>`
+        : `<span style="font-size:13px">${escH(x.movable ? (s.running ? "can be moved after the recording" : "") : x.why)}</span>`) +
+      `</div>`).join("");
+  if (mv) html += `<div class="leftover" style="${mv.state === "error" ? "background:var(--bad-bg);color:var(--bad)" :
+      mv.state === "done" ? "background:var(--ok-bg);color:var(--ok)" : ""}">${escH(mv.msg)}</div>`;
+  if (html !== lastLeftovers) { $("leftovers").innerHTML = html; lastLeftovers = html; }
+  checkDuration();
+}
+function checkDuration() {
+  const s = lastSpace, sp = s && s.camera_space, secs = parseFloat($("secs").value) || 0;
+  $("durmsg").textContent = sp && !s.running && secs > 0 && $("s_camera").checked && secs / 60 > sp.minutes
+    ? `${Math.round(secs / 60)} min is more than the ~${Math.floor(sp.minutes)} min of camera space; the launcher will refuse. ` +
+      "Use 0 (until Stop) to record until the space runs out." : "";
+}
+$("secs").oninput = checkDuration; $("s_camera").onchange = checkDuration;
+$("leftovers").onclick = async (ev) => {
+  const name = ev.target.dataset && ev.target.dataset.move;
+  if (!name) return;
+  if (!confirm(`Move the camera data of ${name} into its session on the SD card?`)) return;
+  try { await post("/api/stage/move", { name }); } catch (e) { $("msg").textContent = e.message; }
+  refresh();
+};
 async function loadSessions() {
   const list = await getJSON("/api/sessions");
   $("sessions").innerHTML = list.map((x) => {

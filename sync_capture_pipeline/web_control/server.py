@@ -67,6 +67,7 @@ HERE = Path(__file__).resolve().parent
 PIPELINE = HERE.parent
 sys.path.insert(0, str(PIPELINE))
 import board_health  # noqa: E402  (sysfs temperatures, no root)
+import capture_session  # noqa: E402  (stage_status: the camera staging disk; the launcher's own numbers)
 import liveview  # noqa: E402
 LAUNCHER = PIPELINE / "capture_session.py"
 CHECKER = PIPELINE / "check_session.py"
@@ -149,6 +150,7 @@ class Session:
         self.has_radar, self.duration, self.n_other, self.ready = True, 0.0, 2, 0
         self.countdown_end = self.rec_start = self.rec_end = None   # operator timing
         self.check = None           # {"status": "running"|"PASS"|"FAIL", ...}
+        self.stage_move = None      # {"name", "state": "moving"|"done"|"error", "msg"}: leftover camera -> SD
 
     # ── helpers ─────────────────────────────────────────────────────────
     def _append(self, line: str):
@@ -213,6 +215,18 @@ class Session:
         with self.lock:
             if self.running():
                 return "a session is already running"
+            if self.stage_move and self.stage_move["state"] == "moving":
+                return f"camera data of {self.stage_move['name']} is being moved to the SD card - wait for it"
+        if self.camera_stage and "camera" in sensors:
+            sp = self.camera_space()
+            if sp["minutes"] < 1:
+                return (f"not enough camera space on the Jetson disk ({sp['free_gb']} GB free, "
+                        f"{sp['reserve_gb']:.0f} GB are kept free)"
+                        + (" - move the leftover camera data to the SD card first" if sp["leftovers"]
+                           else " - free space on it first"))
+            if secs > 0 and secs / 60 > sp["minutes"]:
+                return (f"{secs / 60:.0f} min is more than the ~{sp['minutes']:.0f} min of camera space - "
+                        f"shorten it, or use 0 (until Stop) to record until the space runs out")
         if not NAME_RE.match(name):
             return "name: letters, digits, '-' and '_' only (max 64)"
         if name == CALIB_DIR:
@@ -324,6 +338,76 @@ class Session:
                 hints.append("HINT: " + hint)
         return hints
 
+    # ── the camera staging disk ─────────────────────────────────────────
+    def camera_space(self) -> dict:
+        """Free space and road minutes on the staging disk, and leftovers with
+        whether each can be moved into its session on the SD card."""
+        if not self.camera_stage:
+            return None
+        sp = capture_session.stage_status(self.camera_stage, active=self.name if self.running() else None)
+        for lo in sp["leftovers"]:
+            lo["movable"], lo["why"] = self._movable(lo["name"])
+        sp["level"] = "ok" if sp["minutes"] >= 30 else "warn" if sp["minutes"] >= 10 else "bad"
+        return sp
+
+    def _movable(self, name: str):
+        src, dst = self.camera_stage / name / "camera", self.root / name
+        if not src.is_dir():
+            return False, "no camera folder in it - ask before touching it"
+        if not dst.is_dir():
+            return False, f"no session '{name}' on the SD card"
+        if (dst / "camera").exists():
+            return False, "the session on the SD card already has a camera folder (a partial copy?) - ask"
+        return True, f"moves into {dst / 'camera'}"
+
+    def move_leftover(self, name: str) -> str:
+        """Move a leftover camera folder into its session on the SD card (a move:
+        copied, then the eMMC copy removed; nothing is deleted on failure)."""
+        if not NAME_RE.match(name or ""):
+            return "bad name"
+        with self.lock:
+            if self.running():
+                return "not while recording"
+            if self.stage_move and self.stage_move["state"] == "moving":
+                return f"already moving {self.stage_move['name']}"
+        ok, why = self._movable(name)
+        if not ok:
+            return why
+        src, dst = self.camera_stage / name / "camera", self.root / name / "camera"
+        gb = capture_session.dir_gb(src)
+        if shutil.disk_usage(self.root).free / 1e9 < gb + 5:
+            return f"not enough space on the SD card for {gb:.1f} GB"
+        with self.lock:
+            self.stage_move = {"name": name, "state": "moving", "msg": f"moving {gb:.1f} GB to the SD card ..."}
+
+        def work():
+            t0 = time.monotonic()
+            try:
+                shutil.move(str(src), str(dst))
+                try:
+                    src.parent.rmdir()
+                except OSError:
+                    pass
+                secs = round(time.monotonic() - t0, 1)
+                meta_path = self.root / name / "session.json"
+                if meta_path.is_file():          # record it next to the launcher's own entry
+                    meta = json.loads(meta_path.read_text())
+                    meta["camera_moved_later"] = {"from": str(src), "gb": round(gb, 3), "moved_s": secs,
+                                                  "local": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                                  "by": "web page (leftover on the staging disk)"}
+                    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                state = {"name": name, "state": "done",
+                         "msg": f"{name}: camera data moved to the SD card ({gb:.1f} GB in {secs:.0f} s) - "
+                                f"run the full check on the session"}
+            except Exception as exc:
+                state = {"name": name, "state": "error",
+                         "msg": f"{name}: move failed ({exc}); the camera data are still in {src}"}
+            with self.lock:
+                self.stage_move = state
+
+        threading.Thread(target=work, name="stage-move", daemon=True).start()
+        return ""
+
     def stop(self) -> str:
         pid = self.proc.pid if self.proc is not None else self.pid
         if pid is None or not self.running():
@@ -347,6 +431,7 @@ class Session:
                 return
 
     def status(self) -> dict:
+        space = self.camera_space()          # disk access: outside the lock
         with self.lock:
             now = time.time()
             sensors = {k: dict(v, stale=now - v["t"] > 3.0, age_s=round(now - v["t"], 1))
@@ -362,6 +447,7 @@ class Session:
                                     if self.rec_start else None),
                     "recording_active": bool(self.rec_start and not self.rec_end),
                     "duration_s": self.duration,
+                    "stage_move": self.stage_move, "camera_space": space,
                     "board": board_health.snapshot(),          # live, also while idle
                     "board_warn_c": board_health.WARN_C, "board_hot_c": board_health.HOT_C}
 
@@ -452,6 +538,13 @@ def create_app(session: Session, live: liveview.LiveView = None) -> Flask:
         st = session.status()
         st["live_on"] = live.active()
         return jsonify(st)
+
+    @app.post("/api/stage/move")
+    def api_stage_move():
+        body = request.get_json(force=True, silent=True) or {}
+        with exclusive:                      # not while a recording is being started
+            err = session.move_leftover(str(body.get("name", "")))
+        return (jsonify(error=err), 400) if err else jsonify(ok=True)
 
     @app.get("/api/log")
     def api_log():

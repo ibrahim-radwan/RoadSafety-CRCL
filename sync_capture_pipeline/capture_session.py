@@ -84,6 +84,28 @@ RADAR_LOW_FRACTION, RADAR_LOW_SECONDS = 0.5, 5
 GB_PER_HOUR = {"radar": 90, "camera": 20, "lidar": 18,  # measured 2026-10-10 at 8 fps: 90.6 / (camera above) / 17.5
                "altos": 1}                              # Altos: ~0.3 GB/h indoors (2026-11-15); 1 allows a busier scene
 CAMERA_WARN_MIN = (10, 3)                # warn when the camera staging disk has this many minutes left
+STAGE_MIN_FREE_GB = 3.0                  # kept free on the staging disk (the ZED stops itself at 2 GiB)
+
+
+def dir_gb(path: Path) -> float:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / 1e9
+
+
+def stage_status(stage: Path, active: str = None, reserve_gb: float = STAGE_MIN_FREE_GB) -> dict:
+    """The camera staging disk: free space, minutes of road recording it holds,
+    and LEFTOVERS - folders of earlier sessions whose camera was never moved to
+    the SD card (a failed move, or the launcher died first). `active` = the
+    session recording now, which is not a leftover."""
+    free = shutil.disk_usage(stage if stage.exists() else stage.parent).free / 1e9
+    left = []
+    if stage.is_dir():
+        for d in sorted(stage.iterdir()):
+            if d.is_dir() and d.name != active:
+                gb = dir_gb(d)
+                if gb > 0:
+                    left.append({"name": d.name, "gb": round(gb, 2), "has_camera": (d / "camera").is_dir()})
+    return {"free_gb": round(free, 1), "reserve_gb": reserve_gb,
+            "minutes": round(max(0.0, free - reserve_gb) / GB_PER_HOUR["camera"] * 60, 1), "leftovers": left}
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,7 +143,7 @@ def parse_args() -> argparse.Namespace:
                    help="seconds to wait for camera/LiDAR/Altos to start recording")
     p.add_argument("--min-free-gb", type=float, default=5.0,
                    help="stop the session if free space falls below this")
-    p.add_argument("--stage-min-free-gb", type=float, default=3.0,
+    p.add_argument("--stage-min-free-gb", type=float, default=STAGE_MIN_FREE_GB,
                    help="stop the whole session, cleanly, if the camera staging disk falls below this "
                         "(the ZED stops itself at 2 GiB, which used to end the session abruptly)")
     return p.parse_args()
@@ -281,11 +303,18 @@ def main() -> int:
             problems.append(f"camera staging dir {cam_dir} already exists")
         else:
             cam_dir.parent.mkdir(parents=True, exist_ok=True)
-            stage_gb = shutil.disk_usage(cam_dir.parent).free / 1e9
-            stage_min = max(0.0, stage_gb - a.stage_min_free_gb) / GB_PER_HOUR["camera"] * 60
+            st = stage_status(a.camera_stage, active=a.out.name, reserve_gb=a.stage_min_free_gb)
+            stage_gb, stage_min = st["free_gb"], st["minutes"]
             emit(f"  camera   : staged on {cam_dir.parent} ({stage_gb:.1f} GB free, ~{stage_min:.0f} min of "
                  f"camera on the road), moved to {a.out / 'camera'} afterwards")
-            if a.secs > 0 and stage_min < a.secs / 60:
+            for lo in st["leftovers"]:
+                emit(f"  WARNING: {a.camera_stage / lo['name']} ({lo['gb']:.1f} GB) is camera data of an earlier "
+                     f"session that was never moved to the SD card - don't delete it; move it into its session")
+            if stage_min < 1:
+                problems.append(f"not enough camera space on {a.camera_stage} ({stage_gb:.1f} GB free, "
+                                f"{a.stage_min_free_gb:.0f} GB are kept free) - free space on it"
+                                + (" or move the leftover camera data to the SD card" if st["leftovers"] else ""))
+            elif a.secs > 0 and stage_min < a.secs / 60:
                 problems.append(f"not enough space for the camera on {cam_dir.parent} "
                                 f"(~{stage_min:.0f} min on the road, {a.secs / 60:.0f} min asked)")
             elif stage_min < 30:
@@ -324,6 +353,11 @@ def main() -> int:
     for pb in problems:
         emit(f"  PREFLIGHT FAILED: {pb}")
     if problems:
+        if cam_dir != a.out / "camera":
+            try:
+                cam_dir.parent.rmdir()          # this session's (empty) staging folder
+            except OSError:
+                pass
         return 1
 
     if a.delay > 0:
@@ -494,7 +528,7 @@ def main() -> int:
     camera_staged = None
     if cam_dir != a.out / "camera" and cam_dir.exists():
         t0 = time.monotonic()
-        size_gb = sum(f.stat().st_size for f in cam_dir.rglob("*") if f.is_file()) / 1e9
+        size_gb = dir_gb(cam_dir)
         emit(f"  moving camera data ({size_gb:.2f} GB) from {cam_dir} to {a.out / 'camera'} ...")
         try:
             shutil.move(str(cam_dir), str(a.out / "camera"))

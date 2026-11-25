@@ -55,6 +55,16 @@ don't need a screen, keyboard or SSH on the scooter.
    - disk full;
    - overheating.
 
+**Camera space.** The page shows the camera staging disk's free space and
+the minutes of road recording it holds (20 GB/h; `capture_session.stage_status`,
+the launcher's own numbers), counting down during a recording. Start is
+refused below 1 min, or for a duration longer than that. Folders left on the
+staging disk by earlier sessions (a failed move, a power loss) are listed;
+**Move to SD card** (`POST /api/stage/move`) moves one into its session on the
+SD card when that session exists and has no camera folder yet. It is a move
+(copied, then removed from the eMMC; nothing removed on failure), refused while
+recording, and noted in the session's `session.json` (`camera_moved_later`).
+
 Sessions are written to the **SD card**: `/mnt/sdcard/sessions/<name>/` by
 default (`--sessions-root`). The camera records to `/home/jetson/camera_stage`
 on the eMMC during the session, and the launcher moves it into the session
