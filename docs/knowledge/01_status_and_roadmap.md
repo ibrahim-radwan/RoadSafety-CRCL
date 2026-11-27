@@ -173,8 +173,33 @@ and keeps its factory addresses (02).
   - the live worker and calibration capture from a recording;
   - the report's Altos figures on stand-in data;
   - `tests/test_altos.py`.
-- **Not yet run:** a real 4-sensor session on the rig, and the full report
-  on one (the reference drive wasn't attached).
+- **First 4-sensor sessions from the rig (2026-11-27,** on the team drive
+  `/media/ibrahim/94DD-7E88/Dr_Hassan/`):
+  - `offset-session` (2.2 min, walking): full check PASS; report, detection.
+    Gave **`altos_ms` = −64 ms** (07).
+  - `outdoorsession_25_11_city/run_20261125_1722` (17 min ride): full check
+    PASS (all 30,210 camera frames decode); report, detection. With the
+    offset applied, the range timing residual is −2 ± 1 ms over 12,950
+    frames, so it confirms the offset. Altos median 3,643 points per frame
+    (max 6,205). The second copy in `outdoor_sessions/` is damaged in
+    transfer: 0-byte SVO2 and 42 radar frames missing. The rig's original
+    verified OK.
+  - `run_20261126_1732` (29 min ride): no camera folder and no
+    `session.json`. The copy was made while the camera data was still
+    moving to the SD card; on the rig: Move to SD card, then copy again.
+    It also has **three Altos dropouts of 4–5.5 s, about 12 min apart**
+    (204 frames lost, 5 incomplete). The radar clock kept running, the
+    Jetson dropped nothing, and there was no restart: likely the link
+    (media converter or USB adapter). The team should check the rig's
+    `journalctl -k` for link down/up at about 19:23:00, 19:35:29 and
+    19:47:40 (rig clock).
+  - **The full report ran on real 4-sensor data for the first time,
+    without errors.**
+  - The rig's clock is about 17 h behind the iPad's: the session names
+    (iPad) and `started_local` (Jetson) disagree. It's harmless for sync
+    (CLOCK_MONOTONIC).
+- **On a moving rig the Altos's "moving" colour marks almost everything:**
+  it uses raw Doppler, without ego-motion compensation. Open.
 
 **Open:**
 - The small-room tests (README): no reflector or LiDAR available,
@@ -183,8 +208,9 @@ and keeps its factory addresses (02).
 - On the rig:
   - create the `altos-usb-eth` network profile (NEW_BOARD_SETUP section 6;
     needs the owner's go-ahead);
-  - record a 4-sensor session with someone walking;
-  - run the report and set `altos_ms` from its Altos velocity check.
+  - ~~record a 4-sensor session with someone walking; set `altos_ms`~~ done
+    2026-11-27 (−64 ms);
+  - find the cause of the Altos dropouts (link?).
 - Calibrate the Altos's mounting relative to the vehicle frame; its points
   are in its own frame. That is the team's calibration.
 

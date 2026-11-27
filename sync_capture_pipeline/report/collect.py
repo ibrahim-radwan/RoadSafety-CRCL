@@ -416,6 +416,60 @@ def collect_altos(S: Path, lid: dict, snap_radar_idx: list, pairs: list) -> dict
     }
 
 
+def range_timing(t, r, lid: dict, taus=None, n_boot: int = 100, block_s: float = 3.0) -> dict:
+    """Whole-session time lag of a sensor's target range against the LiDAR target track:
+    r(t) = r_lidar(t + tau) + c, by least absolute deviation over tau (c: constant range difference,
+    e.g. mounting and which part of the body each sensor sees). tau < 0: the sensor's times are late;
+    adding tau to its offset aligns it. A walk along the boresight informs every straight leg (the
+    shift flips sign between approaching and receding), where a Doppler fit only learns at the
+    turns. Used for the Altos (2026-11-27: -64 ms on offset-session, the TI radar +2 +- 13 ms as a
+    control). Uncertainty: block bootstrap (3 s blocks)."""
+    taus = np.arange(-0.3, 0.3001, 0.002) if taus is None else taus
+    tl, rl = lid["track_t"], lid["track_r"]
+    ok = np.isfinite(rl)
+    tl, rl = tl[ok], rl[ok]
+    good = np.isfinite(r)
+    t, r = np.asarray(t)[good], np.asarray(r)[good]
+    if len(tl) < 50 or len(t) < 100:
+        return {"status": "not enough samples", "n": int(len(t))}
+    seg = np.r_[0, np.cumsum(np.diff(tl) > 0.3)]
+
+    def at(tt):
+        out = np.full(len(tt), np.nan)
+        j = np.searchsorted(tl, tt)
+        g = (j > 0) & (j < len(tl))
+        jj = j[g]
+        w = (tt[g] - tl[jj - 1]) / (tl[jj] - tl[jj - 1])
+        v = rl[jj - 1] + w * (rl[jj] - rl[jj - 1])
+        v[seg[jj] != seg[jj - 1]] = np.nan              # no interpolation across track gaps
+        out[g] = v
+        return out
+
+    def best(tt, rr, grid):
+        cost = []
+        for tau in grid:
+            ref = at(tt + tau)
+            m = np.isfinite(ref)
+            d = rr[m] - ref[m]
+            c = float(np.median(d)) if m.any() else np.nan
+            cost.append((float(np.mean(np.abs(d - c))) if m.sum() >= 50 else np.inf, int(m.sum()), c))
+        k = int(np.argmin([x[0] for x in cost]))
+        return float(grid[k]), cost[k]
+    tau, (mad, n, c) = best(t, r, taus)
+    if not np.isfinite(mad):
+        return {"status": "not enough overlap", "n": int(len(t))}
+    rng = np.random.default_rng(0)
+    blocks = np.floor((t - t[0]) / block_s).astype(int)
+    ub = np.unique(blocks)
+    boots = []
+    for _ in range(n_boot):
+        idx = np.concatenate([np.nonzero(blocks == b)[0] for b in rng.choice(ub, len(ub))])
+        boots.append(best(t[idx], r[idx], taus[::2])[0])
+    speed = np.abs(np.diff(rl)) / np.maximum(np.diff(tl), 1e-3)
+    return {"status": "ok", "tau_ms": tau * 1e3, "sigma_ms": float(np.std(boots)) * 1e3, "range_diff_m": c,
+            "mad_m": mad, "n": n, "median_speed": float(np.median(speed[np.diff(tl) < 0.3]))}
+
+
 # ── timing check (velocity) ─────────────────────────────────────────────────
 def velocity_timing(radar: dict, lid: dict, window: float = 30.0) -> list:
     from scipy.signal import savgol_filter
@@ -476,5 +530,6 @@ def collect(S: Path) -> dict:
         log("Altos: points from sync/altos_points.npz, timing check (Altos Doppler vs LiDAR range rate) ...")
         D["altos"] = collect_altos(S, D["lidar"], D["snap_radar_idx"], pairs)
         D["altos_vel_timing"] = velocity_timing(D["altos"], D["lidar"])
+        D["altos_range_timing"] = range_timing(D["altos"]["t"], D["altos"]["target_range"], D["lidar"])
     D["collect_s"] = time.monotonic() - t_start
     return D

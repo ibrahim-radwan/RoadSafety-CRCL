@@ -67,6 +67,35 @@ originals on the SD card were complete.
 Meanwhile, please try the live view's calibration capture on the rig. So
 far it is tested only on playback.
 
+## Your sessions of 2026-11-24 and 25
+
+We ran the full check, the report and the detection on what you shared.
+
+- **`offset-session`** and the city ride **`run_20261125_1722`** (the copy in
+  `outdoorsession_25_11_city`): full check **PASS** on all four sensors, and
+  every camera frame decodes. The Altos's time offset comes from these two
+  (see the Altos section).
+- **The second copy of `run_20261125_1722`** (in `outdoor_sessions/`) is
+  damaged: its `camera.svo2` is 0 bytes and 42 radar frames are missing. The
+  original on the rig verified fine, so only that copy is bad. Keep the
+  original, and run the full check on every copy you make.
+- **`run_20261126_1732`** arrived without `camera/` and `session.json`: it
+  was copied while the camera data was still moving to the SD card. On the
+  rig, press **Move to SD card** for it on the iPad page. Then copy it again
+  and run the full check.
+- **In `run_20261126_1732` the Altos stopped sending three times, for 4–5.5 s
+  each, about 12 minutes apart** (at about 19:23:00, 19:35:29 and 19:47:40
+  on the rig's clock). The radar didn't restart and the Jetson lost nothing,
+  so the data stopped on the way. Please:
+  - run `journalctl -k --since "<that day> 19:15" --until "<that day> 19:50" | grep -i link`
+    on the rig and send us the output;
+  - check the Altos's connector, its media converter, and the USB-Ethernet
+    adapter's cable and port.
+- **The Jetson's clock is about 17 hours behind** the iPad's: the session
+  names (from the iPad) and the start times in `session.json` (from the
+  Jetson) disagree. Sync isn't affected. Set the Jetson's date and time when
+  it is on the internet.
+
 ## Recording long sessions
 
 - **The Jetson's internal disk sets the longest session:** about 1 h of
@@ -204,14 +233,13 @@ points), no FPS limit (15 frames/s), free running.
 - **Mounting:** its points are in its **own** frame (x forward, y left, z
   up). The Altos's place in the vehicle frame is part of your extrinsic
   calibration.
-- **Time offset:** its processing delay (under 60 ms per its spec) is still
-  in its times.
-  - We measure it from your pilot's walking minute (the report's Altos
-    timing check) and add it to `calibration/stage3_offsets.json` as
-    `altos_ms`.
-  - After you pull that, re-run `make_report.py` on the sessions recorded
-    so far: offsets are applied when a session is aligned, never to the raw
-    data.
+- **Time offset: set.** The Altos's times are 64 ms late (its processing
+  and transmission), so `calibration/stage3_offsets.json` has
+  `altos_ms = −64` (from your `offset-session`; confirmed on your city
+  ride). After pulling, re-run `make_report.py` on the sessions recorded so
+  far: offsets are applied when a session is aligned, never to the raw
+  data. The report's line "Range-based Altos−LiDAR timing" should then
+  read about 0 ms. The value holds for profile 150m_1, threshold 0.
 - **Signs:** the Doppler and elevation signs follow the vendor's documents;
   they're not yet checked against a target.
 
@@ -384,9 +412,9 @@ camera: range, speed, timing and angle conventions.
   frame, LiDAR sweep and Altos frame (`altos_frame`, `t_altos`,
   `altos_error_ms`) and their time errors. Rows in a gap are flagged
   (`camera_gap`, `lidar_gap`, `altos_gap`).
-- **Altos times:** each frame's arrival on the Jetson, smoothed. Its
-  processing delay is not yet removed (see the Altos section). Paired with
-  the radar frames, the Altos is within ±33 ms.
+- **Altos times:** each frame's arrival on the Jetson, smoothed, minus its
+  64 ms delay (`altos_ms`). Paired with the radar frames, the Altos is
+  within ±33 ms.
 - `make_report.py` aligns a session, writes `pairs.csv` and the HTML report.
 
 **Detections (`run_perception.py --session <s>`)**, in `sync/`:

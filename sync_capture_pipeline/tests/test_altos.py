@@ -109,3 +109,24 @@ def test_session_check_and_align(tmp_path):
     assert len(pairs) == 120 and np.abs(err).max() <= 1000 * PERIOD / 2 + 0.5
     rep = json.loads((S / "sync" / "alignment.json").read_text())
     assert rep["altos"]["frames_lost"] == 0 and not rep["altos_offset_calibrated"]
+
+
+def test_range_timing_recovers_a_known_lag():
+    """report.collect.range_timing on a synthetic walk (towards and away, 1.2 m/s): an Altos-like range
+    track 64 ms late, 0.2 m further and noisy, against a LiDAR-like track at 10 Hz."""
+    pytest = __import__("pytest")
+    pytest.importorskip("matplotlib")
+    from report.collect import range_timing
+    rng = np.random.default_rng(3)
+
+    def walk(t):                                         # 3 m <-> 11 m, 1.2 m/s, triangle wave
+        ph = (t * 1.2) % 16.0
+        return 3.0 + np.where(ph < 8.0, ph, 16.0 - ph)
+    tl = np.arange(0, 120, 0.1)
+    lid = {"track_t": tl, "track_r": walk(tl) + rng.normal(0, 0.02, len(tl))}
+    ta = np.arange(0, 120, 1 / 15)
+    r = walk(ta - 0.064) + 0.2 + rng.normal(0, 0.05, len(ta))
+    out = range_timing(ta, r, lid, n_boot=30)
+    assert out["status"] == "ok"
+    assert abs(out["tau_ms"] + 64) <= 6 and out["sigma_ms"] < 6
+    assert abs(out["range_diff_m"] - 0.2) < 0.03

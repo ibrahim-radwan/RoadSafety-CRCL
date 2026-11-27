@@ -4,6 +4,8 @@
   "radar_sigma_ms": 1.45,
   "camera_ms": 23.34,
   "camera_sigma_ms": 3.28,
+  "altos_ms": -64.0,
+  "altos_sigma_ms": 5.0,
   "sessions": [
     "/mnt/sdcard/sessions/stage3_01",
     "/mnt/sdcard/sessions/stage3_02",
@@ -17,5 +19,17 @@
     "lidar": "RS-Fairy, config.yaml as of 2026-10-11, mounted facing forward"
   },
   "method": "measure_sync_offset.py, 3 daylight sessions, LiDAR reference, --lidar-range-pct 10 (plate surface); pct 20 gave radar +12.67 ms",
-  "note": "offsets are ADDED to each sensor's time. Re-measure if firmware/frame period, DCA delay, camera mode or LiDAR config changes."
+  "note": "offsets are ADDED to each sensor's time. Re-measure if firmware/frame period, DCA delay, camera mode or LiDAR config changes. altos_ms: the Altos's processing + transmission delay (its times are frame arrivals); re-measure if its profile, threshold or firmware changes.",
+  "altos": {
+    "session": "offset-session (recorded as run_20261126_1225, 2026-11-25, 2.2 min, someone walking towards and away from the rig, 2.6-11.9 m)",
+    "measured_local": "2026-11-27",
+    "method": "whole-session range lag against the LiDAR target track: r_altos(t) = r_lidar(t + tau) + c, Altos range = median of its moving points within 1 m / 25 deg of the LiDAR target; tau = -64 ms, bootstrap sd 3.3 ms (3 s blocks); -56..-66 ms across gates and session halves. Control: the TI radar's detections by the same method gave +2 +- 13 ms with its offset applied. The report's 30 s Doppler windows could not resolve it on this walk (steady legs, information only at the turns).",
+    "valid_for": {
+      "altos_profile": "150m_1",
+      "altos_threshold_coeff": 0.0,
+      "altos_fps_limit": null,
+      "altos_sync": "FreeRunning",
+      "altos_firmware": "8e75cfeb"
+    }
+  }
 }

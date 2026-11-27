@@ -174,6 +174,15 @@ def altos_observations(D) -> list:
         obs.append(f"Altos pairing: nearest Altos frame to every radar frame, error p01/p99 {e['p01']:+.1f}/"
                    f"{e['p99']:+.1f} ms (bound ±{(pr.get('altos_period_ms') or 66.7) / 2:.1f} ms); "
                    f"{pr.get('altos_gap_pairs', 0)} pairs in an Altos gap.")
+    rt = D.get("altos_range_timing") or {}
+    if rt.get("status") == "ok":
+        good = rt["sigma_ms"] < 10 and rt["median_speed"] > 0.4
+        obs.append(f"Range-based Altos−LiDAR timing (whole session, the Altos's moving points at the LiDAR target): "
+                   f"residual {rt['tau_ms']:+.0f} ± {rt['sigma_ms']:.0f} ms over {rt['n']:,} frames (range difference "
+                   f"{rt['range_diff_m']:+.2f} m, scatter {100 * rt['mad_m']:.0f} cm). " +
+                   (f"0 = the altos_ms offset in use is right; otherwise adding the residual to it would align "
+                    f"the Altos with the LiDAR." if good else
+                    "Too uncertain to set an offset (needs someone walking towards and away from the rig)."))
     if not D["align"].get("altos_offset_calibrated"):
         obs.append("Altos time = arrival of each frame's first packet, de-jittered; its processing delay "
                    "(< 60 ms by the spec) is NOT removed: no altos_ms offset has been measured yet.")

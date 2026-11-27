@@ -97,20 +97,33 @@ essentials:
   - Add a rolling ±5 s lower envelope of the residuals, for the wander.
   - Checked on synthetic arrivals: 2 ms of jitter is cut to < 2 ms of error
     (`tests/test_altos.py`).
-- **The radar's processing delay is still in its times.** The spec says
-  < 60 ms. The fix is an `altos_ms` key in `calibration/stage3_offsets.json`,
-  which `align_session` applies like the others. Until it exists,
-  `alignment.json` says `"altos_offset_calibrated": false` and the report
-  says so.
-- **Measuring `altos_ms`:** the report runs the velocity check for the Altos
-  too:
-  - its moving points' median Doppler near the LiDAR target (±0.6 m,
-    ±20°: the mounting isn't calibrated);
-  - fitted against the LiDAR range rate, per 30 s window;
-  - the weighted residual is what to add to `altos_ms`.
-  
-  It needs a session with someone walking towards and away from the rig.
-  Not yet run: no 4-sensor session exists.
+- **Its processing delay is removed by `altos_ms` = −64 ms** (measured
+  2026-11-27, in `calibration/stage3_offsets.json`). Its times are frame
+  arrivals, which are 64 ms late; the spec says < 60 ms for processing alone.
+  - **Session:** `offset-session` (recorded as `run_20261126_1225`), 2.2 min,
+    someone walking towards and away from the rig between 2.6 and 11.9 m.
+  - **Method:** a whole-session range lag against the LiDAR target track,
+    r_altos(t) = r_lidar(t + τ) + c. The Altos range is the median of its
+    moving points within 1 m and 25° of the LiDAR target. Each straight
+    leg informs τ, because the range shift flips sign between approaching
+    and receding legs, and c absorbs the constant range difference
+    (+0.20 m: body centre vs the LiDAR's nearest surface, plus the mounting).
+  - **Result:** τ = −64 ms, block-bootstrap sd 3.3 ms; −56 to −66 ms across
+    gates and the two halves; residual scatter 5 cm. With the offset applied:
+    −4 ± 3 ms.
+  - **Control:** the TI radar's own detections by the same method gave
+    +2 ± 13 ms with its offset applied, so the method and the LiDAR reference
+    are unbiased.
+  - **The 30 s Doppler windows failed on this walk** (σ 45–100 ms). They
+    also gave a spurious +178 ms over the whole session. With steady legs at
+    ±1.3 m/s, a Doppler fit learns timing only at the turns, and the turns
+    are where the tracks are worst (the LiDAR loses the walker below 3.8 m;
+    the moving-point filter drops a standing person).
+  - **The report** now gives this range-based residual too (`range_timing`
+    in `report/collect.py`); it should stay near 0.
+  - **Valid for** profile 150m_1, threshold 0, firmware 8e75cfeb. Re-measure
+    if those change, and confirm on a second walking session when there is
+    one.
 - **Pairing:** `pairs.csv` gives each TI radar frame the nearest Altos
   frame (`altos_frame`, `t_altos`, `altos_error_ms`). The error stays within
   ±33.3 ms (half an Altos frame), plus any gap. Flags: `outside_altos`,
